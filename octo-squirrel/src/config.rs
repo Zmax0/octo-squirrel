@@ -38,7 +38,7 @@ impl ClientConfig {
 }
 
 pub fn init() -> Result<ClientConfig, io::Error> {
-    let path = args().nth(1).expect("Please set config path in start command args.");
+    let path = args().nth(1).expect("None path of config in start command args.");
     let file = File::open(path)?;
     let config: ClientConfig = serde_json::from_reader(BufReader::new(file))?;
     Ok(config)
@@ -46,6 +46,8 @@ pub fn init() -> Result<ClientConfig, io::Error> {
 
 #[cfg(test)]
 mod test {
+    use rand::{random, Rng};
+    use rand::distributions::Alphanumeric;
     use serde_json::json;
 
     use crate::common::codec::aead::SupportedCipher;
@@ -55,13 +57,17 @@ mod test {
 
     #[test]
     fn test_config_serialize() {
+        let client_port: u16 = random();
+        let server_port: u16 = random();
+        let server_name: String = rand::thread_rng().sample_iter(&Alphanumeric).take(10).map(char::from).collect();
+        let server_host = format!("www.{}.com", server_name);
         let json = json!({
-          "port": 1081,
+          "port": client_port,
           "index": 0,
           "servers": [
             {
-              "host": "localhost",
-              "port": 1090,
+              "host": server_host,
+              "port": server_port,
               "password": "{password}",
               "cipher": "chacha20-poly1305",
               "protocol": "vmess",
@@ -75,10 +81,10 @@ mod test {
           ]
         });
         let client_config: ClientConfig = serde_json::from_value(json).unwrap();
-        assert_eq!(1089, client_config.port);
+        assert_eq!(client_port, client_config.port);
         let current = client_config.get_current().unwrap();
-        assert_eq!("localhost", current.host);
-        assert_eq!(1090, current.port);
+        assert_eq!(server_host, current.host);
+        assert_eq!(server_port, current.port);
         assert_eq!(SupportedCipher::ChaCha20Poly1305, current.cipher);
         assert_eq!(Protocols::Vmess, current.protocol);
         assert_eq!(vec![Network::TCP, Network::UDP], current.networks);

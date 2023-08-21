@@ -93,11 +93,11 @@ impl Authenticator {
     }
 
     pub fn seal(&mut self, plaintext: &[u8]) -> Vec<u8> {
-        self.cipher.encrypt(&self.nonce_generator.genenrate(), plaintext, &self.associated_text_generator.genenrate())
+        self.cipher.encrypt(&self.nonce_generator.generate(), plaintext, &self.associated_text_generator.generate())
     }
 
     pub fn open(&mut self, ciphertext: &[u8]) -> Vec<u8> {
-        self.cipher.decrypt(&self.nonce_generator.genenrate(), ciphertext, &self.associated_text_generator.genenrate())
+        self.cipher.decrypt(&self.nonce_generator.generate(), ciphertext, &self.associated_text_generator.generate())
     }
 
     pub fn overhead(&self) -> usize {

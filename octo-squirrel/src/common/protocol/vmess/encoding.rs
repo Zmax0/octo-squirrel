@@ -42,9 +42,7 @@ impl Session {
     }
 }
 
-pub struct ClientSession {
-    pub session: Session,
-}
+pub struct ClientSession(pub Session);
 
 impl ClientSession {
     pub fn new() -> Self {
@@ -54,7 +52,7 @@ impl ClientSession {
         rand::thread_rng().fill(&mut request_body_iv[..]);
         rand::thread_rng().fill(&mut request_body_key[..]);
         let session = Session::new(request_body_iv, request_body_key, response_header);
-        ClientSession { session }
+        ClientSession(session)
     }
 }
 
@@ -65,30 +63,28 @@ impl From<&[u8]> for ClientSession {
         request_body_iv.copy_from_slice(&value[0..16]);
         request_body_key.copy_from_slice(&value[16..32]);
         let session = Session::new(request_body_iv, request_body_key, value[32]);
-        ClientSession { session }
+        ClientSession(session)
     }
 }
 
-pub struct ServerSession {
-    pub session: Session,
-}
+pub struct ServerSession(pub Session);
 
 impl ServerSession {
     pub fn new(request_body_iv: [u8; 16], request_body_key: [u8; 16], response_header: u8) -> Self {
         let session = Session::new(request_body_iv, request_body_key, response_header);
-        ServerSession { session }
+        ServerSession(session)
     }
 }
 
 impl From<Session> for ServerSession {
     fn from(value: Session) -> Self {
-        ServerSession { session: value }
+        ServerSession(value)
     }
 }
 
 impl From<ClientSession> for ServerSession {
     fn from(value: ClientSession) -> Self {
-        ServerSession::from(value.session)
+        ServerSession::from(value.0)
     }
 }
 

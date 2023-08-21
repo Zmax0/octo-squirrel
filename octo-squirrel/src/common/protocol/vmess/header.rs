@@ -10,6 +10,7 @@ pub struct RequestCommand(pub u8);
 pub const TCP: RequestCommand = RequestCommand(1);
 pub const UDP: RequestCommand = RequestCommand(2);
 
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct RequestOption(pub u8);
 pub const CHUNK_STREAM: RequestOption = RequestOption(1);
 pub const CONNECTION_REUSE: RequestOption = RequestOption(2);
@@ -17,6 +18,7 @@ pub const CHUNK_MASKING: RequestOption = RequestOption(4);
 pub const GLOBAL_PADDING: RequestOption = RequestOption(8);
 pub const AUTHENTICATED_LENGTH: RequestOption = RequestOption(16);
 
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct SecurityType(pub u8);
 pub const UNKNOWN: SecurityType = SecurityType(0);
 pub const LEGACY: SecurityType = SecurityType(1);
