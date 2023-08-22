@@ -1,3 +1,4 @@
+use super::{ID, VERSION};
 use crate::common::protocol::socks5::message::Socks5CommandRequest;
 
 #[derive(PartialEq)]
@@ -35,4 +36,17 @@ pub struct RequestHeader {
     pub security: SecurityType,
     pub address: Socks5CommandRequest,
     pub id: [u8; 16],
+}
+
+impl RequestHeader {
+    pub fn default(command: RequestCommand, security: SecurityType, address: Socks5CommandRequest, uuid: String) -> Self {
+        Self {
+            version: VERSION,
+            command,
+            option: vec![CHUNK_STREAM, CHUNK_MASKING, GLOBAL_PADDING, AUTHENTICATED_LENGTH],
+            security,
+            address,
+            id: ID::new_id(uuid),
+        }
+    }
 }

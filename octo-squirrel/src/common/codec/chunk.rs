@@ -2,7 +2,7 @@ use std::{io, mem, sync::{Arc, Mutex}};
 
 use super::aead::Authenticator;
 
-const BYTES: usize = mem::size_of::<u16>();
+pub const BYTES: usize = mem::size_of::<u16>();
 
 pub trait ChunkSizeCodec: Send + Sync {
     fn size_bytes(&self) -> usize;
@@ -18,16 +18,18 @@ impl ChunkSizeCodec for AEADChunkSizeParser {
     }
 
     fn encode(&mut self, size: usize) -> Result<Vec<u8>, io::Error> {
-        let bytes = ((size - self.0.lock().unwrap().overhead()) as u16).to_be_bytes();
-        let sealed = self.0.lock().unwrap().seal(&bytes);
+        let mut auth = self.0.lock().unwrap();
+        let bytes = ((size - auth.overhead()) as u16).to_be_bytes();
+        let sealed = auth.seal(&bytes);
         Ok(sealed)
     }
 
     fn decode(&mut self, data: &[u8]) -> Result<usize, io::Error> {
         let mut opened: [u8; BYTES] = [0; BYTES];
-        opened.copy_from_slice(&self.0.lock().unwrap().open(data));
+        let mut auth: std::sync::MutexGuard<'_, Authenticator> = self.0.lock().unwrap();
+        opened.copy_from_slice(&auth.open(data));
         let size = u16::from_be_bytes(opened);
-        Ok(size as usize + self.0.lock().unwrap().overhead())
+        Ok(size as usize + auth.overhead())
     }
 }
 
