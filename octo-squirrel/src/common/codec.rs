@@ -6,7 +6,7 @@ pub mod shadowsocks;
 pub mod vmess;
 
 pub trait PaddingLengthGenerator: Send + Sync {
-    fn next_padding_length(&self) -> usize;
+    fn next_padding_length(&mut self) -> usize;
 }
 
 pub trait BytesGenerator: Send + Sync {
@@ -16,7 +16,7 @@ pub trait BytesGenerator: Send + Sync {
 pub struct EmptyPaddingLengthGenerator;
 
 impl PaddingLengthGenerator for EmptyPaddingLengthGenerator {
-    fn next_padding_length(&self) -> usize {
+    fn next_padding_length(&mut self) -> usize {
         0
     }
 }
