@@ -46,8 +46,8 @@ pub fn init() -> Result<ClientConfig, io::Error> {
 
 #[cfg(test)]
 mod test {
-    use rand::{random, Rng};
     use rand::distributions::Alphanumeric;
+    use rand::{random, Rng};
     use serde_json::json;
 
     use crate::common::codec::aead::SupportedCipher;
