@@ -86,7 +86,7 @@ mod test {
         assert_eq!(server_host, current.host);
         assert_eq!(server_port, current.port);
         assert_eq!(SupportedCipher::ChaCha20Poly1305, current.cipher);
-        assert_eq!(Protocols::Vmess, current.protocol);
+        assert_eq!(Protocols::VMess, current.protocol);
         assert_eq!(vec![Network::TCP, Network::UDP], current.networks);
         assert_eq!(PacketEncoding::Packet, current.packet_encoding);
     }

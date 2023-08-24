@@ -3,12 +3,11 @@ use std::{io, sync::{Arc, Mutex}};
 use bytes::{Buf, BufMut, BytesMut};
 use hkdf::Hkdf;
 use md5::{Digest, Md5};
-use rand::RngCore;
 use sha1::Sha1;
 use tokio_util::codec::{Decoder, Encoder};
 
 use super::{aead::{Authenticator, PayloadDecoder, PayloadEncoder, SupportedCipher}, chunk::AEADChunkSizeParser, EmptyBytesGenerator, EmptyPaddingLengthGenerator, IncreasingNonceGenerator};
-use crate::common::protocol::{network::Network, socks5::{address::{Socks5AddressDecoder, Socks5AddressEncoder}, message::Socks5CommandRequest, Socks5AddressType}};
+use crate::common::{protocol::{network::Network, socks5::{address::{Socks5AddressDecoder, Socks5AddressEncoder}, message::Socks5CommandRequest, Socks5AddressType}}, util::Dice};
 
 pub struct AddressCodec;
 
@@ -121,8 +120,7 @@ impl Encoder<BytesMut> for AEADCipherCodec {
         match self.network {
             Network::TCP => {
                 if self.payload_encoder.is_none() {
-                    let mut salt = vec![0; self.key.len()];
-                    rand::thread_rng().fill_bytes(&mut salt);
+                    let salt = Dice::roll_bytes(self.key.len());
                     self.payload_encoder = Some(self.new_payload_encoder(&salt));
                     dst.put(&salt[..]);
                 }
@@ -130,8 +128,7 @@ impl Encoder<BytesMut> for AEADCipherCodec {
                 Ok(())
             }
             Network::UDP => {
-                let mut salt = vec![0; self.key.len()];
-                rand::thread_rng().fill_bytes(&mut salt);
+                let salt = Dice::roll_bytes(self.key.len());
                 let encoder = self.new_payload_encoder(&salt);
                 let mut auth = encoder.auth.lock().unwrap();
                 dst.put(&salt[..]);

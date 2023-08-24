@@ -2,7 +2,7 @@ use std::{io::Error, net::SocketAddr};
 
 use bytes::BufMut;
 
-use super::{address::Socks5AddressEncoder, Socks5AddressType, Socks5AuthMethod, Socks5CommandStatus, Socks5CommandType, CONNECT, IPV4, IPV6, VERSION};
+use super::{address::Socks5AddressEncoder, Socks5AddressType, Socks5AuthMethod, Socks5CommandStatus, Socks5CommandType, VERSION};
 
 pub trait Socks5Message: Send + Sync {
     fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<(), Error>;
@@ -60,13 +60,13 @@ impl Socks5CommandRequest {
     }
 
     pub fn connect(dst_addr_type: Socks5AddressType, dst_addr: String, dst_port: u16) -> Self {
-        Self { command_type: CONNECT, dst_addr_type, dst_addr, dst_port }
+        Self { command_type: Socks5CommandType::CONNECT, dst_addr_type, dst_addr, dst_port }
     }
 
     pub fn from(command_type: Socks5CommandType, addr: SocketAddr) -> Socks5CommandRequest {
         match addr {
-            SocketAddr::V4(v4) => Socks5CommandRequest::new(command_type, IPV4, v4.ip().to_string(), v4.port()),
-            SocketAddr::V6(v6) => Socks5CommandRequest::new(command_type, IPV6, v6.ip().to_string(), v6.port()),
+            SocketAddr::V4(v4) => Socks5CommandRequest::new(command_type, Socks5AddressType::IPV4, v4.ip().to_string(), v4.port()),
+            SocketAddr::V6(v6) => Socks5CommandRequest::new(command_type, Socks5AddressType::IPV6, v6.ip().to_string(), v6.port()),
         }
     }
 }

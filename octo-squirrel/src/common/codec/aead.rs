@@ -46,6 +46,10 @@ macro_rules! aead_impl {
         pub struct $name(pub $cipher);
 
         impl $name {
+            pub const NONCE_SIZE: usize = <$cipher as AeadCore>::NonceSize::USIZE;
+            pub const TAG_SIZE: usize = <$cipher as AeadCore>::TagSize::USIZE;
+            pub const OVERHEAD: usize = <$cipher as AeadCore>::CiphertextOverhead::USIZE;
+
             pub fn new(key: &[u8]) -> Self {
                 Self(<$cipher>::new_from_slice(key).unwrap())
             }
@@ -63,15 +67,15 @@ macro_rules! aead_impl {
             }
 
             fn nonce_size(&self) -> usize {
-                <$cipher as AeadCore>::NonceSize::USIZE
+                $name::NONCE_SIZE
             }
 
             fn tag_size(&self) -> usize {
-                <$cipher as AeadCore>::TagSize::USIZE
+                $name::TAG_SIZE
             }
 
             fn overhead(&self) -> usize {
-                <$cipher as AeadCore>::CiphertextOverhead::USIZE
+                $name::OVERHEAD
             }
         }
     };
@@ -185,7 +189,7 @@ impl PayloadEncoder {
         let padding_length = self.padding.next_padding_length();
         let overhead = self.auth.lock().unwrap().overhead();
         let encrypted_size = src.remaining().min(self.payload_limit - overhead - self.size_codec.size_bytes() - padding_length);
-        dst.extend_from_slice(&self.size_codec.encode(encrypted_size + padding_length + overhead).unwrap());
+        dst.put_slice(&self.size_codec.encode(encrypted_size + padding_length + overhead).unwrap());
         dst.put(&self.auth.lock().unwrap().seal(&src.split_to(encrypted_size))[..]);
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
         rand::thread_rng().fill(&mut padding_bytes[..]);

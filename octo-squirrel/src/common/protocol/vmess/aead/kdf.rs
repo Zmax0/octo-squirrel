@@ -18,7 +18,8 @@ impl KDF {
 
     pub fn kdfn<const N: usize>(key: &[u8], path: Vec<&[u8]>) -> [u8; N] {
         let mut out = [0; N];
-        out[0..N.min(Self::MAX)].copy_from_slice(&Self::kdf(key, path)[0..N.min(Self::MAX)]);
+        let len = N.min(Self::MAX);
+        out[..len].copy_from_slice(&Self::kdf(key, path)[..len]);
         out
     }
 
@@ -41,6 +42,8 @@ impl HmacCreator<'_> {
         };
     }
 }
+
+#[derive(Clone)]
 struct Sha256Wrapper(Sha256);
 
 struct Hmac {
@@ -80,7 +83,7 @@ trait Hash {
 
 impl Hash for Sha256Wrapper {
     fn new(&self) -> Box<dyn Hash> {
-        Box::new(Sha256Wrapper(self.0.clone()))
+        Box::new(self.clone())
     }
 
     fn update(&mut self, data: &[u8]) {
@@ -88,7 +91,7 @@ impl Hash for Sha256Wrapper {
     }
 
     fn do_final(&mut self) -> [u8; 32] {
-        self.0.clone().finalize().into()
+        self.0.finalize_reset().into()
     }
 
     fn output_size(&self) -> usize {

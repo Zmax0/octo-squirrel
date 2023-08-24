@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use serde::{Deserialize, Serialize};
 
 pub mod network;
@@ -8,5 +10,14 @@ pub mod vmess;
 #[serde(rename_all = "lowercase")]
 pub enum Protocols {
     Shadowsocks,
-    Vmess,
+    VMess,
+}
+
+impl Display for Protocols {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Protocols::Shadowsocks => write!(f, "shadowsocks"),
+            Protocols::VMess => write!(f, "vmess"),
+        }
+    }
 }
