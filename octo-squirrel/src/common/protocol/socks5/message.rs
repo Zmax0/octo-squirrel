@@ -1,4 +1,4 @@
-use std::{io::Error, net::SocketAddr};
+use std::{fmt::Display, io::Error, net::SocketAddr};
 
 use bytes::BufMut;
 
@@ -68,6 +68,12 @@ impl Socks5CommandRequest {
             SocketAddr::V4(v4) => Socks5CommandRequest::new(command_type, Socks5AddressType::IPV4, v4.ip().to_string(), v4.port()),
             SocketAddr::V6(v6) => Socks5CommandRequest::new(command_type, Socks5AddressType::IPV6, v6.ip().to_string(), v6.port()),
         }
+    }
+}
+
+impl Display for Socks5CommandRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.dst_addr, self.dst_port)
     }
 }
 

@@ -24,11 +24,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let listener = TcpListener::bind(listen_addr).await?;
 
-    while let Ok((mut inbound, addr)) = listener.accept().await {
-        info!("Accept inbound; addr={}, protocol={}", addr, current.protocol);
+    while let Ok((mut inbound, _)) = listener.accept().await {
         let response = Socks5CommandResponse::new(Socks5CommandStatus::SUCCESS, Socks5AddressType::DOMAIN, "localhost".to_owned(), 1089);
         let handshake = ServerHandShake::no_auth(&mut inbound, response).await;
         if let Ok(request) = handshake {
+            info!("Accept inbound; dest={}, protocol={}", request, current.protocol);
             match current.protocol {
                 Protocols::Shadowsocks => {
                     let transfer = shadowsocks::transfer_tcp(inbound, proxy_addr.to_owned(), request, current.clone()).map(|r| {

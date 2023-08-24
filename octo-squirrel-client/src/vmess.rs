@@ -106,6 +106,7 @@ impl Encoder<BytesMut> for ClientAEADCodec<'_> {
 
 impl Decoder for ClientAEADCodec<'_> {
     type Item = BytesMut;
+
     type Error = io::Error;
 
     fn decode(&mut self, mut src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {

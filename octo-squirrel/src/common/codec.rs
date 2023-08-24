@@ -112,7 +112,7 @@ mod test {
     }
 
     #[test]
-    fn test_foo() {
+    fn test_generate_counting_nonce() {
         let nonce = Arc::new(Mutex::new([0u8; 16]));
         let mut generator = CountingNonceGenerator::new(nonce.clone(), 12);
         let mut generated = Vec::new();
