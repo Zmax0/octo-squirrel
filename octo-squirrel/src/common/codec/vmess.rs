@@ -2,24 +2,18 @@ use std::io::Error;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 
+use base64ct::{Base64, Encoding};
 use digest::core_api::XofReaderCoreWrapper;
 use digest::{ExtendableOutput, Update, XofReader};
+use log::trace;
 use sha3::{Shake128, Shake128ReaderCore};
 
 use super::aead::PayloadDecoder;
-use super::{
-    aead::{AEADCipher, Aes128GcmCipher, Authenticator, ChaCha20Poly1305Cipher, PayloadEncoder},
-    chunk::{AEADChunkSizeParser, ChunkSizeCodec},
-    CountingNonceGenerator, EmptyBytesGenerator, PaddingLengthGenerator,
-};
+use super::{aead::{AEADCipher, Aes128GcmCipher, Authenticator, ChaCha20Poly1305Cipher, PayloadEncoder}, chunk::{AEADChunkSizeParser, ChunkSizeCodec}, CountingNonceGenerator, EmptyBytesGenerator, PaddingLengthGenerator};
 use crate::common::codec::EmptyPaddingLengthGenerator;
-use crate::common::protocol::vmess::encoding::{ClientSession, ServerSession};
 use crate::common::protocol::vmess::header::RequestOption;
-use crate::common::protocol::vmess::{
-    aead::KDF,
-    encoding::{Auth, Session},
-    header::{RequestHeader, SecurityType},
-};
+use crate::common::protocol::vmess::session::{ClientSession, ServerSession, Session};
+use crate::common::protocol::vmess::{aead::KDF, encoding::Auth, header::{RequestHeader, SecurityType}};
 
 const AUTH_LEN: &[u8] = b"auth_len";
 
@@ -106,11 +100,12 @@ impl AEADBodyCodec {
     fn default(header: &RequestHeader, iv: Arc<Mutex<[u8]>>) -> (Box<dyn ChunkSizeCodec>, Box<dyn PaddingLengthGenerator>) {
         let mut size_codec: Box<dyn ChunkSizeCodec> = Box::new(PlainChunkSizeParser);
         let mut padding: Box<dyn PaddingLengthGenerator> = Box::new(EmptyPaddingLengthGenerator);
+        let core = Arc::new(Mutex::new(ShakeSizeParser::new(&iv.lock().unwrap())));
         if header.option.contains(&RequestOption::CHUNK_MASKING) {
-            size_codec = Box::new(ShakeSizeParser::new(&iv.lock().unwrap()));
+            size_codec = Box::new(SharedShakeSizeParser(core.clone()));
         }
         if header.option.contains(&RequestOption::GLOBAL_PADDING) {
-            padding = Box::new(ShakeSizeParser::new(&iv.lock().unwrap()));
+            padding = Box::new(SharedShakeSizeParser(core));
         }
         (size_codec, padding)
     }
@@ -137,20 +132,20 @@ impl ChunkSizeCodec for PlainChunkSizeParser {
 
 pub struct ShakeSizeParser {
     reader: XofReaderCoreWrapper<Shake128ReaderCore>,
-    buffer: [u8; 2],
+    buffer: [u8; size_of::<u16>()],
 }
 
 impl ShakeSizeParser {
     pub fn new(nonce: &[u8]) -> Self {
+        trace!("New parser; nonce={}", Base64::encode_string(nonce));
         let mut hasher = Shake128::default();
         hasher.update(nonce);
-        let reader = hasher.finalize_xof();
-        Self { reader, buffer: [0; 2] }
+        Self { reader: hasher.finalize_xof(), buffer: [0; size_of::<u16>()] }
     }
 
-    fn next(&mut self) -> usize {
+    fn next(&mut self) -> u16 {
         self.reader.read(&mut self.buffer);
-        u16::from_be_bytes(self.buffer) as usize
+        u16::from_be_bytes(self.buffer)
     }
 }
 
@@ -160,21 +155,44 @@ impl ChunkSizeCodec for ShakeSizeParser {
     }
 
     fn encode(&mut self, size: usize) -> Result<Vec<u8>, Error> {
-        let mask = (self.next() ^ size) as u16;
+        let mask = self.next() ^ size as u16;
         Ok(mask.to_be_bytes().to_vec())
     }
 
     fn decode(&mut self, data: &[u8]) -> Result<usize, Error> {
+        let mask = self.next();
         let mut bytes = [0; 2];
-        bytes.copy_from_slice(&data[..2]);
+        bytes.copy_from_slice(&data);
         let size = u16::from_be_bytes(bytes);
-        Ok(self.next() ^ size as usize)
+        Ok((mask ^ size) as usize)
     }
 }
 
 impl PaddingLengthGenerator for ShakeSizeParser {
     fn next_padding_length(&mut self) -> usize {
-        self.next() % 64
+        (self.next() % 64) as usize
+    }
+}
+
+pub struct SharedShakeSizeParser(pub Arc<Mutex<ShakeSizeParser>>);
+
+impl ChunkSizeCodec for SharedShakeSizeParser {
+    fn size_bytes(&self) -> usize {
+        size_of::<u16>()
+    }
+
+    fn encode(&mut self, size: usize) -> Result<Vec<u8>, Error> {
+        self.0.lock().unwrap().encode(size)
+    }
+
+    fn decode(&mut self, data: &[u8]) -> Result<usize, Error> {
+        self.0.lock().unwrap().decode(data)
+    }
+}
+
+impl PaddingLengthGenerator for SharedShakeSizeParser {
+    fn next_padding_length(&mut self) -> usize {
+        self.0.lock().unwrap().next_padding_length()
     }
 }
 
@@ -191,8 +209,8 @@ mod test {
     use crate::common::codec::PaddingLengthGenerator;
     use crate::common::protocol::socks5::message::Socks5CommandRequest;
     use crate::common::protocol::socks5::Socks5AddressType;
-    use crate::common::protocol::vmess::encoding::{ClientSession, ServerSession};
     use crate::common::protocol::vmess::header::*;
+    use crate::common::protocol::vmess::session::{ClientSession, ServerSession};
     use crate::common::protocol::vmess::{ID, VERSION};
 
     #[test]
@@ -209,9 +227,11 @@ mod test {
 
         let mut p1 = new_parser();
         let mut p2 = new_parser();
-        let size = rand::thread_rng().gen_range(32768..65535);
-        let bytes = p1.encode(size);
-        assert_eq!(size, p2.decode(&bytes.unwrap()[..]).unwrap())
+        for _ in 0..100 {
+            let size = rand::thread_rng().gen_range(32768..65535);
+            let bytes = p1.encode(size);
+            assert_eq!(size, p2.decode(&bytes.unwrap()[..]).unwrap())
+        }
     }
 
     #[test]

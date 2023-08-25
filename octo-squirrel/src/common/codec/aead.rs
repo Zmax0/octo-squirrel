@@ -5,6 +5,8 @@ use aes::cipher::Unsigned;
 use aes_gcm::{aead::{Aead, Payload}, AeadCore, Aes128Gcm, Aes256Gcm, KeyInit};
 use bytes::{Buf, BufMut, BytesMut};
 use chacha20poly1305::ChaCha20Poly1305;
+use log::Level::Trace;
+use log::{log_enabled, trace};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -127,19 +129,26 @@ impl PayloadDecoder {
         let mut dst = Vec::new();
         while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
             if self.padding_length.is_none() {
-                self.padding_length = Some(self.padding.next_padding_length());
+                let padding_length = self.padding.next_padding_length();
+                trace!("Decode payload; padding length={:?}", padding_length);
+                self.padding_length = Some(padding_length);
             }
             let padding_length = self.padding_length.unwrap();
             if let Some(payload_length) = self.payload_length {
-                let payload_sealed_bytes = src.split_to(payload_length - padding_length);
-                let mut payload_btyes = self.auth.lock().unwrap().open(&payload_sealed_bytes);
+                let mut payload_btyes = self.auth.lock().unwrap().open(&src.split_to(payload_length - padding_length));
+                trace!("Decode payload; payload bytes={:?}", payload_btyes);
                 dst.append(&mut payload_btyes);
                 src.advance(padding_length);
                 self.payload_length = None;
                 self.padding_length = None;
             } else {
                 let payload_length_bytes = src.split_to(size_bytes);
-                self.payload_length = Some(self.size_codec.decode(&payload_length_bytes).unwrap());
+                if log_enabled!(Trace) {
+                    trace!("Decode payload; payload length bytes={:?}", payload_length_bytes.to_vec());
+                }
+                let payload_length = self.size_codec.decode(&payload_length_bytes).unwrap();
+                trace!("Decode payload; payload length={:?}", payload_length);
+                self.payload_length = Some(payload_length);
             }
         }
         if dst.is_empty() {
@@ -187,10 +196,16 @@ impl PayloadEncoder {
 
     fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
         let padding_length = self.padding.next_padding_length();
+        trace!("Encode payload; padding length={:?}", padding_length);
         let overhead = self.auth.lock().unwrap().overhead();
         let encrypted_size = src.remaining().min(self.payload_limit - overhead - self.size_codec.size_bytes() - padding_length);
-        dst.put_slice(&self.size_codec.encode(encrypted_size + padding_length + overhead).unwrap());
-        dst.put(&self.auth.lock().unwrap().seal(&src.split_to(encrypted_size))[..]);
+        trace!("Encode payload; payload length={:?}", encrypted_size);
+        let encrypted_size_bytes = self.size_codec.encode(encrypted_size + padding_length + overhead).unwrap();
+        trace!("Encode payload; payload length bytes={:?}", encrypted_size_bytes);
+        dst.put_slice(&encrypted_size_bytes);
+        let payload_bytes = src.split_to(encrypted_size);
+        trace!("Encode payload; payload bytes={:?}", payload_bytes);
+        dst.put_slice(&self.auth.lock().unwrap().seal(&payload_bytes));
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
         rand::thread_rng().fill(&mut padding_bytes[..]);
         dst.put(&padding_bytes[..]);

@@ -1,6 +1,7 @@
 pub mod aead;
 pub mod encoding;
 pub mod header;
+pub mod session;
 use std::{io::{Error, ErrorKind}, net::{Ipv4Addr, Ipv6Addr}, time::{SystemTime, UNIX_EPOCH}};
 
 use aes::cipher::generic_array::GenericArray;

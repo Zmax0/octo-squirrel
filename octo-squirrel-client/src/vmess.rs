@@ -6,13 +6,13 @@ use std::{error, io};
 
 use bytes::{Buf, BufMut, BytesMut};
 use futures::SinkExt;
-use log::info;
+use log::{info, trace};
 use octo_squirrel::common::codec::aead::{AEADCipher, Aes128GcmCipher, PayloadDecoder, PayloadEncoder};
 use octo_squirrel::common::codec::vmess::AEADBodyCodec;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::common::protocol::vmess::aead::*;
-use octo_squirrel::common::protocol::vmess::encoding::{ClientSession, Session};
 use octo_squirrel::common::protocol::vmess::header::{RequestCommand, RequestHeader, RequestOption, SecurityType};
+use octo_squirrel::common::protocol::vmess::session::{ClientSession, Session};
 use octo_squirrel::common::protocol::vmess::{Address, VERSION};
 use octo_squirrel::common::util::{Dice, FNV};
 use octo_squirrel::config::ServerConfig;
@@ -30,7 +30,9 @@ pub(crate) async fn transfer_tcp(
 ) -> Result<(), Box<dyn error::Error>> {
     let mut outbound = TcpStream::connect(proxy_addr).await?;
     let header = RequestHeader::default(RequestCommand::TCP, SecurityType::CHACHA20_POLY1305, request, config.password);
-    let session = Arc::new(Mutex::new(ClientSession::new()));
+    let session = ClientSession::new();
+    trace!("New session; {}", session);
+    let session = Arc::new(Mutex::new(session));
     let (ri, wi) = inbound.split();
     let (ro, wo) = outbound.split();
 
@@ -120,7 +122,6 @@ impl Decoder for ClientAEADCodec<'_> {
                 let header_length_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
                     KDF::kdfn(&session.response_body_iv().lock().unwrap(), vec![KDF::SALT_AEAD_RESP_HEADER_LEN_IV]);
                 let mut cursor = Cursor::new(src);
-                let position = cursor.position();
                 let header_length_encrypt_bytes = cursor.copy_to_bytes(size_of::<u16>() + header_length_cipher.tag_size());
                 let mut header_length_bytes = [0; size_of::<u16>()];
                 header_length_bytes
@@ -132,19 +133,20 @@ impl Decoder for ClientAEADCodec<'_> {
                         header_length + header_length_cipher.tag_size(),
                         cursor.remaining()
                     );
-                    cursor.set_position(position);
                     return Ok(None);
                 }
+                let position = cursor.position();
+                src = cursor.into_inner();
+                src.advance(position as usize);
                 let header_cipher = Aes128GcmCipher::new(&KDF::kdf16(session.response_body_key(), vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]));
                 let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
                     KDF::kdfn(&session.response_body_iv().lock().unwrap(), vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
-                let header_encrypt_bytes = cursor.copy_to_bytes(header_length + header_length_cipher.tag_size());
+                let header_encrypt_bytes = src.split_to(header_length + header_length_cipher.tag_size());
                 let header_bytes = header_cipher.decrypt(&header_iv, &header_encrypt_bytes, b"");
                 if session.response_header() != header_bytes[0] {
                     let error = format!("Unexpected response header: expecting {} but actually {}", session.response_header(), header_bytes[0]);
                     return Err(io::Error::new(ErrorKind::InvalidData, error));
                 }
-                src = cursor.into_inner();
             }
             self.body_decoder = Some(AEADBodyCodec::decoder(&self.header, self.session.clone()));
         }

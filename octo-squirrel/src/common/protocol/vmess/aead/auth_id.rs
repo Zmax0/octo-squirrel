@@ -17,7 +17,7 @@ impl AuthID {
         let mut buf = BytesMut::new();
         buf.put_i64(time);
         buf.put_u32(random());
-        let crc32 = vmess::crc32(&buf[0..12]);
+        let crc32 = vmess::crc32(&buf);
         buf.put_i32(crc32 as i32);
         auth_id.copy_from_slice(&buf);
         Cipher::encrypt(&KDF::kdf16(key, vec![b"AES Auth ID Encryption"]), &mut auth_id, 16);

@@ -15,14 +15,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     octo_squirrel::log::init()?;
     let config = octo_squirrel::config::init()?;
     let current = config.get_current().expect("Empty proxy server.");
-
-    let listen_addr = format!("localhost:{}", config.port);
+    let listen_addr = format!("127.0.0.1:{}", config.port);
     let proxy_addr = format!("{}:{}", current.host, current.port);
-
-    info!("Listening on: {}", listen_addr);
-    info!("Proxying to: {}", proxy_addr);
-
     let listener = TcpListener::bind(listen_addr).await?;
+
+    info!("Listening on: {}", listener.local_addr().unwrap());
+    info!("Proxying to: {}", proxy_addr);
 
     while let Ok((mut inbound, _)) = listener.accept().await {
         let response = Socks5CommandResponse::new(Socks5CommandStatus::SUCCESS, Socks5AddressType::DOMAIN, "localhost".to_owned(), 1089);

@@ -39,10 +39,12 @@ mod test {
 
     use rand::{random, Rng};
 
-    use crate::common::codec::{aead::{Aes128GcmCipher, Authenticator}, chunk::{AEADChunkSizeParser, ChunkSizeCodec}, EmptyBytesGenerator, IncreasingNonceGenerator};
+    use crate::common::codec::aead::ChaCha20Poly1305Cipher;
+    use crate::common::codec::{aead::{Aes128GcmCipher, Authenticator}, chunk::{AEADChunkSizeParser, ChunkSizeCodec}, CountingNonceGenerator, EmptyBytesGenerator, IncreasingNonceGenerator};
+    use crate::common::protocol::vmess::encoding::Auth;
 
     #[test]
-    fn test_aead_chunk_size_parser() {
+    fn test_shadowsocks_aead_chunk_size_codec() {
         let mut key: [u8; 16] = [0; 16];
         rand::thread_rng().fill(&mut key);
         let auth1 = Authenticator::new(
@@ -61,5 +63,34 @@ mod test {
         let mut decoder = AEADChunkSizeParser(Arc::new(Mutex::new(auth2)));
         let size2 = decoder.decode(&encoded).unwrap();
         assert_eq!(size1, size2 as u16)
+    }
+
+    #[test]
+    fn test_vemss_aead_chunk_size_codec() {
+        let key: [u8; 16] = random();
+        let iv: [u8; 16] = random();
+        let auth1 = Authenticator::new(
+            Box::new(ChaCha20Poly1305Cipher::new(&Auth::generate_chacha20_poly1305_key(&key))),
+            Box::new(CountingNonceGenerator::new(Arc::new(Mutex::new(iv)), Aes128GcmCipher::NONCE_SIZE)),
+            Box::new(EmptyBytesGenerator {}),
+        );
+        let auth2 = Authenticator::new(
+            Box::new(ChaCha20Poly1305Cipher::new(&Auth::generate_chacha20_poly1305_key(&key))),
+            Box::new(CountingNonceGenerator::new(Arc::new(Mutex::new(iv)), Aes128GcmCipher::NONCE_SIZE)),
+            Box::new(EmptyBytesGenerator {}),
+        );
+        let mut encoder = AEADChunkSizeParser(Arc::new(Mutex::new(auth1)));
+        let mut decoder = AEADChunkSizeParser(Arc::new(Mutex::new(auth2)));
+        for _ in 0..100 {
+            let size1: u16 = random();
+            let size2 = codec(size1, &mut encoder, &mut decoder);
+            assert_eq!(size1, size2 as u16)
+        }
+    }
+
+    fn codec(size1: u16, encoder: &mut AEADChunkSizeParser, decoder: &mut AEADChunkSizeParser) -> usize {
+        let encoded = encoder.encode(size1 as usize).unwrap();
+        let size2 = decoder.decode(&encoded).unwrap();
+        size2
     }
 }

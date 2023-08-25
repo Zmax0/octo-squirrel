@@ -87,7 +87,7 @@ impl RequestHeader {
                 RequestOption::CHUNK_STREAM,
                 RequestOption::CHUNK_MASKING,
                 RequestOption::GLOBAL_PADDING,
-                RequestOption::AUTHENTICATED_LENGTH,
+                // RequestOption::AUTHENTICATED_LENGTH,
             ],
             security,
             address,
