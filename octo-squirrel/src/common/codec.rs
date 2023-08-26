@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::{fmt::Display, sync::{Arc, Mutex}};
 
 pub mod aead;
 pub mod chunk;
@@ -47,6 +47,12 @@ impl BytesGenerator for CountingNonceGenerator {
         nonce[..2].copy_from_slice(&self.count.to_be_bytes());
         self.count = self.count.overflowing_add(1).0;
         nonce[..self.nonce_size].to_vec()
+    }
+}
+
+impl Display for CountingNonceGenerator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "count={}, nonce={:?}", self.count, self.nonce.lock().unwrap())
     }
 }
 

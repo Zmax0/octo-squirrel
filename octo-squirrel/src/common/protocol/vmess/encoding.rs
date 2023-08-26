@@ -9,10 +9,10 @@ impl Auth {
         let mut hasher = Md5::new();
         hasher.update(raw);
         let res = hasher.finalize_reset();
-        key[..16].copy_from_slice(&res[..]);
+        key[..16].copy_from_slice(&res);
         hasher.update(&res[..16]);
         let res = hasher.finalize();
-        key[16..].copy_from_slice(&res[..]);
+        key[16..].copy_from_slice(&res);
         key
     }
 }

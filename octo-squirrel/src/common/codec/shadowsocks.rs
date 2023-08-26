@@ -95,13 +95,13 @@ impl AEADCipherCodec {
     fn new_payload_encoder(&mut self, salt: &[u8]) -> PayloadEncoder {
         let key = AEADCipherCodec::hkdfsha1(&self.key, salt);
         let auth = self.new_auth(&key);
-        PayloadEncoder::new(0xffff, auth.clone(), Box::new(AEADChunkSizeParser(auth)), Box::new(EmptyPaddingLengthGenerator))
+        PayloadEncoder::new(0xffff, auth.clone(), Box::new(AEADChunkSizeParser::new(auth)), Box::new(EmptyPaddingLengthGenerator))
     }
 
     fn new_payload_decoder(&mut self, salt: &[u8]) -> PayloadDecoder {
         let key = AEADCipherCodec::hkdfsha1(&self.key, salt);
         let auth = self.new_auth(&key);
-        PayloadDecoder::new(auth.clone(), Box::new(AEADChunkSizeParser(auth)), Box::new(EmptyPaddingLengthGenerator))
+        PayloadDecoder::new(auth.clone(), Box::new(AEADChunkSizeParser::new(auth)), Box::new(EmptyPaddingLengthGenerator))
     }
 
     fn new_auth(&mut self, key: &Vec<u8>) -> Arc<Mutex<Authenticator>> {

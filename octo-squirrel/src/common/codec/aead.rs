@@ -5,8 +5,7 @@ use aes::cipher::Unsigned;
 use aes_gcm::{aead::{Aead, Payload}, AeadCore, Aes128Gcm, Aes256Gcm, KeyInit};
 use bytes::{Buf, BufMut, BytesMut};
 use chacha20poly1305::ChaCha20Poly1305;
-use log::Level::Trace;
-use log::{log_enabled, trace};
+use log::trace;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -45,7 +44,9 @@ pub trait AEADCipher: Send + Sync {
 macro_rules! aead_impl {
     ($name:ident, $cipher:ty) => {
         #[derive(Clone)]
-        pub struct $name(pub $cipher);
+        pub struct $name {
+            cipher: $cipher,
+        }
 
         impl $name {
             pub const NONCE_SIZE: usize = <$cipher as AeadCore>::NonceSize::USIZE;
@@ -53,19 +54,19 @@ macro_rules! aead_impl {
             pub const OVERHEAD: usize = <$cipher as AeadCore>::CiphertextOverhead::USIZE;
 
             pub fn new(key: &[u8]) -> Self {
-                Self(<$cipher>::new_from_slice(key).unwrap())
+                Self { cipher: <$cipher>::new_from_slice(key).unwrap() }
             }
         }
 
         impl AEADCipher for $name {
             fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Vec<u8> {
                 let payload = Payload { msg: plaintext, aad };
-                self.0.encrypt(nonce.into(), payload).unwrap()
+                self.cipher.encrypt(nonce.into(), payload).unwrap()
             }
 
             fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Vec<u8> {
                 let payload = Payload { msg: ciphertext, aad };
-                self.0.decrypt(nonce.into(), payload).expect("Invalid cipher text")
+                self.cipher.decrypt(nonce.into(), payload).expect("Invalid cipher text")
             }
 
             fn nonce_size(&self) -> usize {
@@ -136,16 +137,12 @@ impl PayloadDecoder {
             let padding_length = self.padding_length.unwrap();
             if let Some(payload_length) = self.payload_length {
                 let mut payload_btyes = self.auth.lock().unwrap().open(&src.split_to(payload_length - padding_length));
-                trace!("Decode payload; payload bytes={:?}", payload_btyes);
                 dst.append(&mut payload_btyes);
                 src.advance(padding_length);
                 self.payload_length = None;
                 self.padding_length = None;
             } else {
                 let payload_length_bytes = src.split_to(size_bytes);
-                if log_enabled!(Trace) {
-                    trace!("Decode payload; payload length bytes={:?}", payload_length_bytes.to_vec());
-                }
                 let payload_length = self.size_codec.decode(&payload_length_bytes).unwrap();
                 trace!("Decode payload; payload length={:?}", payload_length);
                 self.payload_length = Some(payload_length);
@@ -196,16 +193,15 @@ impl PayloadEncoder {
 
     fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
         let padding_length = self.padding.next_padding_length();
-        trace!("Encode payload; padding length={:?}", padding_length);
-        let overhead = self.auth.lock().unwrap().overhead();
+        trace!("Encode payload; padding length={}", padding_length);
+        let mut auth = self.auth.lock().unwrap();
+        let overhead = auth.overhead();
         let encrypted_size = src.remaining().min(self.payload_limit - overhead - self.size_codec.size_bytes() - padding_length);
-        trace!("Encode payload; payload length={:?}", encrypted_size);
+        trace!("Encode payload; payload length={}", encrypted_size);
         let encrypted_size_bytes = self.size_codec.encode(encrypted_size + padding_length + overhead).unwrap();
-        trace!("Encode payload; payload length bytes={:?}", encrypted_size_bytes);
         dst.put_slice(&encrypted_size_bytes);
         let payload_bytes = src.split_to(encrypted_size);
-        trace!("Encode payload; payload bytes={:?}", payload_bytes);
-        dst.put_slice(&self.auth.lock().unwrap().seal(&payload_bytes));
+        dst.put_slice(&auth.seal(&payload_bytes));
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
         rand::thread_rng().fill(&mut padding_bytes[..]);
         dst.put(&padding_bytes[..]);

@@ -5,10 +5,11 @@ use std::sync::{Arc, Mutex};
 use base64ct::{Base64, Encoding};
 use digest::core_api::XofReaderCoreWrapper;
 use digest::{ExtendableOutput, Update, XofReader};
-use log::trace;
+use log::{log_enabled, trace, Level::Trace};
 use sha3::{Shake128, Shake128ReaderCore};
 
 use super::aead::PayloadDecoder;
+use super::chunk::PlainChunkSizeParser;
 use super::{aead::{AEADCipher, Aes128GcmCipher, Authenticator, ChaCha20Poly1305Cipher, PayloadEncoder}, chunk::{AEADChunkSizeParser, ChunkSizeCodec}, CountingNonceGenerator, EmptyBytesGenerator, PaddingLengthGenerator};
 use crate::common::codec::EmptyPaddingLengthGenerator;
 use crate::common::protocol::vmess::header::RequestOption;
@@ -54,79 +55,72 @@ impl AEADBodyCodec {
     pub fn encoder(header: &RequestHeader, session: Arc<Mutex<dyn SessionInit>>) -> PayloadEncoder {
         let session = session.lock().unwrap();
         let (key, iv) = session.init_encoder();
-        let (mut size_codec, padding) = Self::default(header, iv.clone());
+        let (mut size_codec, padding) = Self::default_option(&header.option, iv.clone());
         let security = header.security;
         if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
-            size_codec = Self::aead_chunk_size_codec(security, session.request_body_key(), session.request_body_iv());
+            size_codec = Self::new_aead_chunk_size_codec(security, session.request_body_key(), session.request_body_iv());
         }
-        PayloadEncoder::new(2048, Self::auth(Self::aead_cipher(security, key), iv), size_codec, padding)
+        if security == SecurityType::CHACHA20_POLY1305 {
+            PayloadEncoder::new(
+                2048,
+                Self::new_auth(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key)), iv),
+                size_codec,
+                padding,
+            )
+        } else {
+            PayloadEncoder::new(2048, Self::new_auth(Self::new_aead_cipher(security, key), iv), size_codec, padding)
+        }
     }
 
     pub fn decoder(header: &RequestHeader, session: Arc<Mutex<dyn SessionInit>>) -> PayloadDecoder {
         let session = session.lock().unwrap();
         let (key, iv) = session.init_decoder();
-        let (mut size_codec, padding) = Self::default(header, iv.clone());
+        let (mut size_codec, padding) = Self::default_option(&header.option, iv.clone());
         let security = header.security;
         if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
-            size_codec = Self::aead_chunk_size_codec(security, session.request_body_key(), session.request_body_iv());
+            size_codec = Self::new_aead_chunk_size_codec(security, session.request_body_key(), session.request_body_iv());
         }
-        PayloadDecoder::new(Self::auth(Self::aead_cipher(security, key), iv), size_codec, padding)
-    }
-
-    fn aead_cipher(security: SecurityType, key: &[u8]) -> Box<dyn AEADCipher> {
         if security == SecurityType::CHACHA20_POLY1305 {
-            Box::new(ChaCha20Poly1305Cipher::new(&Auth::generate_chacha20_poly1305_key(key)))
+            PayloadDecoder::new(Self::new_auth(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key)), iv), size_codec, padding)
         } else {
-            Box::new(Aes128GcmCipher::new(&key))
+            PayloadDecoder::new(Self::new_auth(Self::new_aead_cipher(security, key), iv), size_codec, padding)
+        }
+    }
+    fn new_aead_chunk_size_codec(security: SecurityType, key: &[u8], nonce: Arc<Mutex<[u8]>>) -> Box<dyn ChunkSizeCodec> {
+        let key = &KDF::kdf16(key, vec![AUTH_LEN]);
+        let cipher;
+        if security == SecurityType::CHACHA20_POLY1305 {
+            cipher = Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key));
+        } else {
+            cipher = Self::new_aead_cipher(security, key);
+        }
+        Box::new(AEADChunkSizeParser::new(Self::new_auth(cipher, nonce)))
+    }
+
+    fn new_aead_cipher(security: SecurityType, key: &[u8]) -> Box<dyn AEADCipher> {
+        if security == SecurityType::CHACHA20_POLY1305 {
+            Box::new(ChaCha20Poly1305Cipher::new(key))
+        } else {
+            Box::new(Aes128GcmCipher::new(key))
         }
     }
 
-    fn auth(cipher: Box<dyn AEADCipher>, nonce: Arc<Mutex<[u8]>>) -> Arc<Mutex<Authenticator>> {
+    fn new_auth(cipher: Box<dyn AEADCipher>, nonce: Arc<Mutex<[u8]>>) -> Arc<Mutex<Authenticator>> {
         let nonce_size = cipher.nonce_size();
         Arc::new(Mutex::new(Authenticator::new(cipher, Box::new(CountingNonceGenerator::new(nonce, nonce_size)), Box::new(EmptyBytesGenerator))))
     }
 
-    fn aead_chunk_size_codec(security: SecurityType, key: &[u8], nonce: Arc<Mutex<[u8]>>) -> Box<dyn ChunkSizeCodec> {
-        let cipher;
-        let key = &KDF::kdf16(key, vec![AUTH_LEN]);
-        if security == SecurityType::CHACHA20_POLY1305 {
-            cipher = Self::aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key));
-        } else {
-            cipher = Self::aead_cipher(security, key);
-        }
-        Box::new(AEADChunkSizeParser(Self::auth(cipher, nonce)))
-    }
-
-    fn default(header: &RequestHeader, iv: Arc<Mutex<[u8]>>) -> (Box<dyn ChunkSizeCodec>, Box<dyn PaddingLengthGenerator>) {
+    fn default_option(option: &Vec<RequestOption>, iv: Arc<Mutex<[u8]>>) -> (Box<dyn ChunkSizeCodec>, Box<dyn PaddingLengthGenerator>) {
         let mut size_codec: Box<dyn ChunkSizeCodec> = Box::new(PlainChunkSizeParser);
         let mut padding: Box<dyn PaddingLengthGenerator> = Box::new(EmptyPaddingLengthGenerator);
         let core = Arc::new(Mutex::new(ShakeSizeParser::new(&iv.lock().unwrap())));
-        if header.option.contains(&RequestOption::CHUNK_MASKING) {
+        if option.contains(&RequestOption::CHUNK_MASKING) {
             size_codec = Box::new(SharedShakeSizeParser(core.clone()));
         }
-        if header.option.contains(&RequestOption::GLOBAL_PADDING) {
+        if option.contains(&RequestOption::GLOBAL_PADDING) {
             padding = Box::new(SharedShakeSizeParser(core));
         }
         (size_codec, padding)
-    }
-}
-
-pub struct PlainChunkSizeParser;
-
-impl ChunkSizeCodec for PlainChunkSizeParser {
-    fn size_bytes(&self) -> usize {
-        size_of::<u16>()
-    }
-
-    fn encode(&mut self, size: usize) -> Result<Vec<u8>, Error> {
-        Ok((size as u16).to_be_bytes().to_vec())
-    }
-
-    fn decode(&mut self, data: &[u8]) -> Result<usize, Error> {
-        const LEN: usize = size_of::<u16>();
-        let mut bytes = [0; LEN];
-        bytes.copy_from_slice(&data[..LEN]);
-        Ok(u16::from_be_bytes(bytes) as usize)
     }
 }
 
@@ -137,7 +131,9 @@ pub struct ShakeSizeParser {
 
 impl ShakeSizeParser {
     pub fn new(nonce: &[u8]) -> Self {
-        trace!("New parser; nonce={}", Base64::encode_string(nonce));
+        if log_enabled!(Trace) {
+            trace!("New ShakeSizeParser; nonce={}", Base64::encode_string(nonce));
+        }
         let mut hasher = Shake128::default();
         hasher.update(nonce);
         Self { reader: hasher.finalize_xof(), buffer: [0; size_of::<u16>()] }
@@ -214,7 +210,7 @@ mod test {
     use crate::common::protocol::vmess::{ID, VERSION};
 
     #[test]
-    fn test_parser() {
+    fn test_share_size_parser() {
         fn new_parser() -> ShakeSizeParser {
             ShakeSizeParser::new( b"fn bubble_sort<T: Ord>(arr: &mut [T]) {let mut swapped = true;while swapped {swapped = false;for i in 1..arr.len() {if arr[i - 1] > arr[i] {arr.swap(i - 1, i);swapped = true;}}}}")
         }

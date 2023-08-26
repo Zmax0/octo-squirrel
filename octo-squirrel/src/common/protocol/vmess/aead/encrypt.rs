@@ -1,6 +1,5 @@
 use std::io::Cursor;
 
-use aes_gcm::{aead::KeyInit, Aes128Gcm};
 use bytes::{Buf, BytesMut};
 use rand::random;
 
@@ -14,10 +13,10 @@ impl Encrypt {
         let length = (header.len() as u16).to_be_bytes();
         let length_key = KDF::kdf16(key, vec![KDF::SALT_LENGTH_KEY, &auth_id, &connection_nonce]);
         let length_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(key, vec![KDF::SALT_LENGTH_IV, &auth_id, &connection_nonce]);
-        let length_encrypted = Aes128GcmCipher(Aes128Gcm::new_from_slice(&length_key).unwrap()).encrypt(&length_iv, &length, &auth_id);
+        let length_encrypted = Aes128GcmCipher::new(&length_key).encrypt(&length_iv, &length, &auth_id);
         let header_key = KDF::kdf16(key, vec![KDF::SALT_PAYLOAD_KEY, &auth_id, &connection_nonce]);
         let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(key, vec![KDF::SALT_PAYLOAD_IV, &auth_id, &connection_nonce]);
-        let header_encrypted = Aes128GcmCipher(Aes128Gcm::new_from_slice(&header_key).unwrap()).encrypt(&header_iv, &header, &auth_id);
+        let header_encrypted = Aes128GcmCipher::new(&header_key).encrypt(&header_iv, &header, &auth_id);
         let mut res = Vec::new();
         res.extend_from_slice(&auth_id); // 16
         res.extend_from_slice(&length_encrypted); // 2 + TAG_SIZE
@@ -40,7 +39,7 @@ impl Encrypt {
         cursor.copy_to_slice(&mut nonce);
         let length_key = KDF::kdf16(key, vec![KDF::SALT_LENGTH_KEY, &auth_id, &nonce]);
         let length_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(key, vec![KDF::SALT_LENGTH_IV, &auth_id, &nonce]);
-        let length_bytes = Aes128GcmCipher(Aes128Gcm::new_from_slice(&length_key).unwrap()).decrypt(&length_iv, &length_encrypted, &auth_id);
+        let length_bytes = Aes128GcmCipher::new(&length_key).decrypt(&length_iv, &length_encrypted, &auth_id);
         let mut length = [0; 2];
         length.copy_from_slice(&length_bytes);
         let length = u16::from_be_bytes(length) as usize;
@@ -51,7 +50,7 @@ impl Encrypt {
         let header_key = KDF::kdf16(key, vec![KDF::SALT_PAYLOAD_KEY, &auth_id, &nonce]);
         let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(key, vec![KDF::SALT_PAYLOAD_IV, &auth_id, &nonce]);
         let header_encrypted = cursor.copy_to_bytes(length + 16);
-        let header_bytes = Aes128GcmCipher(Aes128Gcm::new_from_slice(&header_key).unwrap()).decrypt(&header_iv, &header_encrypted, &auth_id);
+        let header_bytes = Aes128GcmCipher::new(&header_key).decrypt(&header_iv, &header_encrypted, &auth_id);
         Some(header_bytes)
     }
 }
