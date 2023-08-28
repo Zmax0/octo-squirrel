@@ -71,7 +71,7 @@ macro_rules! session_impl {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                 write!(
                     f,
-                    "RK:{}, RI:{}, SK:{}, SI:{}, SH:{}",
+                    "[REQ: {}, {}; RESP: {}, {}, {}]",
                     base64ct::Base64::encode_string(self.request_body_key()),
                     base64ct::Base64::encode_string(&self.request_body_iv().lock().unwrap()),
                     base64ct::Base64::encode_string(self.response_body_key()),

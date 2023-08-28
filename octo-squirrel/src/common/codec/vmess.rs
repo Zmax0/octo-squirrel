@@ -52,13 +52,12 @@ impl SessionInit for ServerSession {}
 pub struct AEADBodyCodec;
 
 impl AEADBodyCodec {
-    pub fn encoder(header: &RequestHeader, session: Arc<Mutex<dyn SessionInit>>) -> PayloadEncoder {
-        let session = session.lock().unwrap();
+    pub fn encoder(header: &RequestHeader, session: &dyn SessionInit) -> PayloadEncoder {
         let (key, iv) = session.init_encoder();
         let (mut size_codec, padding) = Self::default_option(&header.option, iv.clone());
         let security = header.security;
         if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
-            size_codec = Self::new_aead_chunk_size_codec(security, session.request_body_key(), session.request_body_iv());
+            size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv());
         }
         if security == SecurityType::CHACHA20_POLY1305 {
             PayloadEncoder::new(
@@ -72,13 +71,12 @@ impl AEADBodyCodec {
         }
     }
 
-    pub fn decoder(header: &RequestHeader, session: Arc<Mutex<dyn SessionInit>>) -> PayloadDecoder {
-        let session = session.lock().unwrap();
+    pub fn decoder(header: &RequestHeader, session: &dyn SessionInit) -> PayloadDecoder {
         let (key, iv) = session.init_decoder();
         let (mut size_codec, padding) = Self::default_option(&header.option, iv.clone());
         let security = header.security;
         if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
-            size_codec = Self::new_aead_chunk_size_codec(security, session.request_body_key(), session.request_body_iv());
+            size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv());
         }
         if security == SecurityType::CHACHA20_POLY1305 {
             PayloadDecoder::new(Self::new_auth(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key)), iv), size_codec, padding)
@@ -86,7 +84,8 @@ impl AEADBodyCodec {
             PayloadDecoder::new(Self::new_auth(Self::new_aead_cipher(security, key), iv), size_codec, padding)
         }
     }
-    fn new_aead_chunk_size_codec(security: SecurityType, key: &[u8], nonce: Arc<Mutex<[u8]>>) -> Box<dyn ChunkSizeCodec> {
+
+    fn new_aead_chunk_size_parser(security: SecurityType, key: &[u8], nonce: Arc<Mutex<[u8]>>) -> Box<dyn ChunkSizeCodec> {
         let key = &KDF::kdf16(key, vec![AUTH_LEN]);
         let cipher;
         if security == SecurityType::CHACHA20_POLY1305 {
@@ -194,7 +193,6 @@ impl PaddingLengthGenerator for SharedShakeSizeParser {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{Arc, Mutex};
 
     use bytes::{Buf, BufMut, BytesMut};
     use rand::{random, Rng};
@@ -285,12 +283,10 @@ mod test {
         fn test_by_header(header: RequestHeader) {
             let client_session = ClientSession::new();
             let server_session: ServerSession = client_session.clone().into();
-            let client_session = Arc::new(Mutex::new(client_session));
-            let server_session = Arc::new(Mutex::new(server_session));
-            let mut client_encoder = AEADBodyCodec::encoder(&header, client_session.clone());
-            let mut client_decoder = AEADBodyCodec::decoder(&header, client_session.clone());
-            let mut server_encoder = AEADBodyCodec::encoder(&header, server_session.clone());
-            let mut server_decoder = AEADBodyCodec::decoder(&header, server_session.clone());
+            let mut client_encoder = AEADBodyCodec::encoder(&header, &client_session);
+            let mut client_decoder = AEADBodyCodec::decoder(&header, &client_session);
+            let mut server_encoder = AEADBodyCodec::encoder(&header, &server_session);
+            let mut server_decoder = AEADBodyCodec::decoder(&header, &server_session);
             let msg = "Hello World!";
             let mut src = BytesMut::new();
             src.put(msg.as_bytes());

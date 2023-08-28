@@ -11,14 +11,9 @@ pub enum Network {
     UDP,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Copy, Default, Serialize, Deserialize)]
 pub enum PacketEncoding {
+    #[default]
     None,
     Packet,
-}
-
-impl Default for PacketEncoding {
-    fn default() -> Self {
-        PacketEncoding::None
-    }
 }

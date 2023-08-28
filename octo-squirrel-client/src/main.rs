@@ -7,8 +7,9 @@ use octo_squirrel::common::protocol::Protocols;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
-mod shadowsocks;
-mod vmess;
+use crate::client::{shadowsocks, vmess};
+
+mod client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

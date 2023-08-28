@@ -1,7 +1,7 @@
 use std::u8;
 
 use aes::{cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyInit}, Aes128};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use ecb::{Decryptor, Encryptor};
 use rand::random;
 
@@ -26,14 +26,13 @@ impl AuthID {
 
     pub fn matching(authid: &[u8], keys: &Vec<[u8; 16]>) -> bool {
         for key in keys {
-            let cur = &mut [0; 16];
+            let mut cur = [0; 16];
             cur.copy_from_slice(authid);
-            Cipher::decrypt(&KDF::kdf16(key, vec![b"AES Auth ID Encryption"]), cur);
-            let mut buf = Bytes::from(cur.to_vec());
-            let crc32 = vmess::crc32(&buf[0..12]);
-            let now = buf.get_i64();
-            buf.advance(4); // rand u32
-            if buf.get_i32() == crc32 as i32 && (now - vmess::now()).abs() <= 120 {
+            Cipher::decrypt(&KDF::kdf16(key, vec![b"AES Auth ID Encryption"]), &mut cur);
+            let crc32 = vmess::crc32(&cur[..12]);
+            let (l, r) = cur.split_at(12);
+            let now = i64::from_be_bytes(l[..8].try_into().unwrap());
+            if i32::from_be_bytes(r.try_into().unwrap()) == crc32 as i32 && (now - vmess::now()).abs() <= 120 {
                 return true;
             }
         }

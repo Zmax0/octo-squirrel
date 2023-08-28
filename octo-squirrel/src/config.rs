@@ -75,8 +75,7 @@ mod test {
               "networks": [
                 "TCP",
                 "UDP"
-              ],
-              "packetEncoding": "Packet"
+              ]
             }
           ]
         });
@@ -88,6 +87,6 @@ mod test {
         assert_eq!(SupportedCipher::ChaCha20Poly1305, current.cipher);
         assert_eq!(Protocols::VMess, current.protocol);
         assert_eq!(vec![Network::TCP, Network::UDP], current.networks);
-        assert_eq!(PacketEncoding::Packet, current.packet_encoding);
+        assert_eq!(PacketEncoding::None, current.packet_encoding);
     }
 }

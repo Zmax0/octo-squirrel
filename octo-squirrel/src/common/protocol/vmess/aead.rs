@@ -6,17 +6,6 @@ pub struct AuthID;
 pub struct Encrypt;
 pub struct KDF;
 
-impl KDF {
-    pub const SALT_LENGTH_KEY: &'static [u8] = b"VMess Header AEAD Key_Length";
-    pub const SALT_LENGTH_IV: &'static [u8] = b"VMess Header AEAD Nonce_Length";
-    pub const SALT_PAYLOAD_KEY: &'static [u8] = b"VMess Header AEAD Key";
-    pub const SALT_PAYLOAD_IV: &'static [u8] = b"VMess Header AEAD Nonce";
-    pub const SALT_AEAD_RESP_HEADER_LEN_KEY: &'static [u8] = b"AEAD Resp Header Len Key";
-    pub const SALT_AEAD_RESP_HEADER_LEN_IV: &'static [u8] = b"AEAD Resp Header Len IV";
-    pub const SALT_AEAD_RESP_HEADER_PAYLOAD_KEY: &'static [u8] = b"AEAD Resp Header Key";
-    pub const SALT_AEAD_RESP_HEADER_PAYLOAD_IV: &'static [u8] = b"AEAD Resp Header IV";
-}
-
 #[cfg(test)]
 mod test {
     use base64ct::{Base64, Encoding};
