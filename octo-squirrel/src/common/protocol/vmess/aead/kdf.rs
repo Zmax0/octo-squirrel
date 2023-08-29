@@ -1,0 +1,131 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use digest::typenum::Unsigned;
+use digest::OutputSizeUser;
+use sha2::{Digest, Sha256};
+
+use super::KDF;
+
+impl KDF {
+    pub const SALT_LENGTH_KEY: &'static [u8] = b"VMess Header AEAD Key_Length";
+    pub const SALT_LENGTH_IV: &'static [u8] = b"VMess Header AEAD Nonce_Length";
+    pub const SALT_PAYLOAD_KEY: &'static [u8] = b"VMess Header AEAD Key";
+    pub const SALT_PAYLOAD_IV: &'static [u8] = b"VMess Header AEAD Nonce";
+    pub const SALT_AEAD_RESP_HEADER_LEN_KEY: &'static [u8] = b"AEAD Resp Header Len Key";
+    pub const SALT_AEAD_RESP_HEADER_LEN_IV: &'static [u8] = b"AEAD Resp Header Len IV";
+    pub const SALT_AEAD_RESP_HEADER_PAYLOAD_KEY: &'static [u8] = b"AEAD Resp Header Key";
+    pub const SALT_AEAD_RESP_HEADER_PAYLOAD_IV: &'static [u8] = b"AEAD Resp Header IV";
+    const SIZE: usize = <Sha256 as OutputSizeUser>::OutputSize::USIZE;
+
+    pub fn kdf(key: &[u8], path: Vec<&[u8]>) -> [u8; Self::SIZE] {
+        let mut creator = HmacCreator { parent: None, value: b"VMess AEAD KDF" };
+        for v in path {
+            creator = HmacCreator { parent: Some(Box::new(creator)), value: v }
+        }
+        let mut hmacf = creator.create();
+        hmacf.update(key);
+        hmacf.do_final()
+    }
+
+    pub fn kdfn<const N: usize>(key: &[u8], path: Vec<&[u8]>) -> [u8; N] {
+        let mut out = [0; N];
+        let len = N.min(Self::SIZE);
+        out[..len].copy_from_slice(&Self::kdf(key, path)[..len]);
+        out
+    }
+
+    pub fn kdf16(key: &[u8], path: Vec<&[u8]>) -> [u8; 16] {
+        Self::kdfn(key, path)
+    }
+}
+
+struct Hmac {
+    inner: Box<dyn Hash>,
+    outer: Box<dyn Hash>,
+    ipad: [u8; 64],
+    opad: [u8; 64],
+}
+
+impl Hmac {
+    fn new(hash: Box<dyn Hash>, key: &[u8]) -> Self {
+        let mut hm = Self { inner: hash.new(), outer: hash.new(), ipad: [0; 64], opad: [0; 64] };
+        let key_len = key.len();
+        if key_len > hm.inner.output_size() {
+            hm.outer.update(key);
+            return Hmac::new(hash, &hm.outer.do_final());
+        }
+        hm.ipad[0..key_len].copy_from_slice(key);
+        hm.opad[0..key_len].copy_from_slice(key);
+        for i in 0..hm.ipad.len() {
+            hm.ipad[i] ^= 0x36;
+        }
+        for i in 0..hm.opad.len() {
+            hm.opad[i] ^= 0x5c;
+        }
+        hm.inner.update(&hm.ipad);
+        return hm;
+    }
+}
+
+trait Hash {
+    fn new(&self) -> Box<dyn Hash>;
+    fn update(&mut self, data: &[u8]);
+    fn do_final(&mut self) -> [u8; 32];
+    fn output_size(&self) -> usize;
+}
+
+type _Sha256 = Rc<RefCell<Sha256>>;
+
+impl Hash for _Sha256 {
+    fn new(&self) -> Box<dyn Hash> {
+        Box::new(self.clone())
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        self.borrow_mut().update(data)
+    }
+
+    fn do_final(&mut self) -> [u8; 32] {
+        self.borrow_mut().finalize_reset().into()
+    }
+
+    fn output_size(&self) -> usize {
+        <Sha256 as OutputSizeUser>::OutputSize::USIZE
+    }
+}
+
+impl Hash for Hmac {
+    fn new(&self) -> Box<dyn Hash> {
+        Box::new(Self { inner: self.inner.new(), outer: self.outer.new(), ipad: self.ipad.clone(), opad: self.opad.clone() })
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        self.inner.update(data)
+    }
+
+    fn do_final(&mut self) -> [u8; 32] {
+        self.outer.update(&self.opad);
+        self.outer.update(&self.inner.do_final());
+        self.outer.do_final()
+    }
+
+    fn output_size(&self) -> usize {
+        self.inner.output_size()
+    }
+}
+
+struct HmacCreator<'a> {
+    parent: Option<Box<HmacCreator<'a>>>,
+    value: &'a [u8],
+}
+
+impl HmacCreator<'_> {
+    fn create(&mut self) -> Box<dyn Hash> {
+        return if let Some(parent) = self.parent.as_mut() {
+            Box::new(Hmac::new(parent.create(), &self.value))
+        } else {
+            Box::new(Hmac::new(Rc::new(RefCell::new(Sha256::new())).new(), &self.value))
+        };
+    }
+}

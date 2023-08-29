@@ -1,0 +1,55 @@
+use std::error::Error;
+
+use futures::FutureExt;
+use log::{error, info};
+use octo_squirrel::common::protocol::socks5::{handshake::ServerHandShake, message::Socks5CommandResponse, Socks5AddressType, Socks5CommandStatus};
+use octo_squirrel::common::protocol::Protocols;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+
+use crate::client::{shadowsocks, vmess};
+
+mod client;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    octo_squirrel::log::init()?;
+    let config = octo_squirrel::config::init()?;
+    let current = config.get_current().expect("Empty proxy server.");
+    let listen_addr = format!("127.0.0.1:{}", config.port);
+    let proxy_addr = format!("{}:{}", current.host, current.port);
+    let listener = TcpListener::bind(listen_addr).await?;
+
+    info!("Listening on: {}", listener.local_addr().unwrap());
+    info!("Proxying to: {}", proxy_addr);
+
+    while let Ok((mut inbound, _)) = listener.accept().await {
+        let response = Socks5CommandResponse::new(Socks5CommandStatus::SUCCESS, Socks5AddressType::DOMAIN, "localhost".to_owned(), 1089);
+        let handshake = ServerHandShake::no_auth(&mut inbound, response).await;
+        if let Ok(request) = handshake {
+            info!("Accept inbound; dest={}, protocol={}", request, current.protocol);
+            match current.protocol {
+                Protocols::Shadowsocks => {
+                    let transfer = shadowsocks::transfer_tcp(inbound, proxy_addr.to_owned(), request, current.clone()).map(|r| {
+                        if let Err(e) = r {
+                            error!("Failed to transfer; error={}", e);
+                        }
+                    });
+                    tokio::spawn(transfer);
+                }
+                Protocols::VMess => {
+                    let transfer = vmess::transfer_tcp(inbound, proxy_addr.to_owned(), request, current.clone()).map(|r| {
+                        if let Err(e) = r {
+                            error!("Failed to transfer; error={}", e);
+                        }
+                    });
+                    tokio::spawn(transfer);
+                }
+            }
+        } else {
+            error!("Failed to handshake; error={}", handshake.unwrap_err());
+            inbound.shutdown().await?;
+        }
+    }
+    Ok(())
+}
