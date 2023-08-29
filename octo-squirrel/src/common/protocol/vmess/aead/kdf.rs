@@ -1,6 +1,3 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use digest::typenum::Unsigned;
 use digest::OutputSizeUser;
 use sha2::{Digest, Sha256};
@@ -75,19 +72,19 @@ trait Hash {
     fn output_size(&self) -> usize;
 }
 
-type _Sha256 = Rc<RefCell<Sha256>>;
+type Sha256Wrapper = Box<Sha256>;
 
-impl Hash for _Sha256 {
+impl Hash for Sha256Wrapper {
     fn new(&self) -> Box<dyn Hash> {
         Box::new(self.clone())
     }
 
     fn update(&mut self, data: &[u8]) {
-        self.borrow_mut().update(data)
+        Sha256::update(self, data)
     }
 
     fn do_final(&mut self) -> [u8; 32] {
-        self.borrow_mut().finalize_reset().into()
+        self.finalize_reset().into()
     }
 
     fn output_size(&self) -> usize {
@@ -125,7 +122,7 @@ impl HmacCreator<'_> {
         return if let Some(parent) = self.parent.as_mut() {
             Box::new(Hmac::new(parent.create(), &self.value))
         } else {
-            Box::new(Hmac::new(Rc::new(RefCell::new(Sha256::new())).new(), &self.value))
+            Box::new(Hmac::new(Box::new(Box::new(Sha256::new())), &self.value))
         };
     }
 }
