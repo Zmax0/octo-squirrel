@@ -72,9 +72,9 @@ trait Hash {
     fn output_size(&self) -> usize;
 }
 
-type Sha256Wrapper = Box<Sha256>;
+type BoxSha256 = Box<Sha256>;
 
-impl Hash for Sha256Wrapper {
+impl Hash for BoxSha256 {
     fn new(&self) -> Box<dyn Hash> {
         Box::new(self.clone())
     }

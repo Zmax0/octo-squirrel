@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::{io, sync::{Arc, Mutex}};
 
 use bytes::{Buf, BufMut, BytesMut};
@@ -7,9 +8,18 @@ use sha1::Sha1;
 use tokio_util::codec::{Decoder, Encoder};
 
 use super::{aead::{Authenticator, PayloadDecoder, PayloadEncoder, SupportedCipher}, chunk::AEADChunkSizeParser, EmptyBytesGenerator, EmptyPaddingLengthGenerator, IncreasingNonceGenerator};
-use crate::common::{protocol::{network::Network, socks5::{address::{Socks5AddressDecoder, Socks5AddressEncoder}, message::Socks5CommandRequest, Socks5AddressType}}, util::Dice};
+use crate::common::{protocol::{network::Network, socks5::{address::Address, message::Socks5CommandRequest, Socks5AddressType}}, util::Dice};
 
 pub struct AddressCodec;
+
+impl AddressCodec {
+    pub fn decode(src: &mut BytesMut) -> Result<Option<Socks5CommandRequest>, io::Error> {
+        let dst_addr_type = Socks5AddressType(src.get_u8());
+        let dst_addr = Address::decode_address(dst_addr_type, src)?;
+        let dst_port = src.get_u16();
+        Ok(Some(Socks5CommandRequest::connect(dst_addr_type, dst_addr, dst_port)))
+    }
+}
 
 impl Encoder<Socks5CommandRequest> for AddressCodec {
     type Error = io::Error;
@@ -17,7 +27,7 @@ impl Encoder<Socks5CommandRequest> for AddressCodec {
     fn encode(&mut self, item: Socks5CommandRequest, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let temp = dst.split_off(0);
         dst.put_u8(item.dst_addr_type.0);
-        Socks5AddressEncoder::encode_address(item.dst_addr_type, &item.dst_addr, dst)?;
+        Address::encode_address(item.dst_addr_type, &item.dst_addr, dst)?;
         dst.put_u16(item.dst_port);
         dst.unsplit(temp);
         Ok(())
@@ -30,10 +40,7 @@ impl Decoder for AddressCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let dst_addr_type = Socks5AddressType(src.get_u8());
-        let dst_addr = Socks5AddressDecoder::decode_address(dst_addr_type, src)?;
-        let dst_port = src.get_u16();
-        Ok(Some(Socks5CommandRequest::connect(dst_addr_type, dst_addr, dst_port)))
+        Self::decode(src)
     }
 }
 
@@ -158,20 +165,57 @@ impl Decoder for AEADCipherCodec {
             }
             Network::UDP => {
                 let salt = src.split_to(self.key.len());
-                self.new_payload_decoder(&salt).decode_packet(src)
+                let decoder = self.new_payload_decoder(&salt);
+                let opened = decoder.auth.lock().unwrap().open(&src.split_off(0));
+                Ok(Some(BytesMut::from(&opened[..])))
             }
         }
     }
 }
 
+pub struct UdpReplayCodec {
+    cipher: AEADCipherCodec,
+}
+
+impl UdpReplayCodec {
+    pub fn new(cipher: AEADCipherCodec) -> Self {
+        Self { cipher }
+    }
+}
+
+impl Encoder<(BytesMut, SocketAddr)> for UdpReplayCodec {
+    type Error = io::Error;
+
+    fn encode(&mut self, item: (BytesMut, SocketAddr), dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let mut temp = BytesMut::new();
+        Address::encode_socket_address(item.1, &mut temp)?;
+        temp.put_slice(&item.0);
+        self.cipher.encode(temp, dst)
+    }
+}
+
+impl Decoder for UdpReplayCodec {
+    type Item = (BytesMut, SocketAddr);
+
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let mut temp = self.cipher.decode(src)?.unwrap();
+        let recipient = Address::decode_socket_address(&mut temp)?;
+        Ok(Some((temp.split_off(0), recipient)))
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
     use base64ct::Encoding;
     use bytes::BytesMut;
-    use rand::{distributions::Alphanumeric, Rng};
+    use rand::{distributions::Alphanumeric, random, Rng};
     use tokio_util::codec::{Decoder, Encoder};
 
-    use crate::common::{codec::{aead::SupportedCipher, shadowsocks::AEADCipherCodec}, protocol::network::Network};
+    use crate::common::{codec::{aead::SupportedCipher, shadowsocks::{AEADCipherCodec, UdpReplayCodec}}, protocol::network::Network};
 
     #[test]
     fn test_generate_key() {
@@ -198,5 +242,24 @@ mod test {
         }
 
         SupportedCipher::VALUES.into_iter().for_each(test_tcp);
+    }
+
+    #[test]
+    fn test_udp() {
+        fn test_udp(cipher: SupportedCipher) {
+            let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
+            rand::thread_rng().fill(&mut password[..]);
+            let codec = AEADCipherCodec::new(cipher, &password[..], Network::UDP);
+            let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
+            let mut codec = UdpReplayCodec::new(codec);
+            let mut dst = BytesMut::new();
+            let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random()));
+            codec.encode((expect.as_bytes().into(), addr), &mut dst).unwrap();
+            let actual = codec.decode(&mut dst).unwrap().unwrap();
+            assert_eq!(String::from_utf8(actual.0.freeze().to_vec()).unwrap(), expect);
+            assert_eq!(actual.1, addr);
+        }
+
+        SupportedCipher::VALUES.into_iter().for_each(test_udp);
     }
 }

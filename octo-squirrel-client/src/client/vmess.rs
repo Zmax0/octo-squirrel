@@ -21,17 +21,12 @@ use tokio::net::TcpStream;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, Decoder, Encoder, FramedRead, FramedWrite};
 
-pub(crate) async fn transfer_tcp(
-    mut inbound: TcpStream,
-    proxy_addr: String,
-    request: Socks5CommandRequest,
-    config: ServerConfig,
-) -> Result<(), Box<dyn error::Error>> {
+pub(crate) async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn error::Error>> {
     let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
     let header = RequestHeader::default(RequestCommand::TCP, security, request, config.password);
     let session = ClientSession::new();
     trace!("New session; {}", session);
-    let mut outbound = TcpStream::connect(proxy_addr).await?;
+    let mut outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
     let (ri, wi) = inbound.split();
     let (ro, wo) = outbound.split();
 
