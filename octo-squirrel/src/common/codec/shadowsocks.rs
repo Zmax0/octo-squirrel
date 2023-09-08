@@ -152,18 +152,21 @@ impl Decoder for AEADCipherCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if src.remaining() < self.key.len() {
-            return Ok(None);
-        }
         match self.network {
             Network::TCP => {
                 if self.payload_decoder.is_none() {
+                    if src.remaining() < self.key.len() {
+                        return Ok(None);
+                    }
                     let salt = src.split_to(self.key.len());
                     self.payload_decoder = Some(self.new_payload_decoder(&salt));
                 }
                 self.payload_decoder.as_mut().unwrap().decode_payload(src)
             }
             Network::UDP => {
+                if src.remaining() < self.key.len() {
+                    return Ok(None);
+                }
                 let salt = src.split_to(self.key.len());
                 let decoder = self.new_payload_decoder(&salt);
                 let opened = decoder.auth.lock().unwrap().open(&src.split_off(0));
@@ -173,17 +176,17 @@ impl Decoder for AEADCipherCodec {
     }
 }
 
-pub struct UdpReplayCodec {
+pub struct DatagramPacketCodec {
     cipher: AEADCipherCodec,
 }
 
-impl UdpReplayCodec {
+impl DatagramPacketCodec {
     pub fn new(cipher: AEADCipherCodec) -> Self {
         Self { cipher }
     }
 }
 
-impl Encoder<(BytesMut, SocketAddr)> for UdpReplayCodec {
+impl Encoder<(BytesMut, SocketAddr)> for DatagramPacketCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: (BytesMut, SocketAddr), dst: &mut BytesMut) -> Result<(), Self::Error> {
@@ -194,15 +197,18 @@ impl Encoder<(BytesMut, SocketAddr)> for UdpReplayCodec {
     }
 }
 
-impl Decoder for UdpReplayCodec {
+impl Decoder for DatagramPacketCodec {
     type Item = (BytesMut, SocketAddr);
 
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let mut temp = self.cipher.decode(src)?.unwrap();
-        let recipient = Address::decode_socket_address(&mut temp)?;
-        Ok(Some((temp.split_off(0), recipient)))
+        if let Some(mut temp) = self.cipher.decode(src)? {
+            let recipient = Address::decode_socket_address(&mut temp)?;
+            Ok(Some((temp.split_off(0), recipient)))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -215,7 +221,7 @@ mod test {
     use rand::{distributions::Alphanumeric, random, Rng};
     use tokio_util::codec::{Decoder, Encoder};
 
-    use crate::common::{codec::{aead::SupportedCipher, shadowsocks::{AEADCipherCodec, UdpReplayCodec}}, protocol::network::Network};
+    use crate::common::{codec::{aead::SupportedCipher, shadowsocks::{AEADCipherCodec, DatagramPacketCodec}}, protocol::network::Network};
 
     #[test]
     fn test_generate_key() {
@@ -251,7 +257,7 @@ mod test {
             rand::thread_rng().fill(&mut password[..]);
             let codec = AEADCipherCodec::new(cipher, &password[..], Network::UDP);
             let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
-            let mut codec = UdpReplayCodec::new(codec);
+            let mut codec = DatagramPacketCodec::new(codec);
             let mut dst = BytesMut::new();
             let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random()));
             codec.encode((expect.as_bytes().into(), addr), &mut dst).unwrap();

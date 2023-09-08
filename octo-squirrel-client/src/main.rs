@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
         let socket = UdpSocket::bind(listen_addr).await?;
         info!("Listening UDP on: {}", socket.local_addr().unwrap());
-        proxy_udp(socket, current).unwrap();
+        transfer_udp(socket, current);
     }
     if current.networks.contains(&Network::TCP) {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
@@ -36,10 +36,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(), Box<dyn Error>> {
     while let Ok((mut inbound, _)) = listener.accept().await {
-        let response = Socks5CommandResponse::new(Socks5CommandStatus::SUCCESS, Socks5AddressType::DOMAIN, "localhost".to_owned(), 1089);
+        let local_addr = inbound.local_addr().unwrap();
+        let response = Socks5CommandResponse::new(
+            Socks5CommandStatus::SUCCESS,
+            if local_addr.is_ipv4() { Socks5AddressType::IPV4 } else { Socks5AddressType::IPV6 },
+            local_addr.ip().to_string(),
+            local_addr.port(),
+        );
         let handshake = ServerHandShake::no_auth(&mut inbound, response).await;
         if let Ok(request) = handshake {
-            info!("Accept inbound; dest={}, protocol={}", request, current.protocol);
+            info!("Accept tcp inbound; dest={}, protocol={}", request, current.protocol);
             match current.protocol {
                 Protocols::Shadowsocks => {
                     let transfer = shadowsocks::transfer_tcp(inbound, request, current.clone()).map(|r| {
@@ -66,7 +72,7 @@ async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(
     Ok(())
 }
 
-fn proxy_udp(socket: UdpSocket, current: &ServerConfig) -> Result<(), Box<dyn Error>> {
+fn transfer_udp(socket: UdpSocket, current: &ServerConfig) -> Result<(), Box<dyn Error>> {
     match current.protocol {
         Protocols::Shadowsocks => {
             let transfer = shadowsocks::transfer_udp(socket, current.clone()).map(|r| {

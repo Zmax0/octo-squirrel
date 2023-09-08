@@ -6,9 +6,11 @@ use std::sync::Arc;
 use bytes::BytesMut;
 use dashmap::mapref::entry::Entry::Vacant;
 use dashmap::DashMap;
+use futures::lock::Mutex;
 use futures::stream::SplitSink;
-use futures::{Sink, SinkExt, StreamExt};
-use octo_squirrel::common::codec::shadowsocks::{AEADCipherCodec, AddressCodec, UdpReplayCodec};
+use futures::{SinkExt, StreamExt};
+use log::info;
+use octo_squirrel::common::codec::shadowsocks::{AEADCipherCodec, AddressCodec, DatagramPacketCodec};
 use octo_squirrel::common::protocol::network::Network;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
@@ -49,33 +51,36 @@ pub(crate) async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandR
 
 pub(crate) async fn transfer_udp(inbound: UdpSocket, config: ServerConfig) -> Result<(), Box<dyn Error>> {
     let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
-    let binding: Arc<DashMap<SocketAddr, UdpFramed<UdpReplayCodec>>> = Arc::new(DashMap::new());
-    // let timer_core: TimerWithThread<SocketAddr, OneShotClosureState<SocketAddr>, PeriodicClosureState<SocketAddr>> = TimerWithThread::new().unwrap();
-    let (sink, mut stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
-    while let Some(Ok((pocket, sender))) = stream.next().await {
+    let binding: Arc<DashMap<SocketAddr, SplitSink<UdpFramed<DatagramPacketCodec>, ((BytesMut, SocketAddr), SocketAddr)>>> = Arc::new(DashMap::new());
+    let (i_sink, mut i_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
+    let sink = Arc::new(Mutex::new(i_sink));
+    while let Some(Ok((pocket, sender))) = i_stream.next().await {
         if let Vacant(entry) = binding.entry(sender) {
             let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
+            info!("New binding; sender={}, outbound={}", sender, outbound.local_addr()?);
             let outbound =
-                UdpFramed::new(outbound, UdpReplayCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::UDP)));
-            entry.insert(outbound);
+                UdpFramed::new(outbound, DatagramPacketCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::UDP)));
+            let (o_sink, mut o_stream) = outbound.split();
+            entry.insert(o_sink);
+            let _binding = binding.clone();
+            let _sink = sink.clone();
+            let server_to_client = async move {
+                while let Some(Ok(item)) = o_stream.next().await {
+                    if _binding.contains_key(&sender) {
+                        _sink.lock().await.send((item.0, sender)).await?;
+                    } else {
+                        break;
+                    }
+                }
+                Ok::<(), io::Error>(())
+            };
+            tokio::spawn(server_to_client);
         };
+        info!("Accept udp pocket; sender={}, recipient={}, proxy={}", sender, pocket.1, proxy);
         binding.get_mut(&sender).unwrap().send((pocket, proxy)).await?
     }
-    // tokio::spawn(server_to_client(binding.clone(), sink));
     Ok(())
 }
-
-// async fn server_to_client(
-//     binding: Arc<DashMap<SocketAddr, UdpFramed<UdpReplayCodec>>>,
-//     mut sink: SplitSink<UdpFramed<Socks5UdpCodec>, ((BytesMut, SocketAddr), SocketAddr)>,
-// ) -> Result<(), io::Error> {
-//     for mut i in binding.into_iter() {
-//         while let Some(Ok(item)) = i.1.next().await {
-//             sink.send((item.0, i.0)).await?;
-//         }
-//     }
-//     Ok(())
-// }
 
 #[cfg(test)]
 mod test {
