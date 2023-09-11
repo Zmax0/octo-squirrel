@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
         let socket = UdpSocket::bind(listen_addr).await?;
         info!("Listening UDP on: {}", socket.local_addr().unwrap());
-        transfer_udp(socket, current);
+        transfer_udp(socket, current)?;
     }
     if current.networks.contains(&Network::TCP) {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);

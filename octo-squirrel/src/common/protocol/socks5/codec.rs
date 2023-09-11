@@ -115,15 +115,19 @@ impl Decoder for Socks5UdpCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if src.remaining() < 5 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Insufficient length of packet"));
+        if src.is_empty() {
+            return Ok(None);
+        } else {
+            if src.remaining() < 5 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Insufficient length of packet"));
+            }
+            if src[2] != 0 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Discarding fragmented payload"));
+            }
+            src.advance(3);
+            let recipient = Address::decode_socket_address(src)?;
+            Ok(Some((src.split_off(0), recipient)))
         }
-        if src[2] != 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Discarding fragmented payload"));
-        }
-        src.advance(3);
-        let recipient = Address::decode_socket_address(src)?;
-        Ok(Some((src.split_off(0), recipient)))
     }
 }
 

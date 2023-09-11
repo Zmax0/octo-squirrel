@@ -20,7 +20,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::codec::{BytesCodec, Encoder, FramedRead, FramedWrite};
 use tokio_util::udp::UdpFramed;
 
-pub(crate) async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
+pub async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
     let mut outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
 
     let (ri, wi) = inbound.split();
@@ -49,23 +49,23 @@ pub(crate) async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandR
     Ok(())
 }
 
-pub(crate) async fn transfer_udp(inbound: UdpSocket, config: ServerConfig) -> Result<(), Box<dyn Error>> {
+pub async fn transfer_udp(inbound: UdpSocket, config: ServerConfig) -> Result<(), Box<dyn Error>> {
     let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
     let binding: Arc<DashMap<SocketAddr, SplitSink<UdpFramed<DatagramPacketCodec>, ((BytesMut, SocketAddr), SocketAddr)>>> = Arc::new(DashMap::new());
-    let (i_sink, mut i_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
-    let sink = Arc::new(Mutex::new(i_sink));
-    while let Some(Ok((pocket, sender))) = i_stream.next().await {
+    let (inbound_sink, mut inbound_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
+    let inbound_sink = Arc::new(Mutex::new(inbound_sink));
+    while let Some(Ok((msg, sender))) = inbound_stream.next().await {
         if let Vacant(entry) = binding.entry(sender) {
             let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
             info!("New binding; sender={}, outbound={}", sender, outbound.local_addr()?);
             let outbound =
                 UdpFramed::new(outbound, DatagramPacketCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::UDP)));
-            let (o_sink, mut o_stream) = outbound.split();
-            entry.insert(o_sink);
+            let (outbound_sink, mut outbound_stream) = outbound.split();
+            entry.insert(outbound_sink);
             let _binding = binding.clone();
-            let _sink = sink.clone();
+            let _sink = inbound_sink.clone();
             let server_to_client = async move {
-                while let Some(Ok(item)) = o_stream.next().await {
+                while let Some(Ok(item)) = outbound_stream.next().await {
                     if _binding.contains_key(&sender) {
                         _sink.lock().await.send((item.0, sender)).await?;
                     } else {
@@ -76,8 +76,8 @@ pub(crate) async fn transfer_udp(inbound: UdpSocket, config: ServerConfig) -> Re
             };
             tokio::spawn(server_to_client);
         };
-        info!("Accept udp pocket; sender={}, recipient={}, proxy={}", sender, pocket.1, proxy);
-        binding.get_mut(&sender).unwrap().send((pocket, proxy)).await?
+        info!("Accept udp pocket; sender={}, recipient={}, server={}", sender, msg.1, proxy);
+        binding.get_mut(&sender).unwrap().send((msg, proxy)).await?
     }
     Ok(())
 }
@@ -95,7 +95,7 @@ mod test {
     use tokio::net::UdpSocket;
 
     #[test]
-    fn foo_bar() {
+    fn test_schedule() {
         octo_squirrel::log::init().unwrap();
         let timer_core = TimerWithThread::new().unwrap();
         let mut timer = timer_core.timer_ref();
