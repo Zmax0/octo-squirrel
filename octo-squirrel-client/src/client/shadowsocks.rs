@@ -2,14 +2,14 @@ use std::error::Error;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::BytesMut;
 use dashmap::mapref::entry::Entry::Vacant;
 use dashmap::DashMap;
-use futures::lock::Mutex;
 use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
-use log::info;
+use log::{debug, info};
 use octo_squirrel::common::codec::shadowsocks::{AEADCipherCodec, AddressCodec, DatagramPacketCodec};
 use octo_squirrel::common::protocol::network::Network;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
@@ -17,6 +17,8 @@ use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::config::ServerConfig;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::mpsc;
+use tokio::time;
 use tokio_util::codec::{BytesCodec, Encoder, FramedRead, FramedWrite};
 use tokio_util::udp::UdpFramed;
 
@@ -49,68 +51,51 @@ pub async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest,
     Ok(())
 }
 
-pub async fn transfer_udp(inbound: UdpSocket, config: ServerConfig) -> Result<(), Box<dyn Error>> {
+type DatagramPacket = (BytesMut, SocketAddr);
+
+pub async fn transfer_udp(inbound: UdpFramed<Socks5UdpCodec>, config: ServerConfig) -> Result<(), Box<dyn Error>> {
     let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
     let binding: Arc<DashMap<SocketAddr, SplitSink<UdpFramed<DatagramPacketCodec>, ((BytesMut, SocketAddr), SocketAddr)>>> = Arc::new(DashMap::new());
-    let (inbound_sink, mut inbound_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
-    let inbound_sink = Arc::new(Mutex::new(inbound_sink));
+    let (mut inbound_sink, mut inbound_stream) = inbound.split();
+    let (tx, mut rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
+    tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            inbound_sink.send(msg).await.unwrap();
+        }
+    });
     while let Some(Ok((msg, sender))) = inbound_stream.next().await {
         if let Vacant(entry) = binding.entry(sender) {
             let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
-            info!("New binding; sender={}, outbound={}", sender, outbound.local_addr()?);
+            let outbound_local_addr = outbound.local_addr()?;
+            debug!("New udp binding; sender={}, outbound={}", sender, outbound_local_addr);
             let outbound =
                 UdpFramed::new(outbound, DatagramPacketCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::UDP)));
             let (outbound_sink, mut outbound_stream) = outbound.split();
             entry.insert(outbound_sink);
             let _binding = binding.clone();
-            let _sink = inbound_sink.clone();
-            let server_to_client = async move {
-                while let Some(Ok(item)) = outbound_stream.next().await {
+            tokio::spawn(async move {
+                time::sleep(Duration::from_secs(60)).await;
+                if let Some(mut entry) = _binding.remove(&sender) {
+                    entry.1.close().await.expect("Close udp outbound sink failed");
+                    debug!("Remove udp binding; sender={}", sender);
+                }
+            });
+            let _binding = binding.clone();
+            let _tx = tx.clone();
+            tokio::spawn(async move {
+                while let Ok(Some(Ok(item))) = time::timeout(Duration::from_secs(600), outbound_stream.next()).await {
                     if _binding.contains_key(&sender) {
-                        _sink.lock().await.send((item.0, sender)).await?;
+                        _tx.send((item.0, sender)).await.unwrap();
                     } else {
                         break;
                     }
                 }
+                debug!("Outbound udp timeout; sender={}, outbound={}", sender, outbound_local_addr);
                 Ok::<(), io::Error>(())
-            };
-            tokio::spawn(server_to_client);
+            });
         };
         info!("Accept udp pocket; sender={}, recipient={}, server={}", sender, msg.1, proxy);
         binding.get_mut(&sender).unwrap().send((msg, proxy)).await?
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod test {
-    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use dashmap::DashMap;
-    use hierarchical_hash_wheel_timer::thread_timer::TimerWithThread;
-    use hierarchical_hash_wheel_timer::ClosureTimer;
-    use log::info;
-    use tokio::net::UdpSocket;
-
-    #[test]
-    fn test_schedule() {
-        octo_squirrel::log::init().unwrap();
-        let timer_core = TimerWithThread::new().unwrap();
-        let mut timer = timer_core.timer_ref();
-        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 16803));
-        let binding = Arc::new(DashMap::new());
-        let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-        binding.insert(addr, outbound);
-        info!("start; len={}", binding.len());
-        let b = binding.clone();
-        timer.schedule_action_once(addr, Duration::from_secs(5), move |id| {
-            info!("remove");
-            b.remove(&id);
-        });
-        std::thread::sleep(Duration::from_secs(10));
-        info!("end; len={}", binding.len());
-        timer_core.shutdown().unwrap();
-    }
 }

@@ -4,11 +4,13 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use futures::FutureExt;
 use log::{error, info};
 use octo_squirrel::common::protocol::network::Network;
+use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::{handshake::ServerHandShake, message::Socks5CommandResponse, Socks5AddressType, Socks5CommandStatus};
 use octo_squirrel::common::protocol::Protocols;
 use octo_squirrel::config::ServerConfig;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, UdpSocket};
+use tokio_util::udp::UdpFramed;
 
 use crate::client::{shadowsocks, vmess};
 
@@ -73,9 +75,10 @@ async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(
 }
 
 fn transfer_udp(socket: UdpSocket, current: &ServerConfig) -> Result<(), Box<dyn Error>> {
+    let inbound = UdpFramed::new(socket, Socks5UdpCodec);
     match current.protocol {
         Protocols::Shadowsocks => {
-            let transfer = shadowsocks::transfer_udp(socket, current.clone()).map(|r| {
+            let transfer = shadowsocks::transfer_udp(inbound, current.clone()).map(|r| {
                 if let Err(e) = r {
                     error!("Failed to transfer udp; error={}", e);
                 }
