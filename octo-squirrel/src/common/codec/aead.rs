@@ -157,9 +157,10 @@ impl PayloadDecoder {
 
     pub fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
         let padding_length = self.padding.next_padding_length();
-        let packet_length = self.size_codec.decode(&src.split_to(self.size_codec.size_bytes())).unwrap();
-        let packet_sealed_bytes = src.split_to(packet_length - padding_length);
+        let packet_length = self.size_codec.decode(&src.split_to(self.size_codec.size_bytes())).unwrap() - padding_length;
+        let packet_sealed_bytes = src.split_to(packet_length);
         let packet_bytes = self.auth.lock().unwrap().open(&packet_sealed_bytes);
+        src.advance(padding_length);
         Ok(Some(BytesMut::from(&packet_bytes[..])))
     }
 }

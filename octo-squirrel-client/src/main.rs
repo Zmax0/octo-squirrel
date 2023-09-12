@@ -21,8 +21,8 @@ mod client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    octo_squirrel::log::init()?;
     let config = octo_squirrel::config::init()?;
+    octo_squirrel::log::init(&config.logger)?;
     let current = config.get_current().expect("Empty proxy server.");
     if current.networks.contains(&Network::UDP) {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
