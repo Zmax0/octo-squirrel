@@ -24,6 +24,6 @@ fn default() -> Config {
             name,
             Box::new(ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {l} {M} - {m}{n}"))).build()),
         ))
-        .build(Root::builder().appender(name).build(LevelFilter::Info))
+        .build(Root::builder().appender(name).build(LevelFilter::Trace))
         .unwrap()
 }

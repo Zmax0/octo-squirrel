@@ -1,14 +1,22 @@
 use std::io::Cursor;
 use std::io::ErrorKind;
 use std::mem::size_of;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 use std::{error, io};
 
 use bytes::{Buf, BufMut, BytesMut};
-use futures::SinkExt;
-use log::{info, trace};
+use dashmap::mapref::entry::Entry::Vacant;
+use dashmap::DashMap;
+use futures::stream::{SplitSink, SplitStream};
+use futures::{SinkExt, StreamExt};
+use log::{debug, info};
 use octo_squirrel::common::codec::aead::{AEADCipher, Aes128GcmCipher, PayloadDecoder, PayloadEncoder, SupportedCipher};
 use octo_squirrel::common::codec::vmess::AEADBodyCodec;
+use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
+use octo_squirrel::common::protocol::socks5::Socks5CommandType;
 use octo_squirrel::common::protocol::vmess::aead::*;
 use octo_squirrel::common::protocol::vmess::header::{RequestCommand, RequestHeader, RequestOption, SecurityType};
 use octo_squirrel::common::protocol::vmess::session::{ClientSession, Session};
@@ -16,56 +24,42 @@ use octo_squirrel::common::protocol::vmess::{Address, VERSION};
 use octo_squirrel::common::util::{Dice, FNV};
 use octo_squirrel::config::ServerConfig;
 use rand::Rng;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio_stream::StreamExt;
-use tokio_util::codec::{BytesCodec, Decoder, Encoder, FramedRead, FramedWrite};
+use tokio::sync::mpsc::Sender;
+use tokio::time;
+use tokio_util::codec::{BytesCodec, Decoder, Encoder, Framed};
+use tokio_util::udp::UdpFramed;
 
-pub async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn error::Error>> {
+pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn error::Error>> {
     let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
     let header = RequestHeader::default(RequestCommand::TCP, security, request, config.password);
-    let session = ClientSession::new();
-    trace!("New session; {}", session);
-    let mut outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-    let (ri, wi) = inbound.split();
-    let (ro, wo) = outbound.split();
+    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
+    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split();
+    let (mut outbound_sink, mut outbound_stream) = Framed::new(outbound, ClientAEADCodec::new(header)).split();
 
-    let client_to_server = async {
-        let mut rif = FramedRead::new(ri, BytesCodec::new());
-        let mut wof = FramedWrite::new(wo, ClientAEADCodec::new(&header, &session));
-        while let Some(Ok(item)) = rif.next().await {
-            wof.send(item).await?
-        }
-        wof.into_inner().shutdown().await
-    };
-
-    let server_to_client = async {
-        let mut rof = FramedRead::new(ro, ClientAEADCodec::new(&header, &session));
-        let mut wif = FramedWrite::new(wi, BytesCodec::new());
-        while let Some(Ok(item)) = rof.next().await {
-            wif.send(item).await?
-        }
-        wif.into_inner().shutdown().await
-    };
+    let client_to_server = async { outbound_sink.send_all(&mut inbound_stream).await };
+    let server_to_client = async { inbound_sink.send_all(&mut outbound_stream).await };
 
     tokio::try_join!(client_to_server, server_to_client)?;
     Ok(())
 }
 
-struct ClientAEADCodec<'a> {
-    header: &'a RequestHeader,
-    session: &'a ClientSession,
+struct ClientAEADCodec {
+    header: RequestHeader,
+    session: ClientSession,
     body_encoder: Option<PayloadEncoder>,
     body_decoder: Option<PayloadDecoder>,
 }
 
-impl ClientAEADCodec<'_> {
-    pub fn new<'a>(header: &'a RequestHeader, session: &'a ClientSession) -> ClientAEADCodec<'a> {
-        ClientAEADCodec { header, session, body_encoder: None, body_decoder: None }
+impl ClientAEADCodec {
+    pub fn new(header: RequestHeader) -> Self {
+        let session = ClientSession::new();
+        debug!("New session; {}", session);
+        Self { header, session, body_encoder: None, body_decoder: None }
     }
 }
 
-impl Encoder<BytesMut> for ClientAEADCodec<'_> {
+impl Encoder<BytesMut> for ClientAEADCodec {
     type Error = io::Error;
 
     fn encode(&mut self, mut item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
@@ -86,7 +80,7 @@ impl Encoder<BytesMut> for ClientAEADCodec<'_> {
             buffer.put_u32(FNV::fnv1a32(&buffer));
             let header_bytes = Encrypt::seal_header(&self.header.id, &buffer);
             dst.put_slice(&header_bytes);
-            self.body_encoder = Some(AEADBodyCodec::encoder(self.header, self.session));
+            self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &self.session));
         }
         if self.header.command == RequestCommand::UDP {
             self.body_encoder.as_mut().unwrap().encode_packet(&mut item, dst);
@@ -97,12 +91,15 @@ impl Encoder<BytesMut> for ClientAEADCodec<'_> {
     }
 }
 
-impl Decoder for ClientAEADCodec<'_> {
+impl Decoder for ClientAEADCodec {
     type Item = BytesMut;
 
     type Error = io::Error;
 
     fn decode(&mut self, mut src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if src.is_empty() {
+            return Ok(None);
+        }
         if let None = self.body_decoder {
             let header_length_cipher = Aes128GcmCipher::new(&KDF::kdf16(self.session.response_body_key(), vec![KDF::SALT_AEAD_RESP_HEADER_LEN_KEY]));
             if src.remaining() < size_of::<u16>() + header_length_cipher.tag_size() {
@@ -136,7 +133,7 @@ impl Decoder for ClientAEADCodec<'_> {
                 let error = format!("Unexpected response header: expecting {} but actually {}", self.session.response_header(), header_bytes[0]);
                 return Err(io::Error::new(ErrorKind::InvalidData, error));
             }
-            self.body_decoder = Some(AEADBodyCodec::decoder(self.header, self.session));
+            self.body_decoder = Some(AEADBodyCodec::decoder(&self.header, &self.session));
         }
         return if self.header.command == RequestCommand::UDP {
             self.body_decoder.as_mut().unwrap().decode_packet(src)
@@ -144,4 +141,47 @@ impl Decoder for ClientAEADCodec<'_> {
             self.body_decoder.as_mut().unwrap().decode_payload(src)
         };
     }
+}
+
+pub async fn transfer_udp(
+    mut inbound_stream: SplitStream<UdpFramed<Socks5UdpCodec>>,
+    inbound_sender: Sender<((BytesMut, SocketAddr), SocketAddr)>,
+    config: ServerConfig,
+) -> Result<(), io::Error> {
+    let binding: Arc<DashMap<(SocketAddr, SocketAddr), SplitSink<Framed<TcpStream, ClientAEADCodec>, BytesMut>>> = Arc::new(DashMap::new());
+    let proxy = format!("{}:{}", config.host, config.port);
+    while let Some(Ok(((content, recipient), sender))) = inbound_stream.next().await {
+        if let Vacant(entry) = binding.entry((sender, recipient)) {
+            let outbound = TcpStream::connect(proxy.clone()).await?;
+            let outbound_local_addr = outbound.local_addr()?;
+            debug!("New udp binding; sender={}, outbound={}", sender, outbound_local_addr);
+            let security =
+                if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
+            let request = Socks5CommandRequest::from(Socks5CommandType::CONNECT, recipient);
+            let header = RequestHeader::default(RequestCommand::UDP, security, request, config.password.clone());
+            let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
+            let (outbound_sink, mut outbound_stream) = outbound.split();
+            entry.insert(outbound_sink);
+            let _binding = binding.clone();
+            tokio::spawn(async move {
+                time::sleep(Duration::from_secs(60)).await;
+                if let Some(mut entry) = _binding.remove(&(sender, recipient)) {
+                    entry.1.close().await.expect("Close udp outbound sink failed");
+                    debug!("Remove udp binding; sender={}", sender);
+                }
+            });
+            let _binding = binding.clone();
+            let _writer = inbound_sender.clone();
+            tokio::spawn(async move {
+                while let Some(Ok(item)) = outbound_stream.next().await {
+                    _writer.send(((item, recipient), sender)).await.unwrap();
+                }
+                debug!("No item in outbound stream; sender={}, outbound={}", sender, outbound_local_addr);
+                Ok::<(), io::Error>(())
+            });
+        };
+        info!("Accept udp packet; sender={}, recipient={}, server={}", sender, recipient, proxy);
+        binding.get_mut(&(sender, recipient)).unwrap().send(content).await?
+    }
+    Ok(())
 }

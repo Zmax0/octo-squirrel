@@ -1,7 +1,9 @@
 use std::error::Error;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::io;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-use futures::FutureExt;
+use bytes::BytesMut;
+use futures::{FutureExt, SinkExt, StreamExt};
 use log::{error, info};
 use octo_squirrel::common::protocol::network::Network;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
@@ -10,6 +12,7 @@ use octo_squirrel::common::protocol::Protocols;
 use octo_squirrel::config::ServerConfig;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, UdpSocket};
+use tokio::sync::mpsc;
 use tokio_util::udp::UdpFramed;
 
 use crate::client::{shadowsocks, vmess};
@@ -25,7 +28,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
         let socket = UdpSocket::bind(listen_addr).await?;
         info!("Listening UDP on: {}", socket.local_addr().unwrap());
-        transfer_udp(socket, current)?;
+        tokio::spawn(transfer_udp(socket, current.clone()));
     }
     if current.networks.contains(&Network::TCP) {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
@@ -74,18 +77,22 @@ async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(
     Ok(())
 }
 
-fn transfer_udp(socket: UdpSocket, current: &ServerConfig) -> Result<(), Box<dyn Error>> {
+async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<(), io::Error> {
     let inbound = UdpFramed::new(socket, Socks5UdpCodec);
+    let (mut inbound_sink, inbound_stream) = inbound.split();
+    let (tx, mut rx) = mpsc::channel::<((BytesMut, SocketAddr), SocketAddr)>(32);
+    tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            inbound_sink.send(msg).await.unwrap();
+        }
+    });
     match current.protocol {
         Protocols::Shadowsocks => {
-            let transfer = shadowsocks::transfer_udp(inbound, current.clone()).map(|r| {
-                if let Err(e) = r {
-                    error!("Failed to transfer udp; error={}", e);
-                }
-            });
-            tokio::spawn(transfer);
+            shadowsocks::transfer_udp(inbound_stream, tx, current).await?;
         }
-        Protocols::VMess => {}
+        Protocols::VMess => {
+            vmess::transfer_udp(inbound_stream, tx, current).await?;
+        }
     }
     Ok(())
 }

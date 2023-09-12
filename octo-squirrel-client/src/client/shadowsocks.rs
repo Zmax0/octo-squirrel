@@ -7,7 +7,7 @@ use std::time::Duration;
 use bytes::BytesMut;
 use dashmap::mapref::entry::Entry::Vacant;
 use dashmap::DashMap;
-use futures::stream::SplitSink;
+use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use log::{debug, info};
 use octo_squirrel::common::codec::shadowsocks::{AEADCipherCodec, AddressCodec, DatagramPacketCodec};
@@ -17,7 +17,7 @@ use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::config::ServerConfig;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
 use tokio::time;
 use tokio_util::codec::{BytesCodec, Encoder, FramedRead, FramedWrite};
 use tokio_util::udp::UdpFramed;
@@ -51,18 +51,13 @@ pub async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest,
     Ok(())
 }
 
-type DatagramPacket = (BytesMut, SocketAddr);
-
-pub async fn transfer_udp(inbound: UdpFramed<Socks5UdpCodec>, config: ServerConfig) -> Result<(), Box<dyn Error>> {
+pub async fn transfer_udp(
+    mut inbound_stream: SplitStream<UdpFramed<Socks5UdpCodec>>,
+    inbound_sender: Sender<((BytesMut, SocketAddr), SocketAddr)>,
+    config: ServerConfig,
+) -> Result<(), io::Error> {
     let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
     let binding: Arc<DashMap<SocketAddr, SplitSink<UdpFramed<DatagramPacketCodec>, ((BytesMut, SocketAddr), SocketAddr)>>> = Arc::new(DashMap::new());
-    let (mut inbound_sink, mut inbound_stream) = inbound.split();
-    let (tx, mut rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
-    tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            inbound_sink.send(msg).await.unwrap();
-        }
-    });
     while let Some(Ok((msg, sender))) = inbound_stream.next().await {
         if let Vacant(entry) = binding.entry(sender) {
             let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
@@ -72,30 +67,35 @@ pub async fn transfer_udp(inbound: UdpFramed<Socks5UdpCodec>, config: ServerConf
                 UdpFramed::new(outbound, DatagramPacketCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::UDP)));
             let (outbound_sink, mut outbound_stream) = outbound.split();
             entry.insert(outbound_sink);
+            tokio::spawn(remove_binding(sender, binding.clone()));
             let _binding = binding.clone();
+            let _writer = inbound_sender.clone();
             tokio::spawn(async move {
-                time::sleep(Duration::from_secs(60)).await;
-                if let Some(mut entry) = _binding.remove(&sender) {
-                    entry.1.close().await.expect("Close udp outbound sink failed");
-                    debug!("Remove udp binding; sender={}", sender);
-                }
-            });
-            let _binding = binding.clone();
-            let _tx = tx.clone();
-            tokio::spawn(async move {
-                while let Ok(Some(Ok(item))) = time::timeout(Duration::from_secs(600), outbound_stream.next()).await {
-                    if _binding.contains_key(&sender) {
-                        _tx.send((item.0, sender)).await.unwrap();
+                while let Ok(item) = time::timeout(Duration::from_secs(600), outbound_stream.next()).await {
+                    if let Some(Ok(item)) = item {
+                        _writer.send((item.0, sender)).await.unwrap();
                     } else {
+                        debug!("No item in outbound stream; sender={}, outbound={}", sender, outbound_local_addr);
                         break;
                     }
                 }
-                debug!("Outbound udp timeout; sender={}, outbound={}", sender, outbound_local_addr);
+                debug!("Outbound stream timeout; sender={}, outbound={}", sender, outbound_local_addr);
                 Ok::<(), io::Error>(())
             });
         };
-        info!("Accept udp pocket; sender={}, recipient={}, server={}", sender, msg.1, proxy);
+        info!("Accept udp packet; sender={}, recipient={}, server={}", sender, msg.1, proxy);
         binding.get_mut(&sender).unwrap().send((msg, proxy)).await?
     }
     Ok(())
+}
+
+async fn remove_binding(
+    sender: SocketAddr,
+    binding: Arc<DashMap<SocketAddr, SplitSink<UdpFramed<DatagramPacketCodec>, ((BytesMut, SocketAddr), SocketAddr)>>>,
+) {
+    time::sleep(Duration::from_secs(60)).await;
+    if let Some(mut entry) = binding.remove(&sender) {
+        entry.1.close().await.expect("Close udp outbound sink failed");
+        debug!("Remove udp binding; sender={}", sender);
+    }
 }
