@@ -7,6 +7,7 @@ For study purposes only.
 |     | Shadowsocks | VMess |
 |:----|:-----------:|:-----:|
 | TCP |      ✔      |   ✔   |
+| UDP |      ✔      |   ✔   |
 
 ### Ciphers
 |                   | Shadowsocks |  VMess  |
@@ -22,6 +23,8 @@ For study purposes only.
 
     ```json
     {
+        "port": 0,
+        "index": 0,
         "servers":
         [
             {
@@ -37,11 +40,14 @@ For study purposes only.
         ]
     }
     ```
-
+    > port: which port client will be listening on
+    
+    > index: `servers[index]` will be the server config
+    
     > protocol: "shadowsocks" | "vmess"
-
+    
     > cipher: see Ciphers
-
+    
     > networks: see Transmission
 
 2. running command
