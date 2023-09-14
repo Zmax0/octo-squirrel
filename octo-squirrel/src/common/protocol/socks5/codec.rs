@@ -1,9 +1,9 @@
-use std::io;
+use std::{io, net::SocketAddr};
 
-use bytes::Buf;
+use bytes::{Buf, BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
-use super::{address::Socks5AddressDecoder, message::{Socks5CommandRequest, Socks5CommandResponse, Socks5InitialRequest, Socks5InitialResponse, Socks5Message}, Socks5AddressType, Socks5AuthMethod, Socks5CommandStatus, Socks5CommandType, VERSION};
+use super::{address::Address, message::{Socks5CommandRequest, Socks5CommandResponse, Socks5InitialRequest, Socks5InitialResponse, Socks5Message}, Socks5AddressType, Socks5AuthMethod, Socks5CommandStatus, Socks5CommandType, VERSION};
 
 pub struct Socks5ClientEncoder;
 
@@ -61,7 +61,7 @@ impl Decoder for Socks5CommandRequestDecoder {
         let command_type = Socks5CommandType(src.get_u8());
         src.advance(1); // Reserved
         let dst_addr_type = Socks5AddressType(src.get_u8());
-        let dst_addr = Socks5AddressDecoder::decode_address(dst_addr_type, src)?;
+        let dst_addr = Address::decode_address(dst_addr_type, src)?;
         let dst_port = src.get_u16();
         Ok(Some(Socks5CommandRequest::new(command_type, dst_addr_type, dst_addr, dst_port)))
     }
@@ -98,11 +98,45 @@ impl Decoder for Socks5CommandResponseDecoder {
         let command_status = Socks5CommandStatus(src.get_u8());
         src.advance(1); // Reserved
         let bnd_addr_type = Socks5AddressType(src.get_u8());
-        let decode_addr = Socks5AddressDecoder::decode_address(bnd_addr_type, src);
+        let decode_addr = Address::decode_address(bnd_addr_type, src);
         let bnd_port = src.get_u16();
         match decode_addr {
             Ok(bnd_addr) => Ok(Some(Socks5CommandResponse::new(command_status, bnd_addr_type, bnd_addr, bnd_port))),
             Err(err) => Err(err),
         }
+    }
+}
+
+pub struct Socks5UdpCodec;
+
+impl Decoder for Socks5UdpCodec {
+    type Item = (BytesMut, SocketAddr);
+
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if src.is_empty() {
+            return Ok(None);
+        }
+        if src.remaining() < 5 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Insufficient length of packet"));
+        }
+        if src[2] != 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Discarding fragmented payload"));
+        }
+        src.advance(3);
+        let recipient = Address::decode_socket_address(src)?;
+        Ok(Some((src.split_off(0), recipient)))
+    }
+}
+
+impl Encoder<(BytesMut, SocketAddr)> for Socks5UdpCodec {
+    type Error = io::Error;
+
+    fn encode(&mut self, item: (BytesMut, SocketAddr), dst: &mut BytesMut) -> Result<(), Self::Error> {
+        dst.put_slice(&[0, 0, 0]); // Fragment
+        Address::encode_socket_address(item.1, dst)?;
+        dst.put_slice(&item.0);
+        Ok(())
     }
 }

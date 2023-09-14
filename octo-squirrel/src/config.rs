@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::codec::aead::SupportedCipher;
 use crate::common::protocol::network::{Network, PacketEncoding};
 use crate::common::protocol::Protocols;
+use crate::log::Logger;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -28,6 +29,8 @@ pub struct ServerConfig {
 pub struct ClientConfig {
     pub port: u16,
     pub index: usize,
+    #[serde(default)]
+    pub logger: Logger,
     pub servers: Vec<ServerConfig>,
 }
 

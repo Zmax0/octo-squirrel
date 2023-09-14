@@ -2,7 +2,7 @@ use std::{fmt::Display, io::Error, net::SocketAddr};
 
 use bytes::BufMut;
 
-use super::{address::Socks5AddressEncoder, Socks5AddressType, Socks5AuthMethod, Socks5CommandStatus, Socks5CommandType, VERSION};
+use super::{address::Address, Socks5AddressType, Socks5AuthMethod, Socks5CommandStatus, Socks5CommandType, VERSION};
 
 pub trait Socks5Message: Send + Sync {
     fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<(), Error>;
@@ -83,7 +83,7 @@ impl Socks5Message for Socks5CommandRequest {
         dst.put_u8(self.command_type.0);
         dst.put_u8(0x00);
         dst.put_u8(self.dst_addr_type.0);
-        Socks5AddressEncoder::encode_address(self.dst_addr_type, &self.dst_addr, dst)?;
+        Address::encode_address(self.dst_addr_type, &self.dst_addr, dst)?;
         dst.put_u16(self.dst_port);
         Ok(())
     }
@@ -102,7 +102,7 @@ impl Socks5Message for Socks5CommandResponse {
         dst.put_u8(self.command_status.0);
         dst.put_u8(0x00);
         dst.put_u8(self.bnd_addr_type.0);
-        Socks5AddressEncoder::encode_address(self.bnd_addr_type, &self.bnd_addr, dst)?;
+        Address::encode_address(self.bnd_addr_type, &self.bnd_addr, dst)?;
         dst.put_u16(self.bnd_port);
         Ok(())
     }

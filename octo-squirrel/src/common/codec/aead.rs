@@ -157,9 +157,10 @@ impl PayloadDecoder {
 
     pub fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
         let padding_length = self.padding.next_padding_length();
-        let packet_length = self.size_codec.decode(&src.split_to(self.size_codec.size_bytes())).unwrap();
-        let packet_sealed_bytes = src.split_to(packet_length - padding_length);
+        let packet_length = self.size_codec.decode(&src.split_to(self.size_codec.size_bytes())).unwrap() - padding_length;
+        let packet_sealed_bytes = src.split_to(packet_length);
         let packet_bytes = self.auth.lock().unwrap().open(&packet_sealed_bytes);
+        src.advance(padding_length);
         Ok(Some(BytesMut::from(&packet_bytes[..])))
     }
 }
@@ -194,14 +195,13 @@ impl PayloadEncoder {
     fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
         let padding_length = self.padding.next_padding_length();
         trace!("Encode payload; padding length={}", padding_length);
-        let mut auth = self.auth.lock().unwrap();
-        let overhead = auth.overhead();
+        let overhead = self.auth.lock().unwrap().overhead();
         let encrypted_size = src.remaining().min(self.payload_limit - overhead - self.size_codec.size_bytes() - padding_length);
         trace!("Encode payload; payload length={}", encrypted_size);
         let encrypted_size_bytes = self.size_codec.encode(encrypted_size + padding_length + overhead).unwrap();
         dst.put_slice(&encrypted_size_bytes);
         let payload_bytes = src.split_to(encrypted_size);
-        dst.put_slice(&auth.seal(&payload_bytes));
+        dst.put_slice(&self.auth.lock().unwrap().seal(&payload_bytes));
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
         rand::thread_rng().fill(&mut padding_bytes[..]);
         dst.put(&padding_bytes[..]);
