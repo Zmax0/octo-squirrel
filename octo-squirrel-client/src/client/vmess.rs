@@ -3,7 +3,6 @@ use std::io::ErrorKind;
 use std::mem::size_of;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use std::{error, io};
 
 use bytes::{Buf, BufMut, BytesMut};
@@ -26,9 +25,10 @@ use octo_squirrel::config::ServerConfig;
 use rand::Rng;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
-use tokio::time;
 use tokio_util::codec::{BytesCodec, Decoder, Encoder, Framed};
 use tokio_util::udp::UdpFramed;
+
+use crate::client::transfer;
 
 pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn error::Error>> {
     let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
@@ -162,15 +162,7 @@ pub async fn transfer_udp(
             let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
             let (outbound_sink, mut outbound_stream) = outbound.split();
             entry.insert(outbound_sink);
-            let _binding = binding.clone();
-            tokio::spawn(async move {
-                time::sleep(Duration::from_secs(60)).await;
-                if let Some(mut entry) = _binding.remove(&(sender, recipient)) {
-                    entry.1.close().await.expect("Close udp outbound sink failed");
-                    debug!("Remove udp binding; sender={}", sender);
-                }
-            });
-            let _binding = binding.clone();
+            tokio::spawn(transfer::remove_binding((sender, recipient), binding.clone()));
             let _writer = inbound_sender.clone();
             tokio::spawn(async move {
                 while let Some(Ok(item)) = outbound_stream.next().await {

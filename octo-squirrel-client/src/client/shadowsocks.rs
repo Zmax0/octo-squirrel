@@ -21,6 +21,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::time;
 use tokio_util::codec::{BytesCodec, Encoder, FramedRead, FramedWrite};
 use tokio_util::udp::UdpFramed;
+use crate::client::transfer;
 
 pub async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
     let mut outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
@@ -67,8 +68,7 @@ pub async fn transfer_udp(
                 UdpFramed::new(outbound, DatagramPacketCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::UDP)));
             let (outbound_sink, mut outbound_stream) = outbound.split();
             entry.insert(outbound_sink);
-            tokio::spawn(remove_binding(sender, binding.clone()));
-            let _binding = binding.clone();
+            tokio::spawn(transfer::remove_binding(sender, binding.clone()));
             let _writer = inbound_sender.clone();
             tokio::spawn(async move {
                 while let Ok(item) = time::timeout(Duration::from_secs(600), outbound_stream.next()).await {
@@ -87,15 +87,4 @@ pub async fn transfer_udp(
         binding.get_mut(&sender).unwrap().send((msg, proxy)).await?
     }
     Ok(())
-}
-
-async fn remove_binding(
-    sender: SocketAddr,
-    binding: Arc<DashMap<SocketAddr, SplitSink<UdpFramed<DatagramPacketCodec>, ((BytesMut, SocketAddr), SocketAddr)>>>,
-) {
-    time::sleep(Duration::from_secs(60)).await;
-    if let Some(mut entry) = binding.remove(&sender) {
-        entry.1.close().await.expect("Close udp outbound sink failed");
-        debug!("Remove udp binding; sender={}", sender);
-    }
 }
