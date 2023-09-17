@@ -15,39 +15,26 @@ use octo_squirrel::common::protocol::network::Network;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::config::ServerConfig;
-use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::Sender;
 use tokio::time;
-use tokio_util::codec::{BytesCodec, Encoder, FramedRead, FramedWrite};
+use tokio_util::codec::{BytesCodec, Encoder, Framed};
 use tokio_util::udp::UdpFramed;
+
 use crate::client::transfer;
 
-pub async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
-    let mut outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-
-    let (ri, wi) = inbound.split();
-    let (ro, wo) = outbound.split();
-
+pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
+    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
+    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split();
+    let (mut outbound_sink, mut outbound_stream) =
+        Framed::new(outbound, AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::TCP)).split();
     let client_to_server = async {
-        let mut rif = FramedRead::new(ri, BytesCodec::new());
-        AddressCodec.encode(request, rif.read_buffer_mut())?;
-        let mut wof = FramedWrite::new(wo, AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::TCP));
-        while let Some(Ok(item)) = rif.next().await {
-            wof.send(item).await?
-        }
-        wof.into_inner().shutdown().await
+        let mut address = BytesMut::new();
+        AddressCodec.encode(request, &mut address)?;
+        outbound_sink.feed(address).await?;
+        outbound_sink.send_all(&mut inbound_stream).await
     };
-
-    let server_to_client = async {
-        let mut rof = FramedRead::new(ro, AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::TCP));
-        let mut wif = FramedWrite::new(wi, BytesCodec::new());
-        while let Some(Ok(item)) = rof.next().await {
-            wif.send(item).await?
-        }
-        wif.into_inner().shutdown().await
-    };
-
+    let server_to_client = async { inbound_sink.send_all(&mut outbound_stream).await };
     tokio::try_join!(client_to_server, server_to_client)?;
     Ok(())
 }

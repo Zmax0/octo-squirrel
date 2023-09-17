@@ -152,6 +152,9 @@ impl Decoder for AEADCipherCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if src.is_empty() {
+            return Ok(None);
+        }
         match self.network {
             Network::TCP => {
                 if self.payload_decoder.is_none() {
