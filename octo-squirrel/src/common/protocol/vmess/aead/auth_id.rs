@@ -1,11 +1,18 @@
 use std::u8;
 
-use aes::{cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyInit}, Aes128};
-use bytes::{BufMut, BytesMut};
-use ecb::{Decryptor, Encryptor};
+use aes::cipher::block_padding::NoPadding;
+use aes::cipher::BlockDecryptMut;
+use aes::cipher::BlockEncryptMut;
+use aes::cipher::KeyInit;
+use aes::Aes128;
+use bytes::BufMut;
+use bytes::BytesMut;
+use ecb::Decryptor;
+use ecb::Encryptor;
 use rand::random;
 
-use super::{AuthID, KDF};
+use super::AuthID;
+use super::KDF;
 use crate::common::protocol::vmess;
 
 type Aes128EcbEnc = Encryptor<Aes128>;

@@ -1,9 +1,13 @@
-use std::fmt::{Display, Formatter};
-use std::sync::{Arc, Mutex};
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use base64ct::Encoding;
-use rand::{random, Rng};
-use sha2::{Digest, Sha256};
+use rand::random;
+use rand::Rng;
+use sha2::Digest;
+use sha2::Sha256;
 
 pub trait Session {
     fn request_body_iv(&self) -> Arc<Mutex<[u8]>>;
@@ -17,11 +21,11 @@ macro_rules! session_impl {
     ($name:ident) => {
         #[derive(Clone, Debug)]
         pub struct $name {
-            pub request_body_iv: Arc<Mutex<[u8]>>,
-            pub request_body_key: [u8; 16],
-            pub response_body_iv: Arc<Mutex<[u8]>>,
-            pub response_body_key: [u8; 16],
-            pub response_header: u8,
+            request_body_iv: [u8; 16],
+            request_body_key: [u8; 16],
+            response_body_iv: [u8; 16],
+            response_body_key: [u8; 16],
+            response_header: u8,
         }
 
         impl $name {
@@ -36,9 +40,9 @@ macro_rules! session_impl {
                 let mut response_body_key = [0; 16];
                 response_body_key.clone_from_slice(&res[..16]);
                 Self {
-                    request_body_iv: Arc::new(Mutex::new(request_body_iv)),
+                    request_body_iv,
                     request_body_key,
-                    response_body_iv: Arc::new(Mutex::new(response_body_iv)),
+                    response_body_iv,
                     response_body_key,
                     response_header,
                 }
@@ -47,7 +51,7 @@ macro_rules! session_impl {
 
         impl Session for $name {
             fn request_body_iv(&self) -> Arc<Mutex<[u8]>> {
-                self.request_body_iv.clone()
+                Arc::new(Mutex::new(self.request_body_iv))
             }
 
             fn request_body_key(&self) -> &[u8] {
@@ -55,7 +59,7 @@ macro_rules! session_impl {
             }
 
             fn response_body_iv(&self) -> Arc<Mutex<[u8]>> {
-                self.response_body_iv.clone()
+                Arc::new(Mutex::new(self.response_body_iv))
             }
 
             fn response_body_key(&self) -> &[u8] {
@@ -72,10 +76,10 @@ macro_rules! session_impl {
                 write!(
                     f,
                     "[REQ: {}, {}; RESP: {}, {}, {}]",
-                    base64ct::Base64::encode_string(self.request_body_key()),
-                    base64ct::Base64::encode_string(&self.request_body_iv().lock().unwrap()),
-                    base64ct::Base64::encode_string(self.response_body_key()),
-                    base64ct::Base64::encode_string(&self.response_body_iv().lock().unwrap()),
+                    base64ct::Base64::encode_string(&self.request_body_key),
+                    base64ct::Base64::encode_string(&self.request_body_iv),
+                    base64ct::Base64::encode_string(&self.response_body_key),
+                    base64ct::Base64::encode_string(&self.response_body_iv),
                     self.response_header()
                 )
             }

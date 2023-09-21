@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use futures::stream::SplitSink;
-use futures::{Sink, SinkExt};
+use futures::Sink;
+use futures::SinkExt;
 use log::debug;
 use tokio::time;
 

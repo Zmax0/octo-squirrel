@@ -1,4 +1,6 @@
-use std::{fmt::Display, sync::{Arc, Mutex}};
+use std::fmt::Display;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 pub mod aead;
 pub mod chunk;
@@ -90,13 +92,16 @@ impl IncreasingNonceGenerator {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use std::sync::Mutex;
 
     use base64ct::Encoding;
     use rand::random;
 
     use super::CountingNonceGenerator;
-    use crate::common::codec::{BytesGenerator, IncreasingNonceGenerator, StaticBytesGenerator};
+    use crate::common::codec::BytesGenerator;
+    use crate::common::codec::IncreasingNonceGenerator;
+    use crate::common::codec::StaticBytesGenerator;
 
     #[test]
     fn test_generate_increasing_nonce() {

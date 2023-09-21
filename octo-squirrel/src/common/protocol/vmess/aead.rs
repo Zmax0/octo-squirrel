@@ -8,9 +8,11 @@ pub struct KDF;
 
 #[cfg(test)]
 mod test {
-    use base64ct::{Base64, Encoding};
+    use base64ct::Base64;
+    use base64ct::Encoding;
 
-    use super::{AuthID, KDF};
+    use super::AuthID;
+    use super::KDF;
     use crate::common::protocol::vmess::now;
 
     #[test]

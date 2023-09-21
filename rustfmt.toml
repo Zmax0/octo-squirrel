@@ -1,6 +1,5 @@
 max_width = 150
 use_field_init_shorthand = true
 use_small_heuristics = "Max"
-imports_indent = "Visual"
-imports_layout = "Horizontal"
 group_imports = "StdExternalCrate"
+imports_granularity = "Item"
