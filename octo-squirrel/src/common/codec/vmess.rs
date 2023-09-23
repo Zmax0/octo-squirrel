@@ -19,10 +19,10 @@ use rand::Rng;
 use sha3::Shake128;
 use sha3::Shake128ReaderCore;
 
-use super::aead::Cipher;
 use super::aead::Aes128GcmCipher;
 use super::aead::Authenticator;
 use super::aead::ChaCha20Poly1305Cipher;
+use super::aead::Cipher;
 use super::aead::CipherDecoder;
 use super::aead::CipherEncoder;
 use super::chunk::ChunkSizeCodec;
@@ -82,14 +82,14 @@ impl AEADBodyCodec {
             size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv());
         }
         if security == SecurityType::CHACHA20_POLY1305 {
-            Box::new(FlexibleCipherEncoder::new(
+            Box::new(CipherEncoderImpl::new(
                 2048,
                 Arc::new(Mutex::new(Self::new_auth(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key)), iv))),
                 size_codec,
                 padding,
             ))
         } else {
-            Box::new(FlexibleCipherEncoder::new(
+            Box::new(CipherEncoderImpl::new(
                 2048,
                 Arc::new(Mutex::new(Self::new_auth(Self::new_aead_cipher(security, key), iv))),
                 size_codec,
@@ -106,13 +106,13 @@ impl AEADBodyCodec {
             size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv());
         }
         if security == SecurityType::CHACHA20_POLY1305 {
-            Box::new(FlexibleCipherDecoder::new(
+            Box::new(CipherDecoderImpl::new(
                 Self::new_auth(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key)), iv),
                 size_codec,
                 padding,
             ))
         } else {
-            Box::new(FlexibleCipherDecoder::new(Self::new_auth(Self::new_aead_cipher(security, key), iv), size_codec, padding))
+            Box::new(CipherDecoderImpl::new(Self::new_auth(Self::new_aead_cipher(security, key), iv), size_codec, padding))
         }
     }
 
@@ -143,25 +143,25 @@ impl AEADBodyCodec {
     fn default_option(option: &Vec<RequestOption>, iv: &[u8]) -> (Box<dyn ChunkSizeCodec>, Box<dyn PaddingLengthGenerator>) {
         let mut size_codec: Box<dyn ChunkSizeCodec> = Box::new(PlainChunkSizeParser);
         let mut padding: Box<dyn PaddingLengthGenerator> = Box::new(EmptyPaddingLengthGenerator);
-        let core = Arc::new(Mutex::new(ShakeSizeParser::new(&iv)));
+        let shake_size_parser = ShakeSizeParser::new(&iv);
         if option.contains(&RequestOption::CHUNK_MASKING) {
-            size_codec = Box::new(SharedShakeSizeParser(core.clone()));
+            size_codec = Box::new(shake_size_parser.clone());
         }
         if option.contains(&RequestOption::GLOBAL_PADDING) {
-            padding = Box::new(SharedShakeSizeParser(core));
+            padding = Box::new(shake_size_parser);
         }
         (size_codec, padding)
     }
 }
 
-struct FlexibleCipherEncoder {
+struct CipherEncoderImpl {
     payload_limit: usize,
     pub auth: Arc<Mutex<Authenticator>>,
     size_codec: Box<dyn ChunkSizeCodec>,
     padding: Box<dyn PaddingLengthGenerator>,
 }
 
-impl FlexibleCipherEncoder {
+impl CipherEncoderImpl {
     pub fn new(
         payload_limit: usize,
         auth: Arc<Mutex<Authenticator>>,
@@ -187,7 +187,7 @@ impl FlexibleCipherEncoder {
     }
 }
 
-impl CipherEncoder for FlexibleCipherEncoder {
+impl CipherEncoder for CipherEncoderImpl {
     fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
         while src.has_remaining() {
             self.seal(&mut src, dst);
@@ -198,7 +198,7 @@ impl CipherEncoder for FlexibleCipherEncoder {
     }
 }
 
-struct FlexibleCipherDecoder {
+struct CipherDecoderImpl {
     payload_length: Option<usize>,
     padding_length: Option<usize>,
     auth: Authenticator,
@@ -206,13 +206,13 @@ struct FlexibleCipherDecoder {
     padding: Box<dyn PaddingLengthGenerator>,
 }
 
-impl FlexibleCipherDecoder {
+impl CipherDecoderImpl {
     pub fn new(auth: Authenticator, size_codec: Box<dyn ChunkSizeCodec>, padding: Box<dyn PaddingLengthGenerator>) -> Self {
         Self { payload_length: None, padding_length: None, auth, size_codec, padding }
     }
 }
 
-impl CipherDecoder for FlexibleCipherDecoder {
+impl CipherDecoder for CipherDecoderImpl {
     fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
         let size_bytes = self.size_codec.size_bytes();
         let mut dst = Vec::new();
@@ -253,9 +253,10 @@ impl CipherDecoder for FlexibleCipherDecoder {
     }
 }
 
+#[derive(Clone)]
 pub struct ShakeSizeParser {
     reader: XofReaderCoreWrapper<Shake128ReaderCore>,
-    buffer: [u8; size_of::<u16>()],
+    buffer: Arc<Mutex<[u8; size_of::<u16>()]>>,
 }
 
 impl ShakeSizeParser {
@@ -265,12 +266,13 @@ impl ShakeSizeParser {
         }
         let mut hasher = Shake128::default();
         hasher.update(nonce);
-        Self { reader: hasher.finalize_xof(), buffer: [0; size_of::<u16>()] }
+        Self { reader: hasher.finalize_xof(), buffer: Arc::new(Mutex::new([0; size_of::<u16>()])) }
     }
 
     fn next(&mut self) -> u16 {
-        self.reader.read(&mut self.buffer);
-        u16::from_be_bytes(self.buffer)
+        let mut buffer = self.buffer.lock().unwrap();
+        self.reader.read(&mut *buffer);
+        u16::from_be_bytes(*buffer)
     }
 }
 
@@ -296,28 +298,6 @@ impl ChunkSizeCodec for ShakeSizeParser {
 impl PaddingLengthGenerator for ShakeSizeParser {
     fn next_padding_length(&mut self) -> usize {
         (self.next() % 64) as usize
-    }
-}
-
-pub struct SharedShakeSizeParser(pub Arc<Mutex<ShakeSizeParser>>);
-
-impl ChunkSizeCodec for SharedShakeSizeParser {
-    fn size_bytes(&self) -> usize {
-        size_of::<u16>()
-    }
-
-    fn encode_size(&mut self, size: usize) -> Vec<u8> {
-        self.0.lock().unwrap().encode_size(size)
-    }
-
-    fn decode_size(&mut self, data: &[u8]) -> usize {
-        self.0.lock().unwrap().decode_size(data)
-    }
-}
-
-impl PaddingLengthGenerator for SharedShakeSizeParser {
-    fn next_padding_length(&mut self) -> usize {
-        self.0.lock().unwrap().next_padding_length()
     }
 }
 
