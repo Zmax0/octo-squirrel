@@ -84,17 +84,12 @@ impl AEADBodyCodec {
         if security == SecurityType::CHACHA20_POLY1305 {
             Box::new(CipherEncoderImpl::new(
                 2048,
-                Arc::new(Mutex::new(Self::new_auth(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key)), iv))),
+                Self::new_auth(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key)), iv),
                 size_codec,
                 padding,
             ))
         } else {
-            Box::new(CipherEncoderImpl::new(
-                2048,
-                Arc::new(Mutex::new(Self::new_auth(Self::new_aead_cipher(security, key), iv))),
-                size_codec,
-                padding,
-            ))
+            Box::new(CipherEncoderImpl::new(2048, Self::new_auth(Self::new_aead_cipher(security, key), iv), size_codec, padding))
         }
     }
 
@@ -143,7 +138,7 @@ impl AEADBodyCodec {
     fn default_option(option: &Vec<RequestOption>, iv: &[u8]) -> (Box<dyn ChunkSizeCodec>, Box<dyn PaddingLengthGenerator>) {
         let mut size_codec: Box<dyn ChunkSizeCodec> = Box::new(PlainChunkSizeParser);
         let mut padding: Box<dyn PaddingLengthGenerator> = Box::new(EmptyPaddingLengthGenerator);
-        let shake_size_parser = ShakeSizeParser::new(&iv);
+        let shake_size_parser = ShakeSizeParser::new(iv);
         if option.contains(&RequestOption::CHUNK_MASKING) {
             size_codec = Box::new(shake_size_parser.clone());
         }
@@ -156,31 +151,26 @@ impl AEADBodyCodec {
 
 struct CipherEncoderImpl {
     payload_limit: usize,
-    pub auth: Arc<Mutex<Authenticator>>,
+    auth: Authenticator,
     size_codec: Box<dyn ChunkSizeCodec>,
     padding: Box<dyn PaddingLengthGenerator>,
 }
 
 impl CipherEncoderImpl {
-    pub fn new(
-        payload_limit: usize,
-        auth: Arc<Mutex<Authenticator>>,
-        size_codec: Box<dyn ChunkSizeCodec>,
-        padding: Box<dyn PaddingLengthGenerator>,
-    ) -> Self {
+    pub fn new(payload_limit: usize, auth: Authenticator, size_codec: Box<dyn ChunkSizeCodec>, padding: Box<dyn PaddingLengthGenerator>) -> Self {
         Self { payload_limit, auth, size_codec, padding }
     }
 
     fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
         let padding_length = self.padding.next_padding_length();
         trace!("Encode payload; padding length={}", padding_length);
-        let overhead = self.auth.lock().unwrap().overhead();
+        let overhead = self.auth.overhead();
         let encrypted_size = src.remaining().min(self.payload_limit - overhead - self.size_codec.size_bytes() - padding_length);
         trace!("Encode payload; payload length={}", encrypted_size);
         let encrypted_size_bytes = self.size_codec.encode_size(encrypted_size + padding_length + overhead);
         dst.put_slice(&encrypted_size_bytes);
         let payload_bytes = src.split_to(encrypted_size);
-        dst.put_slice(&self.auth.lock().unwrap().seal(&payload_bytes));
+        dst.put_slice(&self.auth.seal(&payload_bytes));
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
         rand::thread_rng().fill(&mut padding_bytes[..]);
         dst.put(&padding_bytes[..]);

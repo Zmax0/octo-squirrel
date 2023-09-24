@@ -48,7 +48,6 @@ pub trait Cipher: Send {
 
 macro_rules! aead_impl {
     ($name:ident, $cipher:ty) => {
-        #[derive(Clone)]
         pub struct $name {
             cipher: $cipher,
         }
