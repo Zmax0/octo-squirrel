@@ -1,6 +1,14 @@
-use std::{io::{Error, ErrorKind}, net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6}};
+use std::io::Error;
+use std::io::ErrorKind;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
+use std::net::SocketAddr;
+use std::net::SocketAddrV4;
+use std::net::SocketAddrV6;
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::BytesMut;
 
 use super::Socks5AddressType;
 

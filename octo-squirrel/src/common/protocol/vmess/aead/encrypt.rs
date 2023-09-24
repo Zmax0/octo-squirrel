@@ -1,10 +1,15 @@
 use std::io::Cursor;
 
-use bytes::{Buf, BytesMut};
+use bytes::Buf;
+use bytes::BytesMut;
 use rand::random;
 
-use super::{AuthID, Encrypt, KDF};
-use crate::common::{codec::aead::{AEADCipher, Aes128GcmCipher}, protocol::vmess::timestamp};
+use super::AuthID;
+use super::Encrypt;
+use super::KDF;
+use crate::common::codec::aead::Cipher;
+use crate::common::codec::aead::Aes128GcmCipher;
+use crate::common::protocol::vmess::timestamp;
 
 impl Encrypt {
     pub fn seal_header(key: &[u8], header: &[u8]) -> Vec<u8> {

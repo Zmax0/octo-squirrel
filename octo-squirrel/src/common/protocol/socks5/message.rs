@@ -1,8 +1,15 @@
-use std::{fmt::Display, io::Error, net::SocketAddr};
+use std::fmt::Display;
+use std::io::Error;
+use std::net::SocketAddr;
 
 use bytes::BufMut;
 
-use super::{address::Address, Socks5AddressType, Socks5AuthMethod, Socks5CommandStatus, Socks5CommandType, VERSION};
+use super::address::Address;
+use super::Socks5AddressType;
+use super::Socks5AuthMethod;
+use super::Socks5CommandStatus;
+use super::Socks5CommandType;
+use super::VERSION;
 
 pub trait Socks5Message: Send + Sync {
     fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<(), Error>;

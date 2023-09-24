@@ -1,15 +1,20 @@
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::mem::size_of;
 
 use aes::cipher::Unsigned;
-use aes_gcm::{aead::{Aead, Payload}, AeadCore, Aes128Gcm, Aes256Gcm, KeyInit};
-use bytes::{Buf, BufMut, BytesMut};
+use aes_gcm::aead::Aead;
+use aes_gcm::aead::Payload;
+use aes_gcm::AeadCore;
+use aes_gcm::Aes128Gcm;
+use aes_gcm::Aes256Gcm;
+use aes_gcm::KeyInit;
+use bytes::BytesMut;
 use chacha20poly1305::ChaCha20Poly1305;
-use log::trace;
-use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use super::{chunk::ChunkSizeCodec, BytesGenerator, PaddingLengthGenerator};
+use super::chunk::ChunkSizeCodec;
+use super::BytesGenerator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum SupportedCipher {
@@ -24,7 +29,7 @@ pub enum SupportedCipher {
 impl SupportedCipher {
     pub const VALUES: [SupportedCipher; 3] = [SupportedCipher::Aes128Gcm, SupportedCipher::Aes256Gcm, SupportedCipher::ChaCha20Poly1305];
 
-    pub fn to_aead_cipher(&self, key: &[u8]) -> Box<dyn AEADCipher> {
+    pub fn to_aead_cipher(&self, key: &[u8]) -> Box<dyn Cipher> {
         match self {
             SupportedCipher::Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
             SupportedCipher::Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
@@ -33,7 +38,7 @@ impl SupportedCipher {
     }
 }
 
-pub trait AEADCipher: Send + Sync {
+pub trait Cipher: Send {
     fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
     fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Vec<u8>;
     fn nonce_size(&self) -> usize;
@@ -43,7 +48,6 @@ pub trait AEADCipher: Send + Sync {
 
 macro_rules! aead_impl {
     ($name:ident, $cipher:ty) => {
-        #[derive(Clone)]
         pub struct $name {
             cipher: $cipher,
         }
@@ -58,7 +62,7 @@ macro_rules! aead_impl {
             }
         }
 
-        impl AEADCipher for $name {
+        impl Cipher for $name {
             fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Vec<u8> {
                 let payload = Payload { msg: plaintext, aad };
                 self.cipher.encrypt(nonce.into(), payload).unwrap()
@@ -89,13 +93,13 @@ aead_impl!(Aes256GcmCipher, Aes256Gcm);
 aead_impl!(ChaCha20Poly1305Cipher, ChaCha20Poly1305);
 
 pub struct Authenticator {
-    cipher: Box<dyn AEADCipher>,
+    cipher: Box<dyn Cipher>,
     nonce_generator: Box<dyn BytesGenerator>,
     associated_text_generator: Box<dyn BytesGenerator>,
 }
 
 impl Authenticator {
-    pub fn new(cipher: Box<dyn AEADCipher>, nonce_generator: Box<dyn BytesGenerator>, associated_text_generator: Box<dyn BytesGenerator>) -> Self {
+    pub fn new(cipher: Box<dyn Cipher>, nonce_generator: Box<dyn BytesGenerator>, associated_text_generator: Box<dyn BytesGenerator>) -> Self {
         Self { cipher, nonce_generator, associated_text_generator }
     }
 
@@ -112,100 +116,33 @@ impl Authenticator {
     }
 }
 
-pub struct PayloadDecoder {
-    payload_length: Option<usize>,
-    padding_length: Option<usize>,
-    pub auth: Arc<Mutex<Authenticator>>,
-    size_codec: Box<dyn ChunkSizeCodec>,
-    padding: Box<dyn PaddingLengthGenerator>,
-}
-
-impl PayloadDecoder {
-    pub fn new(auth: Arc<Mutex<Authenticator>>, size_codec: Box<dyn ChunkSizeCodec>, padding: Box<dyn PaddingLengthGenerator>) -> Self {
-        Self { payload_length: None, padding_length: None, auth, size_codec, padding }
+impl ChunkSizeCodec for Authenticator {
+    fn size_bytes(&self) -> usize {
+        size_of::<u16>() + self.overhead()
     }
 
-    pub fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
-        let size_bytes = self.size_codec.size_bytes();
-        let mut dst = Vec::new();
-        while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
-            if self.padding_length.is_none() {
-                let padding_length = self.padding.next_padding_length();
-                trace!("Decode payload; padding length={:?}", padding_length);
-                self.padding_length = Some(padding_length);
-            }
-            let padding_length = self.padding_length.unwrap();
-            if let Some(payload_length) = self.payload_length {
-                let mut payload_btyes = self.auth.lock().unwrap().open(&src.split_to(payload_length - padding_length));
-                dst.append(&mut payload_btyes);
-                src.advance(padding_length);
-                self.payload_length = None;
-                self.padding_length = None;
-            } else {
-                let payload_length_bytes = src.split_to(size_bytes);
-                let payload_length = self.size_codec.decode(&payload_length_bytes).unwrap();
-                trace!("Decode payload; payload length={:?}", payload_length);
-                self.payload_length = Some(payload_length);
-            }
-        }
-        if dst.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(BytesMut::from(&dst[..])))
-        }
+    fn encode_size(&mut self, size: usize) -> Vec<u8> {
+        let bytes = ((size - self.overhead()) as u16).to_be_bytes();
+        let sealed = self.seal(&bytes);
+        sealed
     }
 
-    pub fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
-        let padding_length = self.padding.next_padding_length();
-        let packet_length = self.size_codec.decode(&src.split_to(self.size_codec.size_bytes())).unwrap() - padding_length;
-        let packet_sealed_bytes = src.split_to(packet_length);
-        let packet_bytes = self.auth.lock().unwrap().open(&packet_sealed_bytes);
-        src.advance(padding_length);
-        Ok(Some(BytesMut::from(&packet_bytes[..])))
+    fn decode_size(&mut self, data: &[u8]) -> usize {
+        let mut opened: [u8; size_of::<u16>()] = [0; size_of::<u16>()];
+        opened.copy_from_slice(&self.open(data));
+        let size = u16::from_be_bytes(opened);
+        size as usize + self.overhead()
     }
 }
 
-pub struct PayloadEncoder {
-    payload_limit: usize,
-    pub auth: Arc<Mutex<Authenticator>>,
-    size_codec: Box<dyn ChunkSizeCodec>,
-    padding: Box<dyn PaddingLengthGenerator>,
+pub trait CipherEncoder: Send {
+    fn encode_payload(&mut self, src: BytesMut, dst: &mut BytesMut);
+    fn encode_packet(&mut self, src: BytesMut, dst: &mut BytesMut);
 }
 
-impl PayloadEncoder {
-    pub fn new(
-        payload_limit: usize,
-        auth: Arc<Mutex<Authenticator>>,
-        size_codec: Box<dyn ChunkSizeCodec>,
-        padding: Box<dyn PaddingLengthGenerator>,
-    ) -> Self {
-        Self { payload_limit, auth, size_codec, padding }
-    }
-
-    pub fn encode_payload(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
-        while src.has_remaining() {
-            self.seal(src, dst);
-        }
-    }
-
-    pub fn encode_packet(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
-        self.seal(src, dst);
-    }
-
-    fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
-        let padding_length = self.padding.next_padding_length();
-        trace!("Encode payload; padding length={}", padding_length);
-        let overhead = self.auth.lock().unwrap().overhead();
-        let encrypted_size = src.remaining().min(self.payload_limit - overhead - self.size_codec.size_bytes() - padding_length);
-        trace!("Encode payload; payload length={}", encrypted_size);
-        let encrypted_size_bytes = self.size_codec.encode(encrypted_size + padding_length + overhead).unwrap();
-        dst.put_slice(&encrypted_size_bytes);
-        let payload_bytes = src.split_to(encrypted_size);
-        dst.put_slice(&self.auth.lock().unwrap().seal(&payload_bytes));
-        let mut padding_bytes: Vec<u8> = vec![0; padding_length];
-        rand::thread_rng().fill(&mut padding_bytes[..]);
-        dst.put(&padding_bytes[..]);
-    }
+pub trait CipherDecoder: Send {
+    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error>;
+    fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error>;
 }
 
 #[cfg(test)]

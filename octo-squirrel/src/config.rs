@@ -3,10 +3,12 @@ use std::fs::File;
 use std::io;
 use std::io::BufReader;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::common::codec::aead::SupportedCipher;
-use crate::common::protocol::network::{Network, PacketEncoding};
+use crate::common::protocol::network::Network;
+use crate::common::protocol::network::PacketEncoding;
 use crate::common::protocol::Protocols;
 use crate::log::Logger;
 
@@ -50,11 +52,13 @@ pub fn init() -> Result<ClientConfig, io::Error> {
 #[cfg(test)]
 mod test {
     use rand::distributions::Alphanumeric;
-    use rand::{random, Rng};
+    use rand::random;
+    use rand::Rng;
     use serde_json::json;
 
     use crate::common::codec::aead::SupportedCipher;
-    use crate::common::protocol::network::{Network, PacketEncoding};
+    use crate::common::protocol::network::Network;
+    use crate::common::protocol::network::PacketEncoding;
     use crate::common::protocol::Protocols;
     use crate::config::ClientConfig;
 

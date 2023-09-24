@@ -1,4 +1,5 @@
-use super::{ID, VERSION};
+use super::ID;
+use super::VERSION;
 use crate::common::codec::aead::SupportedCipher;
 use crate::common::protocol::socks5::message::Socks5CommandRequest;
 

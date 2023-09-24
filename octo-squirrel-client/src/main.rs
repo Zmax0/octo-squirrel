@@ -1,21 +1,31 @@
 use std::error::Error;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::Ipv4Addr;
+use std::net::SocketAddr;
+use std::net::SocketAddrV4;
 
 use bytes::BytesMut;
-use futures::{FutureExt, SinkExt, StreamExt};
-use log::{error, info};
+use futures::FutureExt;
+use futures::SinkExt;
+use futures::StreamExt;
+use log::error;
+use log::info;
 use octo_squirrel::common::protocol::network::Network;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
-use octo_squirrel::common::protocol::socks5::{handshake::ServerHandShake, message::Socks5CommandResponse, Socks5AddressType, Socks5CommandStatus};
+use octo_squirrel::common::protocol::socks5::handshake::ServerHandShake;
+use octo_squirrel::common::protocol::socks5::message::Socks5CommandResponse;
+use octo_squirrel::common::protocol::socks5::Socks5AddressType;
+use octo_squirrel::common::protocol::socks5::Socks5CommandStatus;
 use octo_squirrel::common::protocol::Protocols;
 use octo_squirrel::config::ServerConfig;
 use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, UdpSocket};
+use tokio::net::TcpListener;
+use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio_util::udp::UdpFramed;
 
-use crate::client::{shadowsocks, vmess};
+use crate::client::shadowsocks;
+use crate::client::vmess;
 
 mod client;
 

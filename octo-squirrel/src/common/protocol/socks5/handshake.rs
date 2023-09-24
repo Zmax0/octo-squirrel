@@ -1,10 +1,24 @@
 use std::net::SocketAddr;
 
-use futures::{FutureExt, SinkExt, StreamExt};
-use tokio::{io, net::TcpStream};
-use tokio_util::codec::{FramedRead, FramedWrite};
+use futures::FutureExt;
+use futures::SinkExt;
+use futures::StreamExt;
+use tokio::io;
+use tokio::net::TcpStream;
+use tokio_util::codec::FramedRead;
+use tokio_util::codec::FramedWrite;
 
-use super::{codec::{Socks5ClientEncoder, Socks5CommandRequestDecoder, Socks5CommandResponseDecoder, Socks5InitialRequestDecoder, Socks5InitialResponseDecoder, Socks5ServerEncoder}, message::{Socks5CommandRequest, Socks5CommandResponse, Socks5InitialRequest, Socks5InitialResponse}, Socks5CommandType};
+use super::codec::Socks5ClientEncoder;
+use super::codec::Socks5CommandRequestDecoder;
+use super::codec::Socks5CommandResponseDecoder;
+use super::codec::Socks5InitialRequestDecoder;
+use super::codec::Socks5InitialResponseDecoder;
+use super::codec::Socks5ServerEncoder;
+use super::message::Socks5CommandRequest;
+use super::message::Socks5CommandResponse;
+use super::message::Socks5InitialRequest;
+use super::message::Socks5InitialResponse;
+use super::Socks5CommandType;
 use crate::common::protocol::socks5::Socks5AuthMethod;
 
 pub struct ClientHandShake;
@@ -48,7 +62,8 @@ impl ServerHandShake {
 mod test {
     use std::error::Error;
 
-    use crate::common::protocol::socks5::{handshake::ClientHandShake, Socks5CommandType};
+    use crate::common::protocol::socks5::handshake::ClientHandShake;
+    use crate::common::protocol::socks5::Socks5CommandType;
     #[tokio::test]
     async fn no_auth() -> Result<(), Box<dyn Error>> {
         let proxy_addr = "127.0.0.1:7890".parse().unwrap();

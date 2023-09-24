@@ -19,7 +19,8 @@ impl Auth {
 
 #[test]
 fn test_generate_chacha20_poly1305_key() {
-    use base64ct::{Base64, Encoding};
+    use base64ct::Base64;
+    use base64ct::Encoding;
     let data = b"fn bubble_sort<T: Ord>(arr: &mut [T]) {let mut swapped = true;while swapped {swapped = false;for i in 1..arr.len() {if arr[i - 1] > arr[i] {arr.swap(i - 1, i);swapped = true;}}}}";
     let res = Auth::generate_chacha20_poly1305_key(data);
     assert_eq!("UDKJ9PJ4zh6hDio6vuw0UhcSqk8njawoEziFz405238=", Base64::encode_string(&res));

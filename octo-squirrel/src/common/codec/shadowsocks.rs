@@ -1,14 +1,29 @@
+use std::io;
 use std::net::SocketAddr;
-use std::{io, sync::{Arc, Mutex}};
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::BytesMut;
 use hkdf::Hkdf;
-use md5::{Digest, Md5};
+use log::trace;
+use md5::Digest;
+use md5::Md5;
 use sha1::Sha1;
-use tokio_util::codec::{Decoder, Encoder};
+use tokio_util::codec::Decoder;
+use tokio_util::codec::Encoder;
 
-use super::{aead::{Authenticator, PayloadDecoder, PayloadEncoder, SupportedCipher}, chunk::AEADChunkSizeParser, EmptyBytesGenerator, EmptyPaddingLengthGenerator, IncreasingNonceGenerator};
-use crate::common::{protocol::{network::Network, socks5::{address::Address, message::Socks5CommandRequest, Socks5AddressType}}, util::Dice};
+use super::aead::Authenticator;
+use super::aead::CipherDecoder;
+use super::aead::CipherEncoder;
+use super::aead::SupportedCipher;
+use super::chunk::ChunkSizeCodec;
+use super::EmptyBytesGenerator;
+use super::IncreasingNonceGenerator;
+use crate::common::protocol::network::Network;
+use crate::common::protocol::socks5::address::Address;
+use crate::common::protocol::socks5::message::Socks5CommandRequest;
+use crate::common::protocol::socks5::Socks5AddressType;
+use crate::common::util::Dice;
 
 pub struct AddressCodec;
 
@@ -44,12 +59,85 @@ impl Decoder for AddressCodec {
     }
 }
 
+struct CipherEncoderImpl {
+    payload_limit: usize,
+    auth: Authenticator,
+}
+
+impl CipherEncoderImpl {
+    pub fn new(payload_limit: usize, auth: Authenticator) -> Self {
+        Self { payload_limit, auth }
+    }
+
+    fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
+        let overhead = self.auth.overhead();
+        let encrypted_size = src.remaining().min(self.payload_limit - overhead - self.auth.size_bytes());
+        trace!("Encode payload; payload length={}", encrypted_size);
+        let encrypted_size_bytes = self.auth.encode_size(encrypted_size + overhead);
+        dst.put_slice(&encrypted_size_bytes);
+        let payload_bytes = src.split_to(encrypted_size);
+        dst.put_slice(&self.auth.seal(&payload_bytes));
+    }
+}
+
+impl CipherEncoder for CipherEncoderImpl {
+    fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
+        while src.has_remaining() {
+            self.seal(&mut src, dst);
+        }
+    }
+
+    fn encode_packet(&mut self, src: BytesMut, dst: &mut BytesMut) {
+        dst.put(&self.auth.seal(&src[..])[..]);
+    }
+}
+
+struct CipherDecoderImpl {
+    payload_length: Option<usize>,
+    auth: Authenticator,
+}
+
+impl CipherDecoderImpl {
+    pub fn new(auth: Authenticator) -> Self {
+        Self { payload_length: None, auth }
+    }
+}
+
+impl CipherDecoder for CipherDecoderImpl {
+    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
+        let opened = self.auth.open(&src.split_off(0));
+        Ok(Some(BytesMut::from(&opened[..])))
+    }
+
+    fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
+        let size_bytes = self.auth.size_bytes();
+        let mut dst = Vec::new();
+        while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
+            if let Some(payload_length) = self.payload_length {
+                let mut payload_btyes = self.auth.open(&src.split_to(payload_length));
+                dst.append(&mut payload_btyes);
+                self.payload_length = None;
+            } else {
+                let payload_length_bytes = src.split_to(size_bytes);
+                let payload_length = self.auth.decode_size(&payload_length_bytes);
+                trace!("Decode payload; payload length={:?}", payload_length);
+                self.payload_length = Some(payload_length);
+            }
+        }
+        if dst.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(BytesMut::from(&dst[..])))
+        }
+    }
+}
+
 pub struct AEADCipherCodec {
     cipher: SupportedCipher,
     key: Vec<u8>,
     network: Network,
-    payload_encoder: Option<PayloadEncoder>,
-    payload_decoder: Option<PayloadDecoder>,
+    encoder: Option<Box<dyn CipherEncoder>>,
+    decoder: Option<Box<dyn CipherDecoder>>,
 }
 
 impl AEADCipherCodec {
@@ -57,15 +145,15 @@ impl AEADCipherCodec {
         match cipher {
             SupportedCipher::Aes128Gcm => {
                 let key: [u8; 16] = Self::generate_key(password);
-                Self { cipher, key: key.to_vec(), network, payload_encoder: None, payload_decoder: None }
+                Self { cipher, key: key.to_vec(), network, encoder: None, decoder: None }
             }
             SupportedCipher::Aes256Gcm => {
                 let key: [u8; 32] = Self::generate_key(password);
-                Self { cipher, key: key.to_vec(), network, payload_encoder: None, payload_decoder: None }
+                Self { cipher, key: key.to_vec(), network, encoder: None, decoder: None }
             }
             SupportedCipher::ChaCha20Poly1305 => {
                 let key: [u8; 32] = Self::generate_key(password);
-                Self { cipher, key: key.to_vec(), network, payload_encoder: None, payload_decoder: None }
+                Self { cipher, key: key.to_vec(), network, encoder: None, decoder: None }
             }
         }
     }
@@ -99,47 +187,45 @@ impl AEADCipherCodec {
         okm.to_vec()
     }
 
-    fn new_payload_encoder(&mut self, salt: &[u8]) -> PayloadEncoder {
+    fn new_encoder(&mut self, salt: &[u8]) -> Box<dyn CipherEncoder> {
         let key = AEADCipherCodec::hkdfsha1(&self.key, salt);
         let auth = self.new_auth(&key);
-        PayloadEncoder::new(0xffff, auth.clone(), Box::new(AEADChunkSizeParser::new(auth)), Box::new(EmptyPaddingLengthGenerator))
+        Box::new(CipherEncoderImpl::new(0xffff, auth))
     }
 
-    fn new_payload_decoder(&mut self, salt: &[u8]) -> PayloadDecoder {
+    fn new_decoder(&mut self, salt: &[u8]) -> Box<dyn CipherDecoder> {
         let key = AEADCipherCodec::hkdfsha1(&self.key, salt);
         let auth = self.new_auth(&key);
-        PayloadDecoder::new(auth.clone(), Box::new(AEADChunkSizeParser::new(auth)), Box::new(EmptyPaddingLengthGenerator))
+        Box::new(CipherDecoderImpl::new(auth))
     }
 
-    fn new_auth(&mut self, key: &Vec<u8>) -> Arc<Mutex<Authenticator>> {
-        Arc::new(Mutex::new(Authenticator::new(
+    fn new_auth(&mut self, key: &Vec<u8>) -> Authenticator {
+        Authenticator::new(
             self.cipher.to_aead_cipher(&key),
             Box::new(IncreasingNonceGenerator::generate_initial_aead_nonce()),
             Box::new(EmptyBytesGenerator {}),
-        )))
+        )
     }
 }
 
 impl Encoder<BytesMut> for AEADCipherCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, mut item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match self.network {
             Network::TCP => {
-                if self.payload_encoder.is_none() {
+                if self.encoder.is_none() {
                     let salt = Dice::roll_bytes(self.key.len());
-                    self.payload_encoder = Some(self.new_payload_encoder(&salt));
+                    self.encoder = Some(self.new_encoder(&salt));
                     dst.put(&salt[..]);
                 }
-                self.payload_encoder.as_mut().unwrap().encode_payload(&mut item, dst);
+                self.encoder.as_mut().unwrap().encode_payload(item, dst);
                 Ok(())
             }
             Network::UDP => {
                 let salt = Dice::roll_bytes(self.key.len());
-                let encoder = self.new_payload_encoder(&salt);
-                let mut auth = encoder.auth.lock().unwrap();
                 dst.put(&salt[..]);
-                dst.put(&auth.seal(&item)[..]);
+                self.new_encoder(&salt).encode_packet(item, dst);
                 Ok(())
             }
         }
@@ -152,25 +238,26 @@ impl Decoder for AEADCipherCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if src.is_empty() {
+            return Ok(None);
+        }
         match self.network {
             Network::TCP => {
-                if self.payload_decoder.is_none() {
+                if self.decoder.is_none() {
                     if src.remaining() < self.key.len() {
                         return Ok(None);
                     }
                     let salt = src.split_to(self.key.len());
-                    self.payload_decoder = Some(self.new_payload_decoder(&salt));
+                    self.decoder = Some(self.new_decoder(&salt));
                 }
-                self.payload_decoder.as_mut().unwrap().decode_payload(src)
+                self.decoder.as_mut().unwrap().decode_payload(src)
             }
             Network::UDP => {
                 if src.remaining() < self.key.len() {
                     return Ok(None);
                 }
                 let salt = src.split_to(self.key.len());
-                let decoder = self.new_payload_decoder(&salt);
-                let opened = decoder.auth.lock().unwrap().open(&src.split_off(0));
-                Ok(Some(BytesMut::from(&opened[..])))
+                self.new_decoder(&salt).decode_packet(src)
             }
         }
     }
@@ -214,14 +301,22 @@ impl Decoder for DatagramPacketCodec {
 
 #[cfg(test)]
 mod test {
-    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+    use std::net::Ipv4Addr;
+    use std::net::SocketAddr;
+    use std::net::SocketAddrV4;
 
     use base64ct::Encoding;
     use bytes::BytesMut;
-    use rand::{distributions::Alphanumeric, random, Rng};
-    use tokio_util::codec::{Decoder, Encoder};
+    use rand::distributions::Alphanumeric;
+    use rand::random;
+    use rand::Rng;
+    use tokio_util::codec::Decoder;
+    use tokio_util::codec::Encoder;
 
-    use crate::common::{codec::{aead::SupportedCipher, shadowsocks::{AEADCipherCodec, DatagramPacketCodec}}, protocol::network::Network};
+    use crate::common::codec::aead::SupportedCipher;
+    use crate::common::codec::shadowsocks::AEADCipherCodec;
+    use crate::common::codec::shadowsocks::DatagramPacketCodec;
+    use crate::common::protocol::network::Network;
 
     #[test]
     fn test_generate_key() {

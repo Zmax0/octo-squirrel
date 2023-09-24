@@ -1,9 +1,23 @@
-use std::{io, net::SocketAddr};
+use std::io;
+use std::net::SocketAddr;
 
-use bytes::{Buf, BufMut, BytesMut};
-use tokio_util::codec::{Decoder, Encoder};
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::BytesMut;
+use tokio_util::codec::Decoder;
+use tokio_util::codec::Encoder;
 
-use super::{address::Address, message::{Socks5CommandRequest, Socks5CommandResponse, Socks5InitialRequest, Socks5InitialResponse, Socks5Message}, Socks5AddressType, Socks5AuthMethod, Socks5CommandStatus, Socks5CommandType, VERSION};
+use super::address::Address;
+use super::message::Socks5CommandRequest;
+use super::message::Socks5CommandResponse;
+use super::message::Socks5InitialRequest;
+use super::message::Socks5InitialResponse;
+use super::message::Socks5Message;
+use super::Socks5AddressType;
+use super::Socks5AuthMethod;
+use super::Socks5CommandStatus;
+use super::Socks5CommandType;
+use super::VERSION;
 
 pub struct Socks5ClientEncoder;
 

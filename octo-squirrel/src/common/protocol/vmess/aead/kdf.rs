@@ -1,6 +1,7 @@
 use digest::typenum::Unsigned;
 use digest::OutputSizeUser;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 
 use super::KDF;
 

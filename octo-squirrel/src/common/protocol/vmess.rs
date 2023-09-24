@@ -2,13 +2,22 @@ pub mod aead;
 pub mod encoding;
 pub mod header;
 pub mod session;
-use std::{io::{Error, ErrorKind}, net::{Ipv4Addr, Ipv6Addr}, time::{SystemTime, UNIX_EPOCH}};
+use std::io::Error;
+use std::io::ErrorKind;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use aes::cipher::generic_array::GenericArray;
-use bytes::{Buf, BufMut, BytesMut};
-use crc::{Crc, CRC_32_ISO_HDLC};
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::BytesMut;
+use crc::Crc;
+use crc::CRC_32_ISO_HDLC;
 use hmac::digest::OutputSizeUser;
-use md5::{Digest, Md5};
+use md5::Digest;
+use md5::Md5;
 use rand::Rng;
 use uuid::Uuid;
 
@@ -108,11 +117,15 @@ impl ID {
 
 #[cfg(test)]
 mod test {
-    use base64ct::{Base64, Encoding};
-    use bytes::{Buf, BytesMut};
+    use base64ct::Base64;
+    use base64ct::Encoding;
+    use bytes::Buf;
+    use bytes::BytesMut;
 
-    use super::{Address, ID};
-    use crate::common::protocol::socks5::{message::Socks5CommandRequest, Socks5AddressType};
+    use super::Address;
+    use super::ID;
+    use crate::common::protocol::socks5::message::Socks5CommandRequest;
+    use crate::common::protocol::socks5::Socks5AddressType;
 
     #[test]
     fn test_address_codec() {

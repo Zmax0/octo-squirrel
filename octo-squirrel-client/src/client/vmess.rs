@@ -1,54 +1,59 @@
+use std::error;
+use std::io;
 use std::io::Cursor;
 use std::io::ErrorKind;
 use std::mem::size_of;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use std::{error, io};
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::BytesMut;
 use dashmap::mapref::entry::Entry::Vacant;
 use dashmap::DashMap;
-use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, StreamExt};
-use log::{debug, info};
-use octo_squirrel::common::codec::aead::{AEADCipher, Aes128GcmCipher, PayloadDecoder, PayloadEncoder, SupportedCipher};
+use futures::stream::SplitSink;
+use futures::stream::SplitStream;
+use futures::SinkExt;
+use futures::StreamExt;
+use log::debug;
+use log::info;
+use octo_squirrel::common::codec::aead::Aes128GcmCipher;
+use octo_squirrel::common::codec::aead::Cipher;
+use octo_squirrel::common::codec::aead::CipherDecoder;
+use octo_squirrel::common::codec::aead::CipherEncoder;
+use octo_squirrel::common::codec::aead::SupportedCipher;
 use octo_squirrel::common::codec::vmess::AEADBodyCodec;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::common::protocol::socks5::Socks5CommandType;
 use octo_squirrel::common::protocol::vmess::aead::*;
-use octo_squirrel::common::protocol::vmess::header::{RequestCommand, RequestHeader, RequestOption, SecurityType};
-use octo_squirrel::common::protocol::vmess::session::{ClientSession, Session};
-use octo_squirrel::common::protocol::vmess::{Address, VERSION};
-use octo_squirrel::common::util::{Dice, FNV};
+use octo_squirrel::common::protocol::vmess::header::RequestCommand;
+use octo_squirrel::common::protocol::vmess::header::RequestHeader;
+use octo_squirrel::common::protocol::vmess::header::RequestOption;
+use octo_squirrel::common::protocol::vmess::header::SecurityType;
+use octo_squirrel::common::protocol::vmess::session::ClientSession;
+use octo_squirrel::common::protocol::vmess::session::Session;
+use octo_squirrel::common::protocol::vmess::Address;
+use octo_squirrel::common::protocol::vmess::VERSION;
+use octo_squirrel::common::util::Dice;
+use octo_squirrel::common::util::FNV;
 use octo_squirrel::config::ServerConfig;
 use rand::Rng;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
-use tokio::time;
-use tokio_util::codec::{BytesCodec, Decoder, Encoder, Framed};
+use tokio_util::codec::BytesCodec;
+use tokio_util::codec::Decoder;
+use tokio_util::codec::Encoder;
+use tokio_util::codec::Framed;
 use tokio_util::udp::UdpFramed;
 
-pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn error::Error>> {
-    let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
-    let header = RequestHeader::default(RequestCommand::TCP, security, request, config.password);
-    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split();
-    let (mut outbound_sink, mut outbound_stream) = Framed::new(outbound, ClientAEADCodec::new(header)).split();
-
-    let client_to_server = async { outbound_sink.send_all(&mut inbound_stream).await };
-    let server_to_client = async { inbound_sink.send_all(&mut outbound_stream).await };
-
-    tokio::try_join!(client_to_server, server_to_client)?;
-    Ok(())
-}
+use crate::client::transfer;
 
 struct ClientAEADCodec {
     header: RequestHeader,
     session: ClientSession,
-    body_encoder: Option<PayloadEncoder>,
-    body_decoder: Option<PayloadDecoder>,
+    body_encoder: Option<Box<dyn CipherEncoder>>,
+    body_decoder: Option<Box<dyn CipherDecoder>>,
 }
 
 impl ClientAEADCodec {
@@ -62,7 +67,7 @@ impl ClientAEADCodec {
 impl Encoder<BytesMut> for ClientAEADCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, mut item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
         if let None = self.body_encoder {
             let mut buffer = BytesMut::new();
             buffer.put_u8(VERSION);
@@ -83,9 +88,9 @@ impl Encoder<BytesMut> for ClientAEADCodec {
             self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &self.session));
         }
         if self.header.command == RequestCommand::UDP {
-            self.body_encoder.as_mut().unwrap().encode_packet(&mut item, dst);
+            self.body_encoder.as_mut().unwrap().encode_packet(item, dst);
         } else {
-            self.body_encoder.as_mut().unwrap().encode_payload(&mut item, dst);
+            self.body_encoder.as_mut().unwrap().encode_payload(item, dst);
         }
         Ok(())
     }
@@ -143,6 +148,20 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
+pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn error::Error>> {
+    let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
+    let header = RequestHeader::default(RequestCommand::TCP, security, request, config.password);
+    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
+    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split();
+    let (mut outbound_sink, mut outbound_stream) = Framed::new(outbound, ClientAEADCodec::new(header)).split();
+
+    let client_to_server = async { outbound_sink.send_all(&mut inbound_stream).await };
+    let server_to_client = async { inbound_sink.send_all(&mut outbound_stream).await };
+
+    tokio::try_join!(client_to_server, server_to_client)?;
+    Ok(())
+}
+
 pub async fn transfer_udp(
     mut inbound_stream: SplitStream<UdpFramed<Socks5UdpCodec>>,
     inbound_sender: Sender<((BytesMut, SocketAddr), SocketAddr)>,
@@ -162,15 +181,7 @@ pub async fn transfer_udp(
             let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
             let (outbound_sink, mut outbound_stream) = outbound.split();
             entry.insert(outbound_sink);
-            let _binding = binding.clone();
-            tokio::spawn(async move {
-                time::sleep(Duration::from_secs(60)).await;
-                if let Some(mut entry) = _binding.remove(&(sender, recipient)) {
-                    entry.1.close().await.expect("Close udp outbound sink failed");
-                    debug!("Remove udp binding; sender={}", sender);
-                }
-            });
-            let _binding = binding.clone();
+            tokio::spawn(transfer::remove_binding((sender, recipient), binding.clone()));
             let _writer = inbound_sender.clone();
             tokio::spawn(async move {
                 while let Some(Ok(item)) = outbound_stream.next().await {

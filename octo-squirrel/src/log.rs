@@ -1,12 +1,15 @@
 use std::error::Error;
 use std::str::FromStr;
 
-use log::{info, LevelFilter};
+use log::info;
+use log::LevelFilter;
 use log4rs::append::console::ConsoleAppender;
-use log4rs::config::{Appender, Root};
+use log4rs::config::Appender;
+use log4rs::config::Root;
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::Config;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 pub fn init(config: &Logger) -> Result<(), Box<dyn Error>> {
     let path = "log4rs.yaml";

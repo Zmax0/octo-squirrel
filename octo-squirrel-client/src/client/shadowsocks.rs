@@ -1,52 +1,51 @@
 use std::error::Error;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::net::Ipv4Addr;
+use std::net::SocketAddr;
+use std::net::SocketAddrV4;
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::BytesMut;
 use dashmap::mapref::entry::Entry::Vacant;
 use dashmap::DashMap;
-use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, StreamExt};
-use log::{debug, info};
-use octo_squirrel::common::codec::shadowsocks::{AEADCipherCodec, AddressCodec, DatagramPacketCodec};
+use futures::stream::SplitSink;
+use futures::stream::SplitStream;
+use futures::SinkExt;
+use futures::StreamExt;
+use log::debug;
+use log::info;
+use octo_squirrel::common::codec::shadowsocks::AEADCipherCodec;
+use octo_squirrel::common::codec::shadowsocks::AddressCodec;
+use octo_squirrel::common::codec::shadowsocks::DatagramPacketCodec;
 use octo_squirrel::common::protocol::network::Network;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::config::ServerConfig;
-use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::TcpStream;
+use tokio::net::UdpSocket;
 use tokio::sync::mpsc::Sender;
 use tokio::time;
-use tokio_util::codec::{BytesCodec, Encoder, FramedRead, FramedWrite};
+use tokio_util::codec::BytesCodec;
+use tokio_util::codec::Encoder;
+use tokio_util::codec::Framed;
 use tokio_util::udp::UdpFramed;
 
-pub async fn transfer_tcp(mut inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
-    let mut outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
+use crate::client::transfer;
 
-    let (ri, wi) = inbound.split();
-    let (ro, wo) = outbound.split();
-
+pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
+    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
+    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split();
+    let (mut outbound_sink, mut outbound_stream) =
+        Framed::new(outbound, AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::TCP)).split();
     let client_to_server = async {
-        let mut rif = FramedRead::new(ri, BytesCodec::new());
-        AddressCodec.encode(request, rif.read_buffer_mut())?;
-        let mut wof = FramedWrite::new(wo, AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::TCP));
-        while let Some(Ok(item)) = rif.next().await {
-            wof.send(item).await?
-        }
-        wof.into_inner().shutdown().await
+        let mut address = BytesMut::new();
+        AddressCodec.encode(request, &mut address)?;
+        outbound_sink.feed(address).await?;
+        outbound_sink.send_all(&mut inbound_stream).await
     };
-
-    let server_to_client = async {
-        let mut rof = FramedRead::new(ro, AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::TCP));
-        let mut wif = FramedWrite::new(wi, BytesCodec::new());
-        while let Some(Ok(item)) = rof.next().await {
-            wif.send(item).await?
-        }
-        wif.into_inner().shutdown().await
-    };
-
+    let server_to_client = async { inbound_sink.send_all(&mut outbound_stream).await };
     tokio::try_join!(client_to_server, server_to_client)?;
     Ok(())
 }
@@ -67,8 +66,7 @@ pub async fn transfer_udp(
                 UdpFramed::new(outbound, DatagramPacketCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::UDP)));
             let (outbound_sink, mut outbound_stream) = outbound.split();
             entry.insert(outbound_sink);
-            tokio::spawn(remove_binding(sender, binding.clone()));
-            let _binding = binding.clone();
+            tokio::spawn(transfer::remove_binding(sender, binding.clone()));
             let _writer = inbound_sender.clone();
             tokio::spawn(async move {
                 while let Ok(item) = time::timeout(Duration::from_secs(600), outbound_stream.next()).await {
@@ -87,15 +85,4 @@ pub async fn transfer_udp(
         binding.get_mut(&sender).unwrap().send((msg, proxy)).await?
     }
     Ok(())
-}
-
-async fn remove_binding(
-    sender: SocketAddr,
-    binding: Arc<DashMap<SocketAddr, SplitSink<UdpFramed<DatagramPacketCodec>, ((BytesMut, SocketAddr), SocketAddr)>>>,
-) {
-    time::sleep(Duration::from_secs(60)).await;
-    if let Some(mut entry) = binding.remove(&sender) {
-        entry.1.close().await.expect("Close udp outbound sink failed");
-        debug!("Remove udp binding; sender={}", sender);
-    }
 }
