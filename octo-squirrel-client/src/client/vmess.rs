@@ -181,7 +181,7 @@ pub async fn transfer_udp(
             let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
             let (outbound_sink, mut outbound_stream) = outbound.split();
             entry.insert(outbound_sink);
-            tokio::spawn(transfer::remove_binding((   z, recipient), binding.clone()));
+            tokio::spawn(transfer::remove_binding((sender, recipient), binding.clone()));
             let _writer = inbound_sender.clone();
             tokio::spawn(async move {
                 while let Some(Ok(item)) = outbound_stream.next().await {
