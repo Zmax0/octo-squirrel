@@ -1,17 +1,17 @@
+use std::cell::RefCell;
 use std::fmt::Display;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::rc::Rc;
 
 pub mod aead;
 pub mod chunk;
 pub mod shadowsocks;
 pub mod vmess;
 
-pub trait PaddingLengthGenerator: Send + Sync {
+pub trait PaddingLengthGenerator: Send {
     fn next_padding_length(&mut self) -> usize;
 }
 
-pub trait BytesGenerator: Send + Sync {
+pub trait BytesGenerator: Send {
     fn generate(&mut self) -> Vec<u8>;
 }
 
@@ -33,19 +33,21 @@ impl BytesGenerator for EmptyBytesGenerator {
 
 pub struct CountingNonceGenerator {
     count: u16,
-    nonce: Arc<Mutex<[u8]>>,
+    nonce: Rc<RefCell<[u8]>>,
     nonce_size: usize,
 }
 
+unsafe impl Send for CountingNonceGenerator {}
+
 impl CountingNonceGenerator {
-    pub fn new(nonce: Arc<Mutex<[u8]>>, nonce_size: usize) -> Self {
+    pub fn new(nonce: Rc<RefCell<[u8]>>, nonce_size: usize) -> Self {
         Self { count: 0, nonce, nonce_size }
     }
 }
 
 impl BytesGenerator for CountingNonceGenerator {
     fn generate(&mut self) -> Vec<u8> {
-        let mut nonce = self.nonce.lock().unwrap();
+        let mut nonce = self.nonce.borrow_mut();
         nonce[..2].copy_from_slice(&self.count.to_be_bytes());
         self.count = self.count.overflowing_add(1).0;
         nonce[..self.nonce_size].to_vec()
@@ -54,7 +56,7 @@ impl BytesGenerator for CountingNonceGenerator {
 
 impl Display for CountingNonceGenerator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "count={}, nonce={:?}", self.count, self.nonce.lock().unwrap())
+        write!(f, "count={}, nonce={:?}", self.count, self.nonce.borrow())
     }
 }
 
@@ -92,8 +94,8 @@ impl IncreasingNonceGenerator {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-    use std::sync::Mutex;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     use base64ct::Encoding;
     use rand::random;
@@ -124,13 +126,13 @@ mod test {
 
     #[test]
     fn test_generate_counting_nonce() {
-        let nonce = Arc::new(Mutex::new([0u8; 16]));
+        let nonce = Rc::new(RefCell::new([0u8; 16]));
         let mut generator = CountingNonceGenerator::new(nonce.clone(), 12);
         let mut generated = Vec::new();
         for _ in 0..65536 {
             generated = generator.generate();
         }
         assert_eq!("//8AAAAAAAAAAAAA", base64ct::Base64::encode_string(&generated[..]));
-        assert_eq!("//8AAAAAAAAAAAAAAAAAAA==", base64ct::Base64::encode_string(&nonce.lock().unwrap()[..]));
+        assert_eq!("//8AAAAAAAAAAAAAAAAAAA==", base64ct::Base64::encode_string(&nonce.borrow()[..]));
     }
 }

@@ -1,7 +1,7 @@
+use std::cell::RefCell;
 use std::fmt::Display;
 use std::fmt::Formatter;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::rc::Rc;
 
 use base64ct::Encoding;
 use rand::random;
@@ -9,10 +9,10 @@ use rand::Rng;
 use sha2::Digest;
 use sha2::Sha256;
 
-pub trait Session {
-    fn request_body_iv(&self) -> Arc<Mutex<[u8]>>;
+pub trait Session: Send {
+    fn request_body_iv(&self) -> Rc<RefCell<[u8]>>;
     fn request_body_key(&self) -> &[u8];
-    fn response_body_iv(&self) -> Arc<Mutex<[u8]>>;
+    fn response_body_iv(&self) -> Rc<RefCell<[u8]>>;
     fn response_body_key(&self) -> &[u8];
     fn response_header(&self) -> u8;
 }
@@ -21,12 +21,14 @@ macro_rules! session_impl {
     ($name:ident) => {
         #[derive(Clone, Debug)]
         pub struct $name {
-            request_body_iv: [u8; 16],
+            request_body_iv: Rc<RefCell<[u8; 16]>>,
             request_body_key: [u8; 16],
-            response_body_iv: [u8; 16],
+            response_body_iv: Rc<RefCell<[u8; 16]>>,
             response_body_key: [u8; 16],
             response_header: u8,
         }
+
+        unsafe impl Send for $name {}
 
         impl $name {
             fn init(request_body_iv: [u8; 16], request_body_key: [u8; 16], response_header: u8) -> Self {
@@ -40,9 +42,9 @@ macro_rules! session_impl {
                 let mut response_body_key = [0; 16];
                 response_body_key.clone_from_slice(&res[..16]);
                 Self {
-                    request_body_iv,
+                    request_body_iv: Rc::new(RefCell::new(request_body_iv)),
                     request_body_key,
-                    response_body_iv,
+                    response_body_iv: Rc::new(RefCell::new(response_body_iv)),
                     response_body_key,
                     response_header,
                 }
@@ -50,16 +52,16 @@ macro_rules! session_impl {
         }
 
         impl Session for $name {
-            fn request_body_iv(&self) -> Arc<Mutex<[u8]>> {
-                Arc::new(Mutex::new(self.request_body_iv))
+            fn request_body_iv(&self) -> Rc<RefCell<[u8]>> {
+                self.request_body_iv.clone()
             }
 
             fn request_body_key(&self) -> &[u8] {
                 &self.request_body_key
             }
 
-            fn response_body_iv(&self) -> Arc<Mutex<[u8]>> {
-                Arc::new(Mutex::new(self.response_body_iv))
+            fn response_body_iv(&self) -> Rc<RefCell<[u8]>> {
+                self.response_body_iv.clone()
             }
 
             fn response_body_key(&self) -> &[u8] {
@@ -77,9 +79,9 @@ macro_rules! session_impl {
                     f,
                     "[REQ: {}, {}; RESP: {}, {}, {}]",
                     base64ct::Base64::encode_string(&self.request_body_key),
-                    base64ct::Base64::encode_string(&self.request_body_iv),
+                    base64ct::Base64::encode_string(&self.request_body_iv().borrow()),
                     base64ct::Base64::encode_string(&self.response_body_key),
-                    base64ct::Base64::encode_string(&self.response_body_iv),
+                    base64ct::Base64::encode_string(&self.response_body_iv().borrow()),
                     self.response_header()
                 )
             }
@@ -134,8 +136,8 @@ fn test() {
     let session = ClientSession::new();
     let iv1 = session.request_body_iv();
     let iv2 = session.request_body_iv();
-    iv1.lock().unwrap()[0] += 1;
-    let vec1 = iv1.lock().unwrap().to_vec();
-    let vec2 = iv2.lock().unwrap().to_vec();
+    iv1.borrow_mut()[0] += 1;
+    let vec1 = iv1.borrow().to_vec();
+    let vec2 = iv2.borrow().to_vec();
     assert_eq!(vec1, vec2)
 }
