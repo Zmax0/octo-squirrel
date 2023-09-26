@@ -4,15 +4,11 @@ use std::io::Cursor;
 use std::io::ErrorKind;
 use std::mem::size_of;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::net::ToSocketAddrs;
 
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
-use dashmap::mapref::entry::Entry::Vacant;
-use dashmap::DashMap;
-use futures::stream::SplitSink;
-use futures::stream::SplitStream;
 use futures::SinkExt;
 use futures::StreamExt;
 use log::debug;
@@ -23,7 +19,6 @@ use octo_squirrel::common::codec::aead::CipherDecoder;
 use octo_squirrel::common::codec::aead::CipherEncoder;
 use octo_squirrel::common::codec::aead::SupportedCipher;
 use octo_squirrel::common::codec::vmess::AEADBodyCodec;
-use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::common::protocol::socks5::Socks5CommandType;
 use octo_squirrel::common::protocol::vmess::aead::*;
@@ -40,16 +35,17 @@ use octo_squirrel::common::util::FNV;
 use octo_squirrel::config::ServerConfig;
 use rand::Rng;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
-use tokio_util::udp::UdpFramed;
 
-use crate::client::transfer;
+use crate::client::template;
 
-struct ClientAEADCodec {
+pub struct ClientAEADCodec {
     header: RequestHeader,
     session: ClientSession,
     body_encoder: Option<Box<dyn CipherEncoder>>,
@@ -162,37 +158,45 @@ pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, con
     Ok(())
 }
 
+fn get_udp_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
+    (sender, recipient)
+}
+
+async fn transfer_udp_outbound(
+    config: &ServerConfig,
+    sender: SocketAddr,
+    recipient: SocketAddr,
+    callback: Sender<((BytesMut, SocketAddr), SocketAddr)>,
+) -> Result<Sender<((BytesMut, SocketAddr), SocketAddr)>, io::Error> {
+    let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
+    let outbound = TcpStream::connect(proxy.clone()).await?;
+    let outbound_local_addr = outbound.local_addr()?;
+    debug!("New udp binding; sender={}, outbound={}", sender, outbound_local_addr);
+    let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
+    let request = Socks5CommandRequest::from(Socks5CommandType::CONNECT, recipient);
+    let header = RequestHeader::default(RequestCommand::UDP, security, request, config.password.clone());
+    let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
+    let (tx, mut rx) = mpsc::channel::<((BytesMut, SocketAddr), SocketAddr)>(32);
+    let (mut outbound_sink, mut outbound_stream) = outbound.split();
+    tokio::spawn(async move {
+        while let Some(item) = rx.recv().await {
+            outbound_sink.send(item.0 .0).await.unwrap()
+        }
+    });
+    tokio::spawn(async move {
+        while let Some(Ok(item)) = outbound_stream.next().await {
+            callback.send(((item, recipient), sender)).await.unwrap();
+        }
+        debug!("No item in outbound stream; sender={}, outbound={}", sender, outbound_local_addr);
+        Ok::<(), io::Error>(())
+    });
+    Ok(tx.clone())
+}
+
 pub async fn transfer_udp(
-    mut inbound_stream: SplitStream<UdpFramed<Socks5UdpCodec>>,
-    inbound_sender: Sender<((BytesMut, SocketAddr), SocketAddr)>,
+    inbound_receiver: Receiver<((BytesMut, SocketAddr), SocketAddr)>, /* client->server */
+    inbound_sender: Sender<((BytesMut, SocketAddr), SocketAddr)>,     /* server->client */
     config: ServerConfig,
 ) -> Result<(), io::Error> {
-    let binding: Arc<DashMap<(SocketAddr, SocketAddr), SplitSink<Framed<TcpStream, ClientAEADCodec>, BytesMut>>> = Arc::new(DashMap::new());
-    let proxy = format!("{}:{}", config.host, config.port);
-    while let Some(Ok(((content, recipient), sender))) = inbound_stream.next().await {
-        if let Vacant(entry) = binding.entry((sender, recipient)) {
-            let outbound = TcpStream::connect(proxy.clone()).await?;
-            let outbound_local_addr = outbound.local_addr()?;
-            debug!("New udp binding; sender={}, outbound={}", sender, outbound_local_addr);
-            let security =
-                if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
-            let request = Socks5CommandRequest::from(Socks5CommandType::CONNECT, recipient);
-            let header = RequestHeader::default(RequestCommand::UDP, security, request, config.password.clone());
-            let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
-            let (outbound_sink, mut outbound_stream) = outbound.split();
-            entry.insert(outbound_sink);
-            tokio::spawn(transfer::remove_binding((sender, recipient), binding.clone()));
-            let _writer = inbound_sender.clone();
-            tokio::spawn(async move {
-                while let Some(Ok(item)) = outbound_stream.next().await {
-                    _writer.send(((item, recipient), sender)).await.unwrap();
-                }
-                debug!("No item in outbound stream; sender={}, outbound={}", sender, outbound_local_addr);
-                Ok::<(), io::Error>(())
-            });
-        };
-        info!("Accept udp packet; sender={}, recipient={}, server={}", sender, recipient, proxy);
-        binding.get_mut(&(sender, recipient)).unwrap().send(content).await?
-    }
-    Ok(())
+    template::transfer_udp(inbound_receiver, inbound_sender, config, get_udp_key, transfer_udp_outbound).await
 }

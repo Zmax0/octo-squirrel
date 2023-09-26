@@ -89,19 +89,25 @@ async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(
 
 async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<(), io::Error> {
     let inbound = UdpFramed::new(socket, Socks5UdpCodec);
-    let (mut inbound_sink, inbound_stream) = inbound.split();
-    let (tx, mut rx) = mpsc::channel::<((BytesMut, SocketAddr), SocketAddr)>(32);
+    let (mut sink, mut stream) = inbound.split();
+    let (itx, mut irx) = mpsc::channel::<((BytesMut, SocketAddr), SocketAddr)>(32);
     tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            inbound_sink.send(msg).await.unwrap();
+        while let Some(msg) = irx.recv().await {
+            sink.send(msg).await.unwrap();
+        }
+    });
+    let (otx, orx) = mpsc::channel::<((BytesMut, SocketAddr), SocketAddr)>(32);
+    tokio::spawn(async move {
+        while let Some(Ok(msg)) = stream.next().await {
+            otx.send(msg).await.unwrap();
         }
     });
     match current.protocol {
         Protocols::Shadowsocks => {
-            shadowsocks::transfer_udp(inbound_stream, tx, current).await?;
+            shadowsocks::transfer_udp(orx, itx, current).await?;
         }
         Protocols::VMess => {
-            vmess::transfer_udp(inbound_stream, tx, current).await?;
+            vmess::transfer_udp(orx, itx, current).await?;
         }
     }
     Ok(())
