@@ -1,4 +1,3 @@
-use std::error;
 use std::io;
 use std::io::Cursor;
 use std::io::ErrorKind;
@@ -141,7 +140,7 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn error::Error>> {
+pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), io::Error> {
     let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
     let header = RequestHeader::default(RequestCommand::TCP, security, request, config.password);
     let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;

@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::io;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
@@ -25,7 +24,7 @@ use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
 use tokio_util::udp::UdpFramed;
 
-pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
+pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), io::Error> {
     let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
     let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split();
     let (mut outbound_sink, mut outbound_stream) =

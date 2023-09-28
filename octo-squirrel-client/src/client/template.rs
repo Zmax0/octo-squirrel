@@ -1,3 +1,4 @@
+use std::error;
 use std::future::Future;
 use std::hash::Hash;
 use std::io;
@@ -9,23 +10,36 @@ use std::time::Duration;
 use bytes::BytesMut;
 use dashmap::mapref::entry::Entry::Vacant;
 use dashmap::DashMap;
+use futures::FutureExt;
 use futures::SinkExt;
 use futures::StreamExt;
 use log::debug;
+use log::error;
+use log::info;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
+use octo_squirrel::common::protocol::socks5::handshake::ServerHandShake;
+use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
+use octo_squirrel::common::protocol::socks5::message::Socks5CommandResponse;
+use octo_squirrel::common::protocol::socks5::Socks5AddressType;
+use octo_squirrel::common::protocol::socks5::Socks5CommandStatus;
 use octo_squirrel::config::ServerConfig;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::time;
 use tokio_util::udp::UdpFramed;
 
-pub trait AsyncFnMut<T>: FnMut(T, SocketAddr, SocketAddr, Sender<((BytesMut, SocketAddr), SocketAddr)>) -> <Self as AsyncFnMut<T>>::Fut {
-    type Fut: Future<Output = <Self as AsyncFnMut<T>>::Output>;
+pub trait AsyncUdpOutbound<T>:
+    FnMut(T, SocketAddr, SocketAddr, Sender<((BytesMut, SocketAddr), SocketAddr)>) -> <Self as AsyncUdpOutbound<T>>::Fut
+{
+    type Fut: Future<Output = <Self as AsyncUdpOutbound<T>>::Output>;
     type Output;
 }
 
-impl<T, F, Fut> AsyncFnMut<T> for F
+impl<T, F, Fut> AsyncUdpOutbound<T> for F
 where
     F: FnMut(T, SocketAddr, SocketAddr, Sender<((BytesMut, SocketAddr), SocketAddr)>) -> Fut,
     Fut: Future,
@@ -37,13 +51,13 @@ where
 pub async fn transfer_udp<Key, FnKey, FnOutbound>(
     socket: UdpSocket,
     config: ServerConfig,
-    fn_key: FnKey,
-    mut fn_outbound: FnOutbound,
+    f_key: FnKey,
+    mut f_outbound: FnOutbound,
 ) -> Result<(), io::Error>
 where
     Key: Copy + Eq + Hash + Send + Sync + 'static,
     FnKey: FnOnce(SocketAddr, SocketAddr) -> Key + Copy,
-    FnOutbound: for<'a> AsyncFnMut<&'a ServerConfig, Output = Result<Sender<((BytesMut, SocketAddr), SocketAddr)>, io::Error>>,
+    FnOutbound: for<'a> AsyncUdpOutbound<&'a ServerConfig, Output = Result<Sender<((BytesMut, SocketAddr), SocketAddr)>, io::Error>>,
 {
     let inbound = UdpFramed::new(socket, Socks5UdpCodec);
     let (mut sink, mut stream) = inbound.split();
@@ -56,9 +70,9 @@ where
         }
     });
     while let Some(Ok((msg, sender))) = stream.next().await {
-        let key = fn_key(sender, msg.1);
+        let key = f_key(sender, msg.1);
         if let Vacant(entry) = binding.entry(key) {
-            entry.insert(fn_outbound(&config, sender, msg.1, inbound_sink_sender.clone()).await?);
+            entry.insert(f_outbound(&config, sender, msg.1, inbound_sink_sender.clone()).await?);
             let _binding = binding.clone();
             tokio::spawn(async move {
                 time::sleep(Duration::from_secs(60)).await;
@@ -68,6 +82,37 @@ where
             });
         }
         binding.get_mut(&key).unwrap().send((msg, proxy)).await.unwrap()
+    }
+    Ok(())
+}
+
+pub async fn transfer_tcp<Fn, Fut>(listener: TcpListener, current: &ServerConfig, mut f: Fn) -> Result<(), Box<dyn error::Error>>
+where
+    Fn: FnMut(TcpStream, Socks5CommandRequest, ServerConfig) -> Fut,
+    Fut: Future<Output = Result<(), io::Error>> + Send + 'static,
+{
+    while let Ok((mut inbound, _)) = listener.accept().await {
+        let local_addr = inbound.local_addr().unwrap();
+        let response = Socks5CommandResponse::new(
+            Socks5CommandStatus::SUCCESS,
+            if local_addr.is_ipv4() { Socks5AddressType::IPV4 } else { Socks5AddressType::IPV6 },
+            local_addr.ip().to_string(),
+            local_addr.port(),
+        );
+        let handshake = ServerHandShake::no_auth(&mut inbound, response).await;
+        if let Ok(request) = handshake {
+            let request_str = request.to_string();
+            info!("Accept tcp inbound; dest={}, protocol={}", request_str, current.protocol);
+            let transfer = f(inbound, request, current.clone()).map(move |r| {
+                if let Err(e) = r {
+                    error!("Failed to transfer tcp; request={}; error={}", request_str, e);
+                }
+            });
+            tokio::spawn(transfer);
+        } else {
+            error!("Failed to handshake; error={}", handshake.unwrap_err());
+            inbound.shutdown().await?;
+        }
     }
     Ok(())
 }
