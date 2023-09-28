@@ -18,15 +18,12 @@ use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::time;
 use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
 use tokio_util::udp::UdpFramed;
-
-use crate::client::template;
 
 pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn Error>> {
     let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
@@ -44,11 +41,11 @@ pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, con
     Ok(())
 }
 
-fn get_udp_key(sender: SocketAddr, _: SocketAddr) -> SocketAddr {
+pub fn get_udp_key(sender: SocketAddr, _: SocketAddr) -> SocketAddr {
     sender
 }
 
-async fn transfer_udp_outbound(
+pub async fn transfer_udp_outbound(
     config: &ServerConfig,
     sender: SocketAddr,
     _: SocketAddr,
@@ -77,12 +74,4 @@ async fn transfer_udp_outbound(
         Ok::<(), io::Error>(())
     });
     Ok(tx.clone())
-}
-
-pub async fn transfer_udp(
-    inbound_receiver: Receiver<((BytesMut, SocketAddr), SocketAddr)>, /* client->server */
-    inbound_sender: Sender<((BytesMut, SocketAddr), SocketAddr)>,     /* server->client */
-    config: ServerConfig,
-) -> Result<(), io::Error> {
-    template::transfer_udp(inbound_receiver, inbound_sender, config, get_udp_key, transfer_udp_outbound).await
 }

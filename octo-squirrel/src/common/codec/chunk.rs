@@ -26,8 +26,7 @@ impl ChunkSizeCodec for PlainChunkSizeParser {
 
 #[cfg(test)]
 mod test {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     use rand::random;
     use rand::Rng;
@@ -40,6 +39,7 @@ mod test {
     use crate::common::codec::EmptyBytesGenerator;
     use crate::common::codec::IncreasingNonceGenerator;
     use crate::common::protocol::vmess::encoding::Auth;
+    use crate::common::protocol::vmess::session::AtomicU8Array;
 
     #[test]
     fn test_shadowsocks_aead_chunk_size_codec() {
@@ -67,12 +67,12 @@ mod test {
         let iv: [u8; 16] = random();
         let mut auth1 = Authenticator::new(
             Box::new(ChaCha20Poly1305Cipher::new(&Auth::generate_chacha20_poly1305_key(&key))),
-            Box::new(CountingNonceGenerator::new(Rc::new(RefCell::new(iv)), Aes128GcmCipher::NONCE_SIZE)),
+            Box::new(CountingNonceGenerator::new(Arc::new(AtomicU8Array::from(iv)), Aes128GcmCipher::NONCE_SIZE)),
             Box::new(EmptyBytesGenerator {}),
         );
         let mut auth2 = Authenticator::new(
             Box::new(ChaCha20Poly1305Cipher::new(&Auth::generate_chacha20_poly1305_key(&key))),
-            Box::new(CountingNonceGenerator::new(Rc::new(RefCell::new(iv)), Aes128GcmCipher::NONCE_SIZE)),
+            Box::new(CountingNonceGenerator::new(Arc::new(AtomicU8Array::from(iv)), Aes128GcmCipher::NONCE_SIZE)),
             Box::new(EmptyBytesGenerator {}),
         );
         for _ in 0..100 {
