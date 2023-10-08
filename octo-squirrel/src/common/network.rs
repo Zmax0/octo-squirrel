@@ -1,3 +1,6 @@
+use std::net::SocketAddr;
+
+use bytes::BytesMut;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -18,3 +21,5 @@ pub enum PacketEncoding {
     None,
     Packet,
 }
+
+pub type DatagramPacket = (BytesMut, SocketAddr);

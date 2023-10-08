@@ -49,19 +49,19 @@ pub trait Init {
 
 impl Init for ClientSession {
     fn init_encoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>) {
-        (self.request_body_key(), self.request_body_iv_ptr())
+        (self.request_body_key(), self.request_body_iv())
     }
     fn init_decoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>) {
-        (self.response_body_key(), self.response_body_iv_ptr())
+        (self.response_body_key(), self.response_body_iv())
     }
 }
 
 impl Init for ServerSession {
     fn init_encoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>) {
-        (self.response_body_key(), self.response_body_iv_ptr())
+        (self.response_body_key(), self.response_body_iv())
     }
     fn init_decoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>) {
-        (self.request_body_key(), self.request_body_iv_ptr())
+        (self.request_body_key(), self.request_body_iv())
     }
 }
 
@@ -76,10 +76,10 @@ pub struct AEADBodyCodec;
 impl AEADBodyCodec {
     pub fn encoder(header: &RequestHeader, session: &dyn SessionInit) -> Box<dyn CipherEncoder> {
         let (key, iv) = session.init_encoder();
-        let (mut size_codec, padding) = Self::default_option(&header.option, &iv.load::<16>());
+        let (mut size_codec, padding) = Self::default_option(&header.option, &iv.load());
         let security = header.security;
         if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
-            size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv_ptr());
+            size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv());
         }
         if security == SecurityType::CHACHA20_POLY1305 {
             Box::new(CipherEncoderImpl::new(
@@ -95,10 +95,10 @@ impl AEADBodyCodec {
 
     pub fn decoder(header: &RequestHeader, session: &dyn SessionInit) -> Box<dyn CipherDecoder> {
         let (key, iv) = session.init_decoder();
-        let (mut size_codec, padding) = Self::default_option(&header.option, &iv.load::<16>());
+        let (mut size_codec, padding) = Self::default_option(&header.option, &iv.load());
         let security = header.security;
         if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
-            size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv_ptr());
+            size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv());
         }
         if security == SecurityType::CHACHA20_POLY1305 {
             Box::new(CipherDecoderImpl::new(

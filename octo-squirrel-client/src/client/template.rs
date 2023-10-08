@@ -16,6 +16,7 @@ use futures::StreamExt;
 use log::debug;
 use log::error;
 use log::info;
+use octo_squirrel::common::network::DatagramPacket;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::handshake::ServerHandShake;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
@@ -32,16 +33,14 @@ use tokio::sync::mpsc::Sender;
 use tokio::time;
 use tokio_util::udp::UdpFramed;
 
-pub trait AsyncUdpOutbound<T>:
-    FnMut(T, SocketAddr, SocketAddr, Sender<((BytesMut, SocketAddr), SocketAddr)>) -> <Self as AsyncUdpOutbound<T>>::Fut
-{
+pub trait AsyncUdpOutbound<T>: FnMut(T, SocketAddr, SocketAddr, Sender<(DatagramPacket, SocketAddr)>) -> <Self as AsyncUdpOutbound<T>>::Fut {
     type Fut: Future<Output = <Self as AsyncUdpOutbound<T>>::Output>;
     type Output;
 }
 
 impl<T, F, Fut> AsyncUdpOutbound<T> for F
 where
-    F: FnMut(T, SocketAddr, SocketAddr, Sender<((BytesMut, SocketAddr), SocketAddr)>) -> Fut,
+    F: FnMut(T, SocketAddr, SocketAddr, Sender<(DatagramPacket, SocketAddr)>) -> Fut,
     Fut: Future,
 {
     type Fut = Fut;
@@ -57,12 +56,12 @@ pub async fn transfer_udp<Key, FnKey, FnOutbound>(
 where
     Key: Copy + Eq + Hash + Send + Sync + 'static,
     FnKey: FnOnce(SocketAddr, SocketAddr) -> Key + Copy,
-    FnOutbound: for<'a> AsyncUdpOutbound<&'a ServerConfig, Output = Result<Sender<((BytesMut, SocketAddr), SocketAddr)>, io::Error>>,
+    FnOutbound: for<'a> AsyncUdpOutbound<&'a ServerConfig, Output = Result<Sender<(DatagramPacket, SocketAddr)>, io::Error>>,
 {
     let inbound = UdpFramed::new(socket, Socks5UdpCodec);
     let (mut sink, mut stream) = inbound.split();
     let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
-    let binding: Arc<DashMap<Key, Sender<((BytesMut, SocketAddr), SocketAddr)>>> = Arc::new(DashMap::new());
+    let binding: Arc<DashMap<Key, Sender<(DatagramPacket, SocketAddr)>>> = Arc::new(DashMap::new());
     let (inbound_sink_sender, mut inbound_sink_receiver) = mpsc::channel::<((BytesMut, SocketAddr), SocketAddr)>(32);
     tokio::spawn(async move {
         while let Some(msg) = inbound_sink_receiver.recv().await {

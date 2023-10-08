@@ -13,11 +13,9 @@ use sha2::Digest;
 use sha2::Sha256;
 
 pub trait Session {
-    fn request_body_iv(&self) -> [u8; 16];
-    fn request_body_iv_ptr(&self) -> Arc<AtomicU8Array<16>>;
+    fn request_body_iv(&self) -> Arc<AtomicU8Array<16>>;
     fn request_body_key(&self) -> &[u8];
-    fn response_body_iv(&self) -> [u8; 16];
-    fn response_body_iv_ptr(&self) -> Arc<AtomicU8Array<16>>;
+    fn response_body_iv(&self) -> Arc<AtomicU8Array<16>>;
     fn response_body_key(&self) -> &[u8];
     fn response_header(&self) -> u8;
 }
@@ -55,11 +53,7 @@ macro_rules! session_impl {
         }
 
         impl Session for $name {
-            fn request_body_iv(&self) -> [u8; 16] {
-                self.request_body_iv.load::<16>()
-            }
-
-            fn request_body_iv_ptr(&self) -> Arc<AtomicU8Array<16>> {
+            fn request_body_iv(&self) -> Arc<AtomicU8Array<16>> {
                 self.request_body_iv.clone()
             }
 
@@ -67,11 +61,7 @@ macro_rules! session_impl {
                 &self.request_body_key
             }
 
-            fn response_body_iv(&self) -> [u8; 16] {
-                self.response_body_iv.load::<16>()
-            }
-
-            fn response_body_iv_ptr(&self) -> Arc<AtomicU8Array<16>> {
+            fn response_body_iv(&self) -> Arc<AtomicU8Array<16>> {
                 self.response_body_iv.clone()
             }
 
@@ -90,9 +80,9 @@ macro_rules! session_impl {
                     f,
                     "[REQ: {}, {}; RESP: {}, {}, {}]",
                     base64ct::Base64::encode_string(&self.request_body_key),
-                    base64ct::Base64::encode_string(&self.request_body_iv()),
+                    base64ct::Base64::encode_string(&self.request_body_iv().load()),
                     base64ct::Base64::encode_string(&self.response_body_key),
-                    base64ct::Base64::encode_string(&self.response_body_iv()),
+                    base64ct::Base64::encode_string(&self.response_body_iv().load()),
                     self.response_header()
                 )
             }
@@ -154,12 +144,20 @@ impl<const LEN: usize> AtomicU8Array<LEN> {
         Self { buf }
     }
 
-    pub fn load<const OFFSET: usize>(&self) -> [u8; OFFSET] {
-        let mut res = [0; OFFSET];
-        for i in 0..OFFSET {
+    pub fn len(&self) -> usize {
+        LEN
+    }
+
+    fn load_to<const N: usize>(&self) -> [u8; N] {
+        let mut res = [0; N];
+        for i in 0..N.min(LEN) {
             res[i] = self.buf[i].load(Acquire);
         }
         res
+    }
+
+    pub fn load(&self) -> [u8; LEN] {
+        self.load_to()
     }
 
     pub fn store(&self, value: &[u8]) {
@@ -172,7 +170,7 @@ impl<const LEN: usize> AtomicU8Array<LEN> {
     where
         F: FnMut(&mut [u8]),
     {
-        let mut value: [u8; OFFSET] = self.load();
+        let mut value: [u8; OFFSET] = self.load_to();
         f(&mut value);
         for i in 0..value.len() {
             self.buf[i].fetch_update(Release, Acquire, |_| Some(value[i])).unwrap();
@@ -191,7 +189,7 @@ impl<const LEN: usize> From<[u8; LEN]> for AtomicU8Array<LEN> {
 
 impl<const LEN: usize> Debug for AtomicU8Array<LEN> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.load::<LEN>())
+        write!(f, "{:?}", self.load())
     }
 }
 
@@ -202,22 +200,21 @@ mod test {
     use crate::common::protocol::vmess::session::Session;
 
     #[test]
-    fn test_session() {
-        let session = ClientSession::new();
-        let iv1 = session.request_body_iv_ptr();
-        let iv2 = session.request_body_iv_ptr();
-        iv1.store(&[255, 255]);
-        let vec1 = iv1.load::<16>().to_vec();
-        let vec2 = iv2.load::<16>().to_vec();
-        assert_eq!(vec1, vec2)
-    }
-
-    #[test]
     fn test_atomic_array() {
         let arr = AtomicU8Array::<16>::new();
         let count: u16 = 1;
         arr.store(&count.to_be_bytes());
-        let value: [u8; 2] = arr.load();
-        assert_eq!([0, 1], value)
+        assert_eq!([0, 1, 0, 0, 0], arr.load_to())
+    }
+
+    #[test]
+    fn test_session() {
+        let session = ClientSession::new();
+        let iv1 = session.request_body_iv();
+        let iv2 = session.request_body_iv();
+        iv1.store(&[255, 255]);
+        let vec1 = iv1.load().to_vec();
+        let vec2 = iv2.load().to_vec();
+        assert_eq!(vec1, vec2)
     }
 }

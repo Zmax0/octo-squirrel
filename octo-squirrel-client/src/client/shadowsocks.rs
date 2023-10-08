@@ -11,7 +11,8 @@ use log::debug;
 use octo_squirrel::common::codec::shadowsocks::AEADCipherCodec;
 use octo_squirrel::common::codec::shadowsocks::AddressCodec;
 use octo_squirrel::common::codec::shadowsocks::DatagramPacketCodec;
-use octo_squirrel::common::protocol::network::Network;
+use octo_squirrel::common::network::DatagramPacket;
+use octo_squirrel::common::network::Network;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpStream;
@@ -48,12 +49,12 @@ pub async fn transfer_udp_outbound(
     config: &ServerConfig,
     sender: SocketAddr,
     _: SocketAddr,
-    callback: Sender<((BytesMut, SocketAddr), SocketAddr)>,
-) -> Result<Sender<((BytesMut, SocketAddr), SocketAddr)>, io::Error> {
+    callback: Sender<(DatagramPacket, SocketAddr)>,
+) -> Result<Sender<(DatagramPacket, SocketAddr)>, io::Error> {
     let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
     let outbound_local_addr = outbound.local_addr()?;
     let outbound = UdpFramed::new(outbound, DatagramPacketCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes(), Network::UDP)));
-    let (tx, mut rx) = mpsc::channel::<((BytesMut, SocketAddr), SocketAddr)>(32);
+    let (tx, mut rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
     let (mut outbound_sink, mut outbound_stream) = outbound.split();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {

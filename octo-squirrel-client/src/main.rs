@@ -4,7 +4,7 @@ use std::net::Ipv4Addr;
 use std::net::SocketAddrV4;
 
 use log::info;
-use octo_squirrel::common::protocol::network::Network;
+use octo_squirrel::common::network::Network;
 use octo_squirrel::common::protocol::Protocols;
 use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpListener;
@@ -46,12 +46,8 @@ async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(
 
 async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<(), io::Error> {
     match current.protocol {
-        Protocols::Shadowsocks => {
-            template::transfer_udp(socket, current, shadowsocks::get_udp_key, shadowsocks::transfer_udp_outbound).await?;
-        }
-        Protocols::VMess => {
-            template::transfer_udp(socket, current, vmess::get_udp_key, vmess::transfer_udp_outbound).await?;
-        }
+        Protocols::Shadowsocks => template::transfer_udp(socket, current, shadowsocks::get_udp_key, shadowsocks::transfer_udp_outbound).await?,
+        Protocols::VMess => template::transfer_udp(socket, current, vmess::get_udp_key, vmess::transfer_udp_outbound).await?,
     }
     Ok(())
 }

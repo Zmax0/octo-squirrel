@@ -57,7 +57,7 @@ impl BytesGenerator for CountingNonceGenerator {
 
 impl Display for CountingNonceGenerator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "count={}, nonce={:?}", self.count, self.nonce.load::<16>())
+        write!(f, "count={}, nonce={:?}", self.count, self.nonce.load())
     }
 }
 
@@ -134,6 +134,6 @@ mod test {
             generated = generator.generate();
         }
         assert_eq!("//8AAAAAAAAAAAAA", base64ct::Base64::encode_string(&generated[..]));
-        assert_eq!("//8AAAAAAAAAAAAAAAAAAA==", base64ct::Base64::encode_string(&nonce.load::<16>()));
+        assert_eq!("//8AAAAAAAAAAAAAAAAAAA==", base64ct::Base64::encode_string(&nonce.load()));
     }
 }
