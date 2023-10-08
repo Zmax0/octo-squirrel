@@ -1,3 +1,3 @@
 pub(super) mod shadowsocks;
-pub(super) mod transfer;
+pub(super) mod template;
 pub(super) mod vmess;

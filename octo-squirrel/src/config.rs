@@ -7,8 +7,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::common::codec::aead::SupportedCipher;
-use crate::common::protocol::network::Network;
-use crate::common::protocol::network::PacketEncoding;
+use crate::common::network::Network;
+use crate::common::network::PacketEncoding;
 use crate::common::protocol::Protocols;
 use crate::log::Logger;
 
@@ -43,8 +43,11 @@ impl ClientConfig {
 }
 
 pub fn init() -> Result<ClientConfig, io::Error> {
-    let path = args().nth(1).expect("None path of config in start command args.");
-    let file = File::open(path)?;
+    let path = args().nth(1).unwrap_or("config.json".to_owned());
+    let file = File::open(&path).expect(
+        format!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg or put the file (named 'config.json') into the same folder", &path)
+            .as_str(),
+    );
     let config: ClientConfig = serde_json::from_reader(BufReader::new(file))?;
     Ok(config)
 }
@@ -57,8 +60,8 @@ mod test {
     use serde_json::json;
 
     use crate::common::codec::aead::SupportedCipher;
-    use crate::common::protocol::network::Network;
-    use crate::common::protocol::network::PacketEncoding;
+    use crate::common::network::Network;
+    use crate::common::network::PacketEncoding;
     use crate::common::protocol::Protocols;
     use crate::config::ClientConfig;
 

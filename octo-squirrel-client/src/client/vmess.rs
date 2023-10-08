@@ -1,18 +1,13 @@
-use std::error;
 use std::io;
 use std::io::Cursor;
 use std::io::ErrorKind;
 use std::mem::size_of;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::net::ToSocketAddrs;
 
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
-use dashmap::mapref::entry::Entry::Vacant;
-use dashmap::DashMap;
-use futures::stream::SplitSink;
-use futures::stream::SplitStream;
 use futures::SinkExt;
 use futures::StreamExt;
 use log::debug;
@@ -23,7 +18,7 @@ use octo_squirrel::common::codec::aead::CipherDecoder;
 use octo_squirrel::common::codec::aead::CipherEncoder;
 use octo_squirrel::common::codec::aead::SupportedCipher;
 use octo_squirrel::common::codec::vmess::AEADBodyCodec;
-use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
+use octo_squirrel::common::network::DatagramPacket;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::common::protocol::socks5::Socks5CommandType;
 use octo_squirrel::common::protocol::vmess::aead::*;
@@ -40,16 +35,14 @@ use octo_squirrel::common::util::FNV;
 use octo_squirrel::config::ServerConfig;
 use rand::Rng;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
-use tokio_util::udp::UdpFramed;
 
-use crate::client::transfer;
-
-struct ClientAEADCodec {
+pub struct ClientAEADCodec {
     header: RequestHeader,
     session: ClientSession,
     body_encoder: Option<Box<dyn CipherEncoder>>,
@@ -71,7 +64,7 @@ impl Encoder<BytesMut> for ClientAEADCodec {
         if let None = self.body_encoder {
             let mut buffer = BytesMut::new();
             buffer.put_u8(VERSION);
-            buffer.put_slice(&self.session.request_body_iv().lock().unwrap());
+            buffer.put_slice(&self.session.request_body_iv().load());
             buffer.put_slice(self.session.request_body_key());
             buffer.put_u8(self.session.response_header());
             buffer.put_u8(RequestOption::get_mask(&self.header.option)); // option mask
@@ -111,7 +104,7 @@ impl Decoder for ClientAEADCodec {
                 return Ok(None);
             }
             let header_length_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
-                KDF::kdfn(&self.session.response_body_iv().lock().unwrap(), vec![KDF::SALT_AEAD_RESP_HEADER_LEN_IV]);
+                KDF::kdfn(&self.session.response_body_iv().load(), vec![KDF::SALT_AEAD_RESP_HEADER_LEN_IV]);
             let mut cursor = Cursor::new(src);
             let header_length_encrypt_bytes = cursor.copy_to_bytes(size_of::<u16>() + header_length_cipher.tag_size());
             let mut header_length_bytes = [0; size_of::<u16>()];
@@ -131,7 +124,7 @@ impl Decoder for ClientAEADCodec {
             src.advance(position as usize);
             let header_cipher = Aes128GcmCipher::new(&KDF::kdf16(self.session.response_body_key(), vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]));
             let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
-                KDF::kdfn(&self.session.response_body_iv().lock().unwrap(), vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
+                KDF::kdfn(&self.session.response_body_iv().load(), vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
             let header_encrypt_bytes = src.split_to(header_length + header_length_cipher.tag_size());
             let header_bytes = header_cipher.decrypt(&header_iv, &header_encrypt_bytes, b"");
             if self.session.response_header() != header_bytes[0] {
@@ -148,7 +141,7 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), Box<dyn error::Error>> {
+pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), io::Error> {
     let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
     let header = RequestHeader::default(RequestCommand::TCP, security, request, config.password);
     let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
@@ -162,37 +155,37 @@ pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, con
     Ok(())
 }
 
-pub async fn transfer_udp(
-    mut inbound_stream: SplitStream<UdpFramed<Socks5UdpCodec>>,
-    inbound_sender: Sender<((BytesMut, SocketAddr), SocketAddr)>,
-    config: ServerConfig,
-) -> Result<(), io::Error> {
-    let binding: Arc<DashMap<(SocketAddr, SocketAddr), SplitSink<Framed<TcpStream, ClientAEADCodec>, BytesMut>>> = Arc::new(DashMap::new());
-    let proxy = format!("{}:{}", config.host, config.port);
-    while let Some(Ok(((content, recipient), sender))) = inbound_stream.next().await {
-        if let Vacant(entry) = binding.entry((sender, recipient)) {
-            let outbound = TcpStream::connect(proxy.clone()).await?;
-            let outbound_local_addr = outbound.local_addr()?;
-            debug!("New udp binding; sender={}, outbound={}", sender, outbound_local_addr);
-            let security =
-                if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
-            let request = Socks5CommandRequest::from(Socks5CommandType::CONNECT, recipient);
-            let header = RequestHeader::default(RequestCommand::UDP, security, request, config.password.clone());
-            let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
-            let (outbound_sink, mut outbound_stream) = outbound.split();
-            entry.insert(outbound_sink);
-            tokio::spawn(transfer::remove_binding((sender, recipient), binding.clone()));
-            let _writer = inbound_sender.clone();
-            tokio::spawn(async move {
-                while let Some(Ok(item)) = outbound_stream.next().await {
-                    _writer.send(((item, recipient), sender)).await.unwrap();
-                }
-                debug!("No item in outbound stream; sender={}, outbound={}", sender, outbound_local_addr);
-                Ok::<(), io::Error>(())
-            });
-        };
-        info!("Accept udp packet; sender={}, recipient={}, server={}", sender, recipient, proxy);
-        binding.get_mut(&(sender, recipient)).unwrap().send(content).await?
-    }
-    Ok(())
+pub fn get_udp_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
+    (sender, recipient)
+}
+
+pub async fn transfer_udp_outbound(
+    config: &ServerConfig,
+    sender: SocketAddr,
+    recipient: SocketAddr,
+    callback: Sender<(DatagramPacket, SocketAddr)>,
+) -> Result<Sender<(DatagramPacket, SocketAddr)>, io::Error> {
+    let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
+    let outbound = TcpStream::connect(proxy.clone()).await?;
+    let outbound_local_addr = outbound.local_addr()?;
+    debug!("New udp binding; sender={}, outbound={}", sender, outbound_local_addr);
+    let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
+    let request = Socks5CommandRequest::from(Socks5CommandType::CONNECT, recipient);
+    let header = RequestHeader::default(RequestCommand::UDP, security, request, config.password.clone());
+    let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
+    let (mut outbound_sink, mut outbound_stream) = outbound.split();
+    let (tx, mut rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
+    tokio::spawn(async move {
+        while let Some(((content, _), _)) = rx.recv().await {
+            outbound_sink.send(content).await.unwrap()
+        }
+    });
+    tokio::spawn(async move {
+        while let Some(Ok(content)) = outbound_stream.next().await {
+            callback.send(((content, recipient), sender)).await.unwrap();
+        }
+        debug!("No item in outbound stream; sender={}, outbound={}", sender, outbound_local_addr);
+        Ok::<(), io::Error>(())
+    });
+    Ok(tx.clone())
 }

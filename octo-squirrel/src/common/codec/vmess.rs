@@ -1,7 +1,6 @@
 use std::io;
 use std::mem::size_of;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use base64ct::Base64;
 use base64ct::Encoding;
@@ -36,6 +35,7 @@ use crate::common::protocol::vmess::encoding::Auth;
 use crate::common::protocol::vmess::header::RequestHeader;
 use crate::common::protocol::vmess::header::RequestOption;
 use crate::common::protocol::vmess::header::SecurityType;
+use crate::common::protocol::vmess::session::AtomicU8Array;
 use crate::common::protocol::vmess::session::ClientSession;
 use crate::common::protocol::vmess::session::ServerSession;
 use crate::common::protocol::vmess::session::Session;
@@ -43,24 +43,24 @@ use crate::common::protocol::vmess::session::Session;
 const AUTH_LEN: &[u8] = b"auth_len";
 
 pub trait Init {
-    fn init_encoder(&self) -> (&[u8], Arc<Mutex<[u8]>>);
-    fn init_decoder(&self) -> (&[u8], Arc<Mutex<[u8]>>);
+    fn init_encoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>);
+    fn init_decoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>);
 }
 
 impl Init for ClientSession {
-    fn init_encoder(&self) -> (&[u8], Arc<Mutex<[u8]>>) {
+    fn init_encoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>) {
         (self.request_body_key(), self.request_body_iv())
     }
-    fn init_decoder(&self) -> (&[u8], Arc<Mutex<[u8]>>) {
+    fn init_decoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>) {
         (self.response_body_key(), self.response_body_iv())
     }
 }
 
 impl Init for ServerSession {
-    fn init_encoder(&self) -> (&[u8], Arc<Mutex<[u8]>>) {
+    fn init_encoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>) {
         (self.response_body_key(), self.response_body_iv())
     }
-    fn init_decoder(&self) -> (&[u8], Arc<Mutex<[u8]>>) {
+    fn init_decoder(&self) -> (&[u8], Arc<AtomicU8Array<16>>) {
         (self.request_body_key(), self.request_body_iv())
     }
 }
@@ -76,7 +76,7 @@ pub struct AEADBodyCodec;
 impl AEADBodyCodec {
     pub fn encoder(header: &RequestHeader, session: &dyn SessionInit) -> Box<dyn CipherEncoder> {
         let (key, iv) = session.init_encoder();
-        let (mut size_codec, padding) = Self::default_option(&header.option, &iv.lock().unwrap());
+        let (mut size_codec, padding) = Self::default_option(&header.option, &iv.load());
         let security = header.security;
         if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
             size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv());
@@ -95,7 +95,7 @@ impl AEADBodyCodec {
 
     pub fn decoder(header: &RequestHeader, session: &dyn SessionInit) -> Box<dyn CipherDecoder> {
         let (key, iv) = session.init_decoder();
-        let (mut size_codec, padding) = Self::default_option(&header.option, &iv.lock().unwrap());
+        let (mut size_codec, padding) = Self::default_option(&header.option, &iv.load());
         let security = header.security;
         if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
             size_codec = Self::new_aead_chunk_size_parser(security, session.request_body_key(), session.request_body_iv());
@@ -111,7 +111,7 @@ impl AEADBodyCodec {
         }
     }
 
-    fn new_aead_chunk_size_parser(security: SecurityType, key: &[u8], nonce: Arc<Mutex<[u8]>>) -> Box<dyn ChunkSizeCodec> {
+    fn new_aead_chunk_size_parser(security: SecurityType, key: &[u8], nonce: Arc<AtomicU8Array<16>>) -> Box<dyn ChunkSizeCodec> {
         let key = &KDF::kdf16(key, vec![AUTH_LEN]);
         let cipher;
         if security == SecurityType::CHACHA20_POLY1305 {
@@ -130,7 +130,7 @@ impl AEADBodyCodec {
         }
     }
 
-    fn new_auth(cipher: Box<dyn Cipher>, nonce: Arc<Mutex<[u8]>>) -> Authenticator {
+    fn new_auth(cipher: Box<dyn Cipher>, nonce: Arc<AtomicU8Array<16>>) -> Authenticator {
         let nonce_size = cipher.nonce_size();
         Authenticator::new(cipher, Box::new(CountingNonceGenerator::new(nonce, nonce_size)), Box::new(EmptyBytesGenerator))
     }
@@ -203,6 +203,15 @@ impl CipherDecoderImpl {
 }
 
 impl CipherDecoder for CipherDecoderImpl {
+    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
+        let padding_length = self.padding.next_padding_length();
+        let packet_length = self.size_codec.decode_size(&src.split_to(self.size_codec.size_bytes())) - padding_length;
+        let packet_sealed_bytes = src.split_to(packet_length);
+        let packet_bytes = self.auth.open(&packet_sealed_bytes);
+        src.advance(padding_length);
+        Ok(Some(BytesMut::from(&packet_bytes[..])))
+    }
+
     fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
         let size_bytes = self.size_codec.size_bytes();
         let mut dst = Vec::new();
@@ -232,21 +241,12 @@ impl CipherDecoder for CipherDecoderImpl {
             Ok(Some(BytesMut::from(&dst[..])))
         }
     }
-
-    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
-        let padding_length = self.padding.next_padding_length();
-        let packet_length = self.size_codec.decode_size(&src.split_to(self.size_codec.size_bytes())) - padding_length;
-        let packet_sealed_bytes = src.split_to(packet_length);
-        let packet_bytes = self.auth.open(&packet_sealed_bytes);
-        src.advance(padding_length);
-        Ok(Some(BytesMut::from(&packet_bytes[..])))
-    }
 }
 
 #[derive(Clone)]
 pub struct ShakeSizeParser {
     reader: XofReaderCoreWrapper<Shake128ReaderCore>,
-    buffer: Arc<Mutex<[u8; size_of::<u16>()]>>,
+    buffer: Arc<AtomicU8Array<2>>,
 }
 
 impl ShakeSizeParser {
@@ -256,13 +256,12 @@ impl ShakeSizeParser {
         }
         let mut hasher = Shake128::default();
         hasher.update(nonce);
-        Self { reader: hasher.finalize_xof(), buffer: Arc::new(Mutex::new([0; size_of::<u16>()])) }
+        Self { reader: hasher.finalize_xof(), buffer: Arc::new(AtomicU8Array::new()) }
     }
 
     fn next(&mut self) -> u16 {
-        let mut buffer = self.buffer.lock().unwrap();
-        self.reader.read(&mut *buffer);
-        u16::from_be_bytes(*buffer)
+        let temp: [u8; size_of::<u16>()] = self.buffer.update(|x| self.reader.read(x));
+        u16::from_be_bytes(temp)
     }
 }
 

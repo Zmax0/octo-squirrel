@@ -19,7 +19,8 @@ use super::aead::SupportedCipher;
 use super::chunk::ChunkSizeCodec;
 use super::EmptyBytesGenerator;
 use super::IncreasingNonceGenerator;
-use crate::common::protocol::network::Network;
+use crate::common::network::DatagramPacket;
+use crate::common::network::Network;
 use crate::common::protocol::socks5::address::Address;
 use crate::common::protocol::socks5::message::Socks5CommandRequest;
 use crate::common::protocol::socks5::Socks5AddressType;
@@ -273,7 +274,7 @@ impl DatagramPacketCodec {
     }
 }
 
-impl Encoder<(BytesMut, SocketAddr)> for DatagramPacketCodec {
+impl Encoder<DatagramPacket> for DatagramPacketCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: (BytesMut, SocketAddr), dst: &mut BytesMut) -> Result<(), Self::Error> {
@@ -285,7 +286,7 @@ impl Encoder<(BytesMut, SocketAddr)> for DatagramPacketCodec {
 }
 
 impl Decoder for DatagramPacketCodec {
-    type Item = (BytesMut, SocketAddr);
+    type Item = DatagramPacket;
 
     type Error = io::Error;
 
@@ -316,7 +317,7 @@ mod test {
     use crate::common::codec::aead::SupportedCipher;
     use crate::common::codec::shadowsocks::AEADCipherCodec;
     use crate::common::codec::shadowsocks::DatagramPacketCodec;
-    use crate::common::protocol::network::Network;
+    use crate::common::network::Network;
 
     #[test]
     fn test_generate_key() {
