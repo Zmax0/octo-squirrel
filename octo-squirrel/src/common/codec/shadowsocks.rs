@@ -1,4 +1,5 @@
 use std::io;
+use std::mem::size_of;
 use std::net::SocketAddr;
 
 use bytes::Buf;
@@ -12,12 +13,8 @@ use sha1::Sha1;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::aead::Authenticator;
-use super::aead::CipherDecoder;
-use super::aead::CipherEncoder;
+use super::aead::Cipher;
 use super::aead::SupportedCipher;
-use super::chunk::ChunkSizeCodec;
-use super::EmptyBytesGenerator;
 use super::IncreasingNonceGenerator;
 use crate::common::network::DatagramPacket;
 use crate::common::network::Network;
@@ -60,28 +57,28 @@ impl Decoder for AddressCodec {
     }
 }
 
-struct CipherEncoderImpl {
+struct CipherEncoder {
     payload_limit: usize,
     auth: Authenticator,
 }
 
-impl CipherEncoderImpl {
+impl CipherEncoder {
     pub fn new(payload_limit: usize, auth: Authenticator) -> Self {
         Self { payload_limit, auth }
     }
 
     fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
-        let overhead = self.auth.overhead();
-        let encrypted_size = src.remaining().min(self.payload_limit - overhead - self.auth.size_bytes());
+        let tag_size = self.auth.cipher.tag_size();
+        let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.auth.size_bytes());
         trace!("Encode payload; payload length={}", encrypted_size);
-        let encrypted_size_bytes = self.auth.encode_size(encrypted_size + overhead);
+        let encrypted_size_bytes = self.auth.encode_size(encrypted_size + tag_size);
         dst.put_slice(&encrypted_size_bytes);
         let payload_bytes = src.split_to(encrypted_size);
         dst.put_slice(&self.auth.seal(&payload_bytes));
     }
 }
 
-impl CipherEncoder for CipherEncoderImpl {
+impl CipherEncoder {
     fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
         while src.has_remaining() {
             self.seal(&mut src, dst);
@@ -93,18 +90,54 @@ impl CipherEncoder for CipherEncoderImpl {
     }
 }
 
-struct CipherDecoderImpl {
+struct Authenticator {
+    cipher: Box<dyn Cipher>,
+    increasing: IncreasingNonceGenerator,
+}
+
+impl Authenticator {
+    fn new(cipher: Box<dyn Cipher>, increasing: IncreasingNonceGenerator) -> Self {
+        Self { cipher, increasing }
+    }
+
+    fn size_bytes(&self) -> usize {
+        size_of::<u16>() + self.cipher.tag_size()
+    }
+
+    fn encode_size(&mut self, size: usize) -> Vec<u8> {
+        let bytes = ((size - self.cipher.tag_size()) as u16).to_be_bytes();
+        let sealed = self.seal(&bytes);
+        sealed
+    }
+
+    fn decode_size(&mut self, data: &[u8]) -> usize {
+        let mut opened: [u8; size_of::<u16>()] = [0; size_of::<u16>()];
+        opened.copy_from_slice(&self.open(data));
+        let size = u16::from_be_bytes(opened);
+        size as usize + self.cipher.tag_size()
+    }
+
+    fn seal(&mut self, plaintext: &[u8]) -> Vec<u8> {
+        self.cipher.encrypt(&self.increasing.generate(), plaintext, &[])
+    }
+
+    fn open(&mut self, ciphertext: &[u8]) -> Vec<u8> {
+        self.cipher.decrypt(&self.increasing.generate(), ciphertext, &[])
+    }
+}
+
+struct CipherDecoder {
     payload_length: Option<usize>,
     auth: Authenticator,
 }
 
-impl CipherDecoderImpl {
+impl CipherDecoder {
     pub fn new(auth: Authenticator) -> Self {
         Self { payload_length: None, auth }
     }
 }
 
-impl CipherDecoder for CipherDecoderImpl {
+impl CipherDecoder {
     fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
         let opened = self.auth.open(&src.split_off(0));
         Ok(Some(BytesMut::from(&opened[..])))
@@ -137,8 +170,8 @@ pub struct AEADCipherCodec {
     cipher: SupportedCipher,
     key: Vec<u8>,
     network: Network,
-    encoder: Option<Box<dyn CipherEncoder>>,
-    decoder: Option<Box<dyn CipherDecoder>>,
+    encoder: Option<CipherEncoder>,
+    decoder: Option<CipherDecoder>,
 }
 
 impl AEADCipherCodec {
@@ -188,24 +221,20 @@ impl AEADCipherCodec {
         okm.to_vec()
     }
 
-    fn new_encoder(&mut self, salt: &[u8]) -> Box<dyn CipherEncoder> {
+    fn new_encoder(&mut self, salt: &[u8]) -> CipherEncoder {
         let key = AEADCipherCodec::hkdfsha1(&self.key, salt);
         let auth = self.new_auth(&key);
-        Box::new(CipherEncoderImpl::new(0xffff, auth))
+        CipherEncoder::new(0xffff, auth)
     }
 
-    fn new_decoder(&mut self, salt: &[u8]) -> Box<dyn CipherDecoder> {
+    fn new_decoder(&mut self, salt: &[u8]) -> CipherDecoder {
         let key = AEADCipherCodec::hkdfsha1(&self.key, salt);
         let auth = self.new_auth(&key);
-        Box::new(CipherDecoderImpl::new(auth))
+        CipherDecoder::new(auth)
     }
 
     fn new_auth(&mut self, key: &Vec<u8>) -> Authenticator {
-        Authenticator::new(
-            self.cipher.to_aead_cipher(&key),
-            Box::new(IncreasingNonceGenerator::generate_initial_aead_nonce()),
-            Box::new(EmptyBytesGenerator {}),
-        )
+        Authenticator::new(self.cipher.to_aead_cipher(&key), IncreasingNonceGenerator::generate_initial_aead_nonce())
     }
 }
 

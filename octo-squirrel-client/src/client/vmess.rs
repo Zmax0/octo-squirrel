@@ -14,8 +14,6 @@ use log::debug;
 use log::info;
 use octo_squirrel::common::codec::aead::Aes128GcmCipher;
 use octo_squirrel::common::codec::aead::Cipher;
-use octo_squirrel::common::codec::aead::CipherDecoder;
-use octo_squirrel::common::codec::aead::CipherEncoder;
 use octo_squirrel::common::codec::aead::SupportedCipher;
 use octo_squirrel::common::codec::vmess::AEADBodyCodec;
 use octo_squirrel::common::network::DatagramPacket;
@@ -27,7 +25,6 @@ use octo_squirrel::common::protocol::vmess::header::RequestHeader;
 use octo_squirrel::common::protocol::vmess::header::RequestOption;
 use octo_squirrel::common::protocol::vmess::header::SecurityType;
 use octo_squirrel::common::protocol::vmess::session::ClientSession;
-use octo_squirrel::common::protocol::vmess::session::Session;
 use octo_squirrel::common::protocol::vmess::Address;
 use octo_squirrel::common::protocol::vmess::VERSION;
 use octo_squirrel::common::util::Dice;
@@ -45,8 +42,8 @@ use tokio_util::codec::Framed;
 pub struct ClientAEADCodec {
     header: RequestHeader,
     session: ClientSession,
-    body_encoder: Option<Box<dyn CipherEncoder>>,
-    body_decoder: Option<Box<dyn CipherDecoder>>,
+    body_encoder: Option<AEADBodyCodec>,
+    body_decoder: Option<AEADBodyCodec>,
 }
 
 impl ClientAEADCodec {
@@ -64,9 +61,9 @@ impl Encoder<BytesMut> for ClientAEADCodec {
         if let None = self.body_encoder {
             let mut buffer = BytesMut::new();
             buffer.put_u8(VERSION);
-            buffer.put_slice(&self.session.request_body_iv().load());
-            buffer.put_slice(self.session.request_body_key());
-            buffer.put_u8(self.session.response_header());
+            buffer.put_slice(&self.session.request_body_iv);
+            buffer.put_slice(&self.session.request_body_key);
+            buffer.put_u8(self.session.response_header);
             buffer.put_u8(RequestOption::get_mask(&self.header.option)); // option mask
             let padding_len = rand::thread_rng().gen_range(0..16); // dice roll 16
             let security = self.header.security;
@@ -78,12 +75,12 @@ impl Encoder<BytesMut> for ClientAEADCodec {
             buffer.put_u32(FNV::fnv1a32(&buffer));
             let header_bytes = Encrypt::seal_header(&self.header.id, &buffer);
             dst.put_slice(&header_bytes);
-            self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &self.session));
+            self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &mut self.session));
         }
         if self.header.command == RequestCommand::UDP {
-            self.body_encoder.as_mut().unwrap().encode_packet(item, dst);
+            self.body_encoder.as_mut().unwrap().encode_packet(item, dst, &mut self.session);
         } else {
-            self.body_encoder.as_mut().unwrap().encode_payload(item, dst);
+            self.body_encoder.as_mut().unwrap().encode_payload(item, dst, &mut self.session);
         }
         Ok(())
     }
@@ -99,12 +96,12 @@ impl Decoder for ClientAEADCodec {
             return Ok(None);
         }
         if let None = self.body_decoder {
-            let header_length_cipher = Aes128GcmCipher::new(&KDF::kdf16(self.session.response_body_key(), vec![KDF::SALT_AEAD_RESP_HEADER_LEN_KEY]));
+            let header_length_cipher = Aes128GcmCipher::new(&KDF::kdf16(&self.session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_LEN_KEY]));
             if src.remaining() < size_of::<u16>() + header_length_cipher.tag_size() {
                 return Ok(None);
             }
             let header_length_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
-                KDF::kdfn(&self.session.response_body_iv().load(), vec![KDF::SALT_AEAD_RESP_HEADER_LEN_IV]);
+                KDF::kdfn(&self.session.response_body_iv, vec![KDF::SALT_AEAD_RESP_HEADER_LEN_IV]);
             let mut cursor = Cursor::new(src);
             let header_length_encrypt_bytes = cursor.copy_to_bytes(size_of::<u16>() + header_length_cipher.tag_size());
             let mut header_length_bytes = [0; size_of::<u16>()];
@@ -122,21 +119,20 @@ impl Decoder for ClientAEADCodec {
             let position = cursor.position();
             src = cursor.into_inner();
             src.advance(position as usize);
-            let header_cipher = Aes128GcmCipher::new(&KDF::kdf16(self.session.response_body_key(), vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]));
-            let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
-                KDF::kdfn(&self.session.response_body_iv().load(), vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
+            let header_cipher = Aes128GcmCipher::new(&KDF::kdf16(&self.session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]));
+            let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(&self.session.response_body_iv, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
             let header_encrypt_bytes = src.split_to(header_length + header_length_cipher.tag_size());
             let header_bytes = header_cipher.decrypt(&header_iv, &header_encrypt_bytes, b"");
-            if self.session.response_header() != header_bytes[0] {
-                let error = format!("Unexpected response header: expecting {} but actually {}", self.session.response_header(), header_bytes[0]);
+            if self.session.response_header != header_bytes[0] {
+                let error = format!("Unexpected response header: expecting {} but actually {}", self.session.response_header, header_bytes[0]);
                 return Err(io::Error::new(ErrorKind::InvalidData, error));
             }
-            self.body_decoder = Some(AEADBodyCodec::decoder(&self.header, &self.session));
+            self.body_decoder = Some(AEADBodyCodec::decoder(&self.header, &mut self.session));
         }
         return if self.header.command == RequestCommand::UDP {
-            self.body_decoder.as_mut().unwrap().decode_packet(src)
+            self.body_decoder.as_mut().unwrap().decode_packet(src, &mut self.session)
         } else {
-            self.body_decoder.as_mut().unwrap().decode_payload(src)
+            self.body_decoder.as_mut().unwrap().decode_payload(src, &mut self.session)
         };
     }
 }
