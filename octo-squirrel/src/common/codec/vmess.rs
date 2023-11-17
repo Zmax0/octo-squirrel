@@ -1,6 +1,7 @@
 use std::io;
 use std::mem::size_of;
 
+use aead::Buffer;
 use base64ct::Base64;
 use base64ct::Encoding;
 use bytes::Buf;
@@ -92,7 +93,7 @@ impl AEADBodyCodec {
         }
     }
 
-    fn encode_message(&mut self, src: &mut BytesMut, dst: &mut BytesMut, session: &mut dyn Session) {
+    fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut, session: &mut dyn Session) {
         let padding_length = self.next_padding_length();
         trace!("Encode payload; padding length={}", padding_length);
         let tag_size = self.auth.cipher.tag_size();
@@ -100,8 +101,9 @@ impl AEADBodyCodec {
         trace!("Encode payload; payload length={}", encrypted_size - tag_size);
         let encrypted_size_bytes = self.encode_size(encrypted_size + padding_length + tag_size, session.chunk_nonce());
         dst.put_slice(&encrypted_size_bytes);
-        let payload_bytes = src.split_to(encrypted_size);
-        dst.put_slice(&self.auth.seal(&payload_bytes, session.encoder_nonce()));
+        let mut payload_bytes = src.split_to(encrypted_size);
+        self.auth.seal(&mut payload_bytes, session.encoder_nonce());
+        dst.put(payload_bytes);
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
         rand::thread_rng().fill(&mut padding_bytes[..]);
         dst.put(&padding_bytes[..]);
@@ -130,31 +132,23 @@ impl AEADBodyCodec {
         }
     }
 
-    fn decode_size(&mut self, data: &BytesMut, nonce: &mut [u8]) -> usize {
-        match self.chunk {
-            ChunkSizeParser::Plain(ref mut parser) => parser.decode_size(data),
-            ChunkSizeParser::Auth(ref mut parser) => parser.decode_size(data, nonce),
-            ChunkSizeParser::Shake => self.shake.as_mut().unwrap().decode_size(data),
-        }
-    }
-
     pub fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) {
         while src.has_remaining() {
-            self.encode_message(&mut src, dst, session);
+            self.encode_chunk(&mut src, dst, session);
         }
     }
 
     pub fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) {
-        self.encode_message(&mut src, dst, session);
+        self.encode_chunk(&mut src, dst, session);
     }
 
     pub fn decode_packet(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, io::Error> {
         let padding_length = self.next_padding_length();
-        let packet_length = self.decode_size(&src.split_to(self.size_bytes()), session.chunk_nonce()) - padding_length;
-        let packet_sealed_bytes = src.split_to(packet_length);
-        let packet_bytes = self.auth.open(&packet_sealed_bytes, session.decoder_nonce());
+        let packet_length = self.decode_size(&mut src.split_to(self.size_bytes()), session.chunk_nonce()) - padding_length;
+        let mut packet_bytes = src.split_to(packet_length);
+        self.auth.open(&mut packet_bytes, session.decoder_nonce());
         src.advance(padding_length);
-        Ok(Some(BytesMut::from(&packet_bytes[..])))
+        Ok(Some(packet_bytes))
     }
 
     pub fn decode_payload(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, io::Error> {
@@ -168,14 +162,14 @@ impl AEADBodyCodec {
             }
             let padding_length = self.padding_length.unwrap();
             if let Some(payload_length) = self.payload_length {
-                let mut payload_btyes = self.auth.open(&src.split_to(payload_length - padding_length), session.decoder_nonce());
-                dst.append(&mut payload_btyes);
+                let mut payload_btyes = src.split_to(payload_length - padding_length);
+                self.auth.open(&mut payload_btyes, session.decoder_nonce());
+                dst.put(payload_btyes);
                 src.advance(padding_length);
                 self.payload_length = None;
                 self.padding_length = None;
             } else {
-                let payload_length_bytes = src.split_to(size_bytes);
-                let payload_length = self.decode_size(&payload_length_bytes, session.chunk_nonce());
+                let payload_length = self.decode_size(&mut src.split_to(size_bytes), session.chunk_nonce());
                 trace!("Decode payload; payload length={:?}", payload_length);
                 self.payload_length = Some(payload_length);
             }
@@ -184,6 +178,14 @@ impl AEADBodyCodec {
             Ok(None)
         } else {
             Ok(Some(BytesMut::from(&dst[..])))
+        }
+    }
+
+    fn decode_size(&mut self, data: &mut BytesMut, nonce: &mut [u8]) -> usize {
+        match self.chunk {
+            ChunkSizeParser::Plain(ref mut parser) => parser.decode_size(data),
+            ChunkSizeParser::Auth(ref mut parser) => parser.decode_size(data, nonce),
+            ChunkSizeParser::Shake => self.shake.as_mut().unwrap().decode_size(data),
         }
     }
 }
@@ -210,24 +212,22 @@ impl Authenticator {
     }
 
     fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Vec<u8> {
-        let plaintext = ((size - self.cipher.tag_size()) as u16).to_be_bytes();
-        self.seal(&plaintext, nonce)
+        let mut buffer = ((size - self.cipher.tag_size()) as u16).to_be_bytes().to_vec();
+        self.seal(&mut buffer, nonce);
+        buffer
     }
 
-    fn decode_size(&mut self, ciphertext: &[u8], nonce: &mut [u8]) -> usize {
-        let plaintext = self.open(ciphertext, nonce);
-        let mut opened: [u8; size_of::<u16>()] = [0; size_of::<u16>()];
-        opened.copy_from_slice(&plaintext);
-        let size = u16::from_be_bytes(opened);
-        size as usize + self.cipher.tag_size()
+    fn decode_size(&mut self, buffer: &mut BytesMut, nonce: &mut [u8]) -> usize {
+        self.open(buffer, nonce);
+        buffer.get_u16() as usize + self.cipher.tag_size()
     }
 
-    fn seal(&mut self, plaintext: &[u8], nonce: &mut [u8]) -> Vec<u8> {
-        self.cipher.encrypt(&self.counting.generate(nonce), plaintext, &[])
+    fn seal(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) {
+        self.cipher.encrypt_in_place(&self.counting.generate(nonce), b"", buffer)
     }
 
-    fn open(&mut self, ciphertext: &[u8], nonce: &mut [u8]) -> Vec<u8> {
-        self.cipher.decrypt(&self.counting.generate(nonce), ciphertext, &[])
+    fn open(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) {
+        self.cipher.decrypt_in_place(&self.counting.generate(nonce), b"", buffer)
     }
 }
 
@@ -267,9 +267,7 @@ impl ShakeSizeParser {
         let size = u16::from_be_bytes(bytes);
         (mask ^ size) as usize
     }
-}
 
-impl ShakeSizeParser {
     fn next_padding_length(&mut self) -> usize {
         (self.next() % 64) as usize
     }
@@ -277,7 +275,6 @@ impl ShakeSizeParser {
 
 #[cfg(test)]
 mod test {
-    use bytes::Buf;
     use bytes::BufMut;
     use bytes::BytesMut;
     use rand::random;
@@ -370,8 +367,8 @@ mod test {
             let mut client_session = ClientSession::new();
             let mut server_session: ServerSession = client_session.clone().into();
             let mut client_encoder = AEADBodyCodec::encoder(&header, &mut client_session);
-            let mut client_decoder = AEADBodyCodec::encoder(&header, &mut client_session);
-            let mut server_encoder = AEADBodyCodec::decoder(&header, &mut server_session);
+            let mut client_decoder = AEADBodyCodec::decoder(&header, &mut client_session);
+            let mut server_encoder = AEADBodyCodec::encoder(&header, &mut server_session);
             let mut server_decoder = AEADBodyCodec::decoder(&header, &mut server_session);
             let msg = "Hello World!";
             let mut src = BytesMut::new();
@@ -382,8 +379,7 @@ mod test {
             let mut temp = BytesMut::new();
             server_encoder.encode_payload(dst, &mut temp, &mut server_session);
             let dst = client_decoder.decode_payload(&mut temp, &mut client_session).unwrap().unwrap();
-            let res = dst.get(0..dst.remaining()).unwrap();
-            assert_eq!(msg, String::from_utf8(res.to_vec()).unwrap())
+            assert_eq!(msg, String::from_utf8(dst.freeze().to_vec()).unwrap())
         }
 
         test_by_security(SecurityType::AES128_GCM);

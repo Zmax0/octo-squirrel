@@ -1,7 +1,9 @@
 use aes::cipher::Unsigned;
 use aes_gcm::aead::Aead;
+use aes_gcm::aead::Buffer;
 use aes_gcm::aead::Payload;
 use aes_gcm::AeadCore;
+use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::Aes256Gcm;
 use aes_gcm::KeyInit;
@@ -34,6 +36,8 @@ impl SupportedCipher {
 pub trait Cipher: Send {
     fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
     fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Vec<u8>;
+    fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer);
+    fn decrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer);
     fn nonce_size(&self) -> usize;
     fn tag_size(&self) -> usize;
     fn ciphertext_overhead(&self) -> usize;
@@ -56,14 +60,20 @@ macro_rules! aead_impl {
         }
 
         impl Cipher for $name {
-            fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Vec<u8> {
-                let payload = Payload { msg: plaintext, aad };
-                self.cipher.encrypt(nonce.into(), payload).unwrap()
+            fn encrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Vec<u8> {
+                self.cipher.encrypt(nonce.into(), Payload { msg, aad }).unwrap()
             }
 
-            fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Vec<u8> {
-                let payload = Payload { msg: ciphertext, aad };
-                self.cipher.decrypt(nonce.into(), payload).expect("Invalid cipher text")
+            fn decrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Vec<u8> {
+                self.cipher.decrypt(nonce.into(), Payload { msg, aad }).expect("Invalid cipher text")
+            }
+
+            fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) {
+                self.cipher.encrypt_in_place(nonce.into(), aad, buffer).unwrap()
+            }
+
+            fn decrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) {
+                self.cipher.decrypt_in_place(nonce.into(), aad, buffer).expect("Invalid cipher text")
             }
 
             fn nonce_size(&self) -> usize {

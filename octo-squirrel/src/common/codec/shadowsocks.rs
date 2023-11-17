@@ -2,6 +2,7 @@ use std::io;
 use std::mem::size_of;
 use std::net::SocketAddr;
 
+use aead::Buffer;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
@@ -73,8 +74,9 @@ impl CipherEncoder {
         trace!("Encode payload; payload length={}", encrypted_size);
         let encrypted_size_bytes = self.auth.encode_size(encrypted_size + tag_size);
         dst.put_slice(&encrypted_size_bytes);
-        let payload_bytes = src.split_to(encrypted_size);
-        dst.put_slice(&self.auth.seal(&payload_bytes));
+        let mut payload_bytes = src.split_to(encrypted_size);
+        self.auth.seal(&mut payload_bytes);
+        dst.put(payload_bytes);
     }
 }
 
@@ -85,8 +87,9 @@ impl CipherEncoder {
         }
     }
 
-    fn encode_packet(&mut self, src: BytesMut, dst: &mut BytesMut) {
-        dst.put(&self.auth.seal(&src[..])[..]);
+    fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
+        self.auth.seal(&mut src);
+        dst.put(src);
     }
 }
 
@@ -105,24 +108,23 @@ impl Authenticator {
     }
 
     fn encode_size(&mut self, size: usize) -> Vec<u8> {
-        let bytes = ((size - self.cipher.tag_size()) as u16).to_be_bytes();
-        let sealed = self.seal(&bytes);
-        sealed
+        let mut bytes = ((size - self.cipher.tag_size()) as u16).to_be_bytes().to_vec();
+        self.seal(&mut bytes);
+        bytes
     }
 
-    fn decode_size(&mut self, data: &[u8]) -> usize {
-        let mut opened: [u8; size_of::<u16>()] = [0; size_of::<u16>()];
-        opened.copy_from_slice(&self.open(data));
-        let size = u16::from_be_bytes(opened);
+    fn decode_size(&mut self, data: &mut BytesMut) -> usize {
+        self.open(data);
+        let size = data.get_u16();
         size as usize + self.cipher.tag_size()
     }
 
-    fn seal(&mut self, plaintext: &[u8]) -> Vec<u8> {
-        self.cipher.encrypt(&self.increasing.generate(), plaintext, &[])
+    fn seal(&mut self, plaintext: &mut dyn Buffer) {
+        self.cipher.encrypt_in_place(&self.increasing.generate(), b"", plaintext)
     }
 
-    fn open(&mut self, ciphertext: &[u8]) -> Vec<u8> {
-        self.cipher.decrypt(&self.increasing.generate(), ciphertext, &[])
+    fn open(&mut self, ciphertext: &mut dyn Buffer) {
+        self.cipher.decrypt_in_place(&self.increasing.generate(), b"", ciphertext)
     }
 }
 
@@ -139,8 +141,9 @@ impl CipherDecoder {
 
 impl CipherDecoder {
     fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
-        let opened = self.auth.open(&src.split_off(0));
-        Ok(Some(BytesMut::from(&opened[..])))
+        let mut opened = src.split_off(0);
+        self.auth.open(&mut opened);
+        Ok(Some(opened))
     }
 
     fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
@@ -148,12 +151,12 @@ impl CipherDecoder {
         let mut dst = Vec::new();
         while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
             if let Some(payload_length) = self.payload_length {
-                let mut payload_btyes = self.auth.open(&src.split_to(payload_length));
-                dst.append(&mut payload_btyes);
+                let mut payload_btyes = src.split_to(payload_length);
+                self.auth.open(&mut payload_btyes);
+                dst.put(payload_btyes);
                 self.payload_length = None;
             } else {
-                let payload_length_bytes = src.split_to(size_bytes);
-                let payload_length = self.auth.decode_size(&payload_length_bytes);
+                let payload_length = self.auth.decode_size(&mut src.split_to(size_bytes));
                 trace!("Decode payload; payload length={:?}", payload_length);
                 self.payload_length = Some(payload_length);
             }

@@ -59,22 +59,21 @@ impl Encoder<BytesMut> for ClientAEADCodec {
 
     fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
         if let None = self.body_encoder {
-            let mut buffer = BytesMut::new();
-            buffer.put_u8(VERSION);
-            buffer.put_slice(&self.session.request_body_iv);
-            buffer.put_slice(&self.session.request_body_key);
-            buffer.put_u8(self.session.response_header);
-            buffer.put_u8(RequestOption::get_mask(&self.header.option)); // option mask
+            let mut header = BytesMut::new();
+            header.put_u8(VERSION);
+            header.put_slice(&self.session.request_body_iv);
+            header.put_slice(&self.session.request_body_key);
+            header.put_u8(self.session.response_header);
+            header.put_u8(RequestOption::get_mask(&self.header.option)); // option mask
             let padding_len = rand::thread_rng().gen_range(0..16); // dice roll 16
             let security = self.header.security;
-            buffer.put_u8((padding_len << 4) | security.0);
-            buffer.put_u8(0);
-            buffer.put_u8(self.header.command.0);
-            Address::write_address_port(&self.header.address, &mut buffer)?; // address
-            buffer.put_slice(&Dice::roll_bytes(padding_len as usize)); // padding
-            buffer.put_u32(FNV::fnv1a32(&buffer));
-            let header_bytes = Encrypt::seal_header(&self.header.id, &buffer);
-            dst.put_slice(&header_bytes);
+            header.put_u8((padding_len << 4) | security.0);
+            header.put_u8(0);
+            header.put_u8(self.header.command.0);
+            Address::write_address_port(&self.header.address, &mut header)?; // address
+            header.put_slice(&Dice::roll_bytes(padding_len as usize)); // padding
+            header.put_u32(FNV::fnv1a32(&header));
+            dst.put(&Encrypt::seal_header(&self.header.id,header.freeze())[..]);
             self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &mut self.session));
         }
         if self.header.command == RequestCommand::UDP {
@@ -103,11 +102,10 @@ impl Decoder for ClientAEADCodec {
             let header_length_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
                 KDF::kdfn(&self.session.response_body_iv, vec![KDF::SALT_AEAD_RESP_HEADER_LEN_IV]);
             let mut cursor = Cursor::new(src);
-            let header_length_encrypt_bytes = cursor.copy_to_bytes(size_of::<u16>() + header_length_cipher.tag_size());
-            let mut header_length_bytes = [0; size_of::<u16>()];
-            header_length_bytes
-                .copy_from_slice(&header_length_cipher.decrypt(&header_length_iv, &header_length_encrypt_bytes[..], b"")[..size_of::<u16>()]);
-            let header_length = u16::from_be_bytes(header_length_bytes) as usize;
+            let header_length_bytes = cursor.copy_to_bytes(size_of::<u16>() + header_length_cipher.tag_size());
+            let mut header_length_bytes = BytesMut::from(&header_length_bytes[..]);
+            header_length_cipher.decrypt_in_place(&header_length_iv, b"", &mut header_length_bytes);
+            let header_length = header_length_bytes.get_u16() as usize;
             if cursor.remaining() < header_length + header_length_cipher.tag_size() {
                 info!(
                     "Unexpected readable bytes for decoding client header: expecting {} but actually {}",
@@ -121,8 +119,8 @@ impl Decoder for ClientAEADCodec {
             src.advance(position as usize);
             let header_cipher = Aes128GcmCipher::new(&KDF::kdf16(&self.session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]));
             let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(&self.session.response_body_iv, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
-            let header_encrypt_bytes = src.split_to(header_length + header_length_cipher.tag_size());
-            let header_bytes = header_cipher.decrypt(&header_iv, &header_encrypt_bytes, b"");
+            let mut header_bytes = src.split_to(header_length + header_length_cipher.tag_size());
+            header_cipher.decrypt_in_place(&header_iv, b"", &mut header_bytes);
             if self.session.response_header != header_bytes[0] {
                 let error = format!("Unexpected response header: expecting {} but actually {}", self.session.response_header, header_bytes[0]);
                 return Err(io::Error::new(ErrorKind::InvalidData, error));

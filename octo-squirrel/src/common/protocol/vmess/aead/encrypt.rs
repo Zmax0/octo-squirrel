@@ -1,6 +1,7 @@
 use std::io::Cursor;
 
 use bytes::Buf;
+use bytes::Bytes;
 use bytes::BytesMut;
 use rand::random;
 
@@ -12,7 +13,7 @@ use crate::common::codec::aead::Cipher;
 use crate::common::protocol::vmess::timestamp;
 
 impl Encrypt {
-    pub fn seal_header(key: &[u8], header: &[u8]) -> Vec<u8> {
+    pub fn seal_header(key: &[u8], header: Bytes) -> Vec<u8> {
         let auth_id = AuthID::create(key, timestamp(30));
         let connection_nonce: [u8; 8] = random();
         let length = (header.len() as u16).to_be_bytes();
@@ -54,7 +55,7 @@ impl Encrypt {
         }
         let header_key = KDF::kdf16(key, vec![KDF::SALT_PAYLOAD_KEY, &auth_id, &nonce]);
         let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(key, vec![KDF::SALT_PAYLOAD_IV, &auth_id, &nonce]);
-        let header_encrypted = cursor.copy_to_bytes(length + 16);
+        let header_encrypted = cursor.copy_to_bytes(length + Aes128GcmCipher::TAG_SIZE);
         let header_bytes = Aes128GcmCipher::new(&header_key).decrypt(&header_iv, &header_encrypted, &auth_id);
         Some(header_bytes)
     }
@@ -62,9 +63,9 @@ impl Encrypt {
 
 #[test]
 fn test_header() {
-    let header = b"Test Header";
+    let header = Bytes::from_static(b"Test Header");
     let key = KDF::kdf16(b"Demo Key for Auth ID Test", vec![b"Demo Path for Auth ID Test"]);
-    let mut sealed = BytesMut::from(&Encrypt::seal_header(&key, header)[..]);
+    let mut sealed = BytesMut::from(&Encrypt::seal_header(&key, header.clone())[..]);
     let opened = Encrypt::open_header(&key, &mut sealed);
     assert_eq!(header, &opened.unwrap()[..]);
 }

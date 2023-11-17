@@ -25,11 +25,11 @@ macro_rules! session_impl {
                 hasher.update(request_body_iv);
                 let res = hasher.finalize_reset();
                 let mut response_body_iv = [0; 16];
-                response_body_iv.clone_from_slice(&res[..16]);
+                response_body_iv.copy_from_slice(&res[..16]);
                 hasher.update(request_body_key);
                 let res = hasher.finalize_reset();
                 let mut response_body_key = [0; 16];
-                response_body_key.clone_from_slice(&res[..16]);
+                response_body_key.copy_from_slice(&res[..16]);
                 Self { request_body_iv, request_body_key, response_body_iv, response_body_key, response_header }
             }
         }
@@ -38,7 +38,7 @@ macro_rules! session_impl {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                 write!(
                     f,
-                    "[REQ: {}, {}; RESP: {}, {}, {}]",
+                    "[RK:{}, RI:{}, SK:{}, SI:{}, SH:{}]",
                     base64ct::Base64::encode_string(&self.request_body_key),
                     base64ct::Base64::encode_string(&self.request_body_iv),
                     base64ct::Base64::encode_string(&self.response_body_key),
