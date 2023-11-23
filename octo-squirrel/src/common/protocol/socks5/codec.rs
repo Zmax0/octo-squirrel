@@ -7,13 +7,12 @@ use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::address::Address;
+use super::address::AddressCodec;
 use super::message::Socks5CommandRequest;
 use super::message::Socks5CommandResponse;
 use super::message::Socks5InitialRequest;
 use super::message::Socks5InitialResponse;
 use super::message::Socks5Message;
-use super::Socks5AddressType;
 use super::Socks5AuthMethod;
 use super::Socks5CommandStatus;
 use super::Socks5CommandType;
@@ -54,7 +53,7 @@ impl Decoder for Socks5InitialRequestDecoder {
         let count = src.get_u8() as usize;
         let mut auth_methods = Vec::with_capacity(count);
         for _ in 0..count {
-            auth_methods.push(Socks5AuthMethod(src.get_u8()));
+            auth_methods.push(Socks5AuthMethod::new(src.get_u8()));
         }
         Ok(Some(Socks5InitialRequest::new(auth_methods)))
     }
@@ -72,12 +71,10 @@ impl Decoder for Socks5CommandRequestDecoder {
         if VERSION != version {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported version: {}", version)));
         }
-        let command_type = Socks5CommandType(src.get_u8());
+        let command_type = Socks5CommandType::new(src.get_u8());
         src.advance(1); // Reserved
-        let dst_addr_type = Socks5AddressType(src.get_u8());
-        let dst_addr = Address::decode_address(dst_addr_type, src)?;
-        let dst_port = src.get_u16();
-        Ok(Some(Socks5CommandRequest::new(command_type, dst_addr_type, dst_addr, dst_port)))
+        let addr = AddressCodec::decode(src)?;
+        Ok(Some(Socks5CommandRequest::new(command_type, addr)))
     }
 }
 
@@ -93,7 +90,7 @@ impl Decoder for Socks5InitialResponseDecoder {
         if VERSION != version {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported version: {}", version)));
         }
-        Ok(Some(Socks5InitialResponse::new(Socks5AuthMethod(src.get_u8()))))
+        Ok(Some(Socks5InitialResponse::new(Socks5AuthMethod::new(src.get_u8()))))
     }
 }
 
@@ -109,15 +106,10 @@ impl Decoder for Socks5CommandResponseDecoder {
         if VERSION != version {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported version: {}", version)));
         }
-        let command_status = Socks5CommandStatus(src.get_u8());
+        let command_status = Socks5CommandStatus::new(src.get_u8());
         src.advance(1); // Reserved
-        let bnd_addr_type = Socks5AddressType(src.get_u8());
-        let decode_addr = Address::decode_address(bnd_addr_type, src);
-        let bnd_port = src.get_u16();
-        match decode_addr {
-            Ok(bnd_addr) => Ok(Some(Socks5CommandResponse::new(command_status, bnd_addr_type, bnd_addr, bnd_port))),
-            Err(err) => Err(err),
-        }
+        let addr = AddressCodec::decode(src)?;
+        Ok(Some(Socks5CommandResponse::new(command_status, addr)))
     }
 }
 
@@ -139,8 +131,8 @@ impl Decoder for Socks5UdpCodec {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Discarding fragmented payload"));
         }
         src.advance(3);
-        let recipient = Address::decode_socket_address(src)?;
-        Ok(Some((src.split_off(0), recipient)))
+        let recipient = AddressCodec::decode(src)?;
+        Ok(Some((src.split_off(0), recipient.into())))
     }
 }
 
@@ -149,7 +141,7 @@ impl Encoder<(BytesMut, SocketAddr)> for Socks5UdpCodec {
 
     fn encode(&mut self, item: (BytesMut, SocketAddr), dst: &mut BytesMut) -> Result<(), Self::Error> {
         dst.put_slice(&[0, 0, 0]); // Fragment
-        Address::encode_socket_address(item.1, dst)?;
+        AddressCodec::encode(&item.1.into(), dst)?;
         dst.put_slice(&item.0);
         Ok(())
     }

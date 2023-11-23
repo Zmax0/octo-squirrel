@@ -5,37 +5,86 @@ pub mod message;
 
 pub const VERSION: u8 = 5;
 
-pub struct Socks5CommandStatus(pub u8);
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum Socks5CommandStatus {
+    Success,
+    Failure,
+}
 
 impl Socks5CommandStatus {
-    pub const SUCCESS: Socks5CommandStatus = Socks5CommandStatus(0);
-    pub const FAILURE: Socks5CommandStatus = Socks5CommandStatus(1);
+    pub fn new(byte: u8) -> Self {
+        if Self::Success as u8 == byte {
+            Self::Success
+        } else if Self::Failure as u8 == byte {
+            Self::Failure
+        } else {
+            panic!("unsupported command status: {}", byte as u8 & 0xff);
+        }
+    }
 }
 
-#[derive(PartialEq, Debug, Copy, Clone)]
-pub struct Socks5AddressType(pub u8);
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Socks5AddressType {
+    Ipv4 = 1,
+    Domain = 3,
+    Ipv6 = 4,
+}
 
 impl Socks5AddressType {
-    pub const IPV4: Socks5AddressType = Socks5AddressType(1);
-    pub const DOMAIN: Socks5AddressType = Socks5AddressType(3);
-    pub const IPV6: Socks5AddressType = Socks5AddressType(4);
+    pub fn new(byte: u8) -> Self {
+        if Self::Ipv4 as u8 == byte {
+            Self::Ipv4
+        } else if Self::Domain as u8 == byte {
+            Self::Domain
+        } else if Self::Ipv6 as u8 == byte {
+            Self::Ipv6
+        } else {
+            panic!("unsupported address type: {}", byte as u8 & 0xff);
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
-pub struct Socks5CommandType(pub u8);
-
-impl Socks5CommandType {
-    pub const CONNECT: Socks5CommandType = Socks5CommandType(1);
-    pub const BIND: Socks5CommandType = Socks5CommandType(2);
-    pub const UDP_ASSOCIATE: Socks5CommandType = Socks5CommandType(3);
+pub enum Socks5CommandType {
+    Connet = 1,
+    Bind = 2,
+    UdpAssociate = 3,
 }
 
-#[derive(PartialEq)]
-pub struct Socks5AuthMethod(pub u8);
+impl Socks5CommandType {
+    pub fn new(byte: u8) -> Self {
+        if Self::Connet as u8 == byte {
+            Self::Connet
+        } else if Self::Bind as u8 == byte {
+            Self::Bind
+        } else if Self::UdpAssociate as u8 == byte {
+            Self::UdpAssociate
+        } else {
+            panic!("unsupported command type: {}", byte as u8 & 0xff);
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum Socks5AuthMethod {
+    NoAuth,
+    Gssapi,
+    Password,
+    Unaccepted = 255,
+}
 
 impl Socks5AuthMethod {
-    pub const NO_AUTH: Socks5AuthMethod = Socks5AuthMethod(0);
-    pub const GSSAPI: Socks5AuthMethod = Socks5AuthMethod(1);
-    pub const PASSWORD: Socks5AuthMethod = Socks5AuthMethod(2);
-    pub const UNACCEPTED: Socks5AuthMethod = Socks5AuthMethod(255);
+    pub fn new(byte: u8) -> Self {
+        if Self::NoAuth as u8 == byte {
+            Self::NoAuth
+        } else if Self::Gssapi as u8 == byte {
+            Self::Gssapi
+        } else if Self::Password as u8 == byte {
+            Self::Password
+        } else if Self::Unaccepted as u8 == byte {
+            Self::Unaccepted
+        } else {
+            panic!("unsupported auth method: {}", byte as u8 & 0xff)
+        }
+    }
 }

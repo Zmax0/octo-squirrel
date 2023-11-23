@@ -1,6 +1,5 @@
 use std::io;
 use std::mem::size_of;
-use std::net::SocketAddr;
 
 use aead::Buffer;
 use bytes::Buf;
@@ -14,49 +13,16 @@ use sha1::Sha1;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::aead::Cipher;
-use super::aead::SupportedCipher;
+use super::aead::CipherKind;
+use super::aead::CipherMethod;
 use super::IncreasingNonceGenerator;
 use crate::common::network::DatagramPacket;
 use crate::common::network::Network;
-use crate::common::protocol::socks5::address::Address;
-use crate::common::protocol::socks5::message::Socks5CommandRequest;
-use crate::common::protocol::socks5::Socks5AddressType;
+use crate::common::protocol::address::Address;
+use crate::common::protocol::shadowsocks::Context;
+use crate::common::protocol::shadowsocks::StreamType;
+use crate::common::protocol::socks5::address::AddressCodec;
 use crate::common::util::Dice;
-
-pub struct AddressCodec;
-
-impl AddressCodec {
-    pub fn decode(src: &mut BytesMut) -> Result<Option<Socks5CommandRequest>, io::Error> {
-        let dst_addr_type = Socks5AddressType(src.get_u8());
-        let dst_addr = Address::decode_address(dst_addr_type, src)?;
-        let dst_port = src.get_u16();
-        Ok(Some(Socks5CommandRequest::connect(dst_addr_type, dst_addr, dst_port)))
-    }
-}
-
-impl Encoder<Socks5CommandRequest> for AddressCodec {
-    type Error = io::Error;
-
-    fn encode(&mut self, item: Socks5CommandRequest, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let temp = dst.split_off(0);
-        dst.put_u8(item.dst_addr_type.0);
-        Address::encode_address(item.dst_addr_type, &item.dst_addr, dst)?;
-        dst.put_u16(item.dst_port);
-        dst.unsplit(temp);
-        Ok(())
-    }
-}
-
-impl Decoder for AddressCodec {
-    type Item = Socks5CommandRequest;
-
-    type Error = io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        Self::decode(src)
-    }
-}
 
 struct CipherEncoder {
     payload_limit: usize,
@@ -69,7 +35,7 @@ impl CipherEncoder {
     }
 
     fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
-        let tag_size = self.auth.cipher.tag_size();
+        let tag_size = self.auth.method.tag_size();
         let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.auth.size_bytes());
         trace!("Encode payload; payload length={}", encrypted_size);
         let encrypted_size_bytes = self.auth.encode_size(encrypted_size + tag_size);
@@ -94,21 +60,21 @@ impl CipherEncoder {
 }
 
 struct Authenticator {
-    cipher: Box<dyn Cipher>,
+    method: Box<dyn CipherMethod>,
     increasing: IncreasingNonceGenerator,
 }
 
 impl Authenticator {
-    fn new(cipher: Box<dyn Cipher>, increasing: IncreasingNonceGenerator) -> Self {
-        Self { cipher, increasing }
+    fn new(method: Box<dyn CipherMethod>, increasing: IncreasingNonceGenerator) -> Self {
+        Self { method, increasing }
     }
 
     fn size_bytes(&self) -> usize {
-        size_of::<u16>() + self.cipher.tag_size()
+        size_of::<u16>() + self.method.tag_size()
     }
 
     fn encode_size(&mut self, size: usize) -> Vec<u8> {
-        let mut bytes = ((size - self.cipher.tag_size()) as u16).to_be_bytes().to_vec();
+        let mut bytes = ((size - self.method.tag_size()) as u16).to_be_bytes().to_vec();
         self.seal(&mut bytes);
         bytes
     }
@@ -116,15 +82,15 @@ impl Authenticator {
     fn decode_size(&mut self, data: &mut BytesMut) -> usize {
         self.open(data);
         let size = data.get_u16();
-        size as usize + self.cipher.tag_size()
+        size as usize + self.method.tag_size()
     }
 
     fn seal(&mut self, plaintext: &mut dyn Buffer) {
-        self.cipher.encrypt_in_place(&self.increasing.generate(), b"", plaintext)
+        self.method.encrypt_in_place(&self.increasing.generate(), b"", plaintext)
     }
 
     fn open(&mut self, ciphertext: &mut dyn Buffer) {
-        self.cipher.decrypt_in_place(&self.increasing.generate(), b"", ciphertext)
+        self.method.decrypt_in_place(&self.increasing.generate(), b"", ciphertext)
     }
 }
 
@@ -170,27 +136,26 @@ impl CipherDecoder {
 }
 
 pub struct AEADCipherCodec {
-    cipher: SupportedCipher,
+    cipher: CipherKind,
     key: Vec<u8>,
-    network: Network,
-    encoder: Option<CipherEncoder>,
-    decoder: Option<CipherDecoder>,
+    pub(self) encoder: Option<CipherEncoder>,
+    pub(self) decoder: Option<CipherDecoder>,
 }
 
 impl AEADCipherCodec {
-    pub fn new(cipher: SupportedCipher, password: &[u8], network: Network) -> Self {
+    pub fn new(cipher: CipherKind, password: &[u8]) -> Self {
         match cipher {
-            SupportedCipher::Aes128Gcm => {
+            CipherKind::Aes128Gcm => {
                 let key: [u8; 16] = Self::generate_key(password);
-                Self { cipher, key: key.to_vec(), network, encoder: None, decoder: None }
+                Self { cipher, key: key.to_vec(), encoder: None, decoder: None }
             }
-            SupportedCipher::Aes256Gcm => {
+            CipherKind::Aes256Gcm => {
                 let key: [u8; 32] = Self::generate_key(password);
-                Self { cipher, key: key.to_vec(), network, encoder: None, decoder: None }
+                Self { cipher, key: key.to_vec(), encoder: None, decoder: None }
             }
-            SupportedCipher::ChaCha20Poly1305 => {
+            CipherKind::ChaCha20Poly1305 => {
                 let key: [u8; 32] = Self::generate_key(password);
-                Self { cipher, key: key.to_vec(), network, encoder: None, decoder: None }
+                Self { cipher, key: key.to_vec(), encoder: None, decoder: None }
             }
         }
     }
@@ -239,13 +204,9 @@ impl AEADCipherCodec {
     fn new_auth(&mut self, key: &Vec<u8>) -> Authenticator {
         Authenticator::new(self.cipher.to_aead_cipher(&key), IncreasingNonceGenerator::generate_initial_aead_nonce())
     }
-}
 
-impl Encoder<BytesMut> for AEADCipherCodec {
-    type Error = io::Error;
-
-    fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        match self.network {
+    fn encode(&mut self, context: &Context, item: BytesMut, dst: &mut BytesMut) -> Result<(), io::Error> {
+        match context.network {
             Network::TCP => {
                 if self.encoder.is_none() {
                     let salt = Dice::roll_bytes(self.key.len());
@@ -263,18 +224,12 @@ impl Encoder<BytesMut> for AEADCipherCodec {
             }
         }
     }
-}
 
-impl Decoder for AEADCipherCodec {
-    type Item = BytesMut;
-
-    type Error = io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, context: &Context, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
         if src.is_empty() {
             return Ok(None);
         }
-        match self.network {
+        match context.network {
             Network::TCP => {
                 if self.decoder.is_none() {
                     if src.remaining() < self.key.len() {
@@ -309,11 +264,13 @@ impl DatagramPacketCodec {
 impl Encoder<DatagramPacket> for DatagramPacketCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, item: (BytesMut, SocketAddr), dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let mut temp = BytesMut::new();
-        Address::encode_socket_address(item.1, &mut temp)?;
-        temp.put_slice(&item.0);
-        self.cipher.encode(temp, dst)
+    fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let addr = Address::from(item.1);
+        let mut temp = BytesMut::with_capacity(item.0.len() + AddressCodec::length(&addr));
+        AddressCodec::encode(&addr, &mut temp)?;
+        temp.put(item.0);
+        let context = Context::udp(StreamType::Request(addr));
+        self.cipher.encode(&context, temp, dst)
     }
 }
 
@@ -323,12 +280,50 @@ impl Decoder for DatagramPacketCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if let Some(mut temp) = self.cipher.decode(src)? {
-            let recipient = Address::decode_socket_address(&mut temp)?;
-            Ok(Some((temp.split_off(0), recipient)))
+        let context = Context::udp(StreamType::Response);
+        if let Some(mut content) = self.cipher.decode(&context, src)? {
+            let recipient = AddressCodec::decode(&mut content)?;
+            Ok(Some((content.split_off(0), recipient.into())))
         } else {
             Ok(None)
         }
+    }
+}
+
+pub struct ClientCodec {
+    context: Context,
+    cipher: AEADCipherCodec,
+}
+
+impl ClientCodec {
+    pub fn new(context: Context, cipher: AEADCipherCodec) -> Self {
+        Self { context, cipher }
+    }
+}
+
+impl Encoder<BytesMut> for ClientCodec {
+    type Error = io::Error;
+
+    fn encode(&mut self, mut item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        if self.cipher.encoder.is_none() {
+            if let StreamType::Request(ref addr) = self.context.stream_type {
+                let mut addr_bytes = BytesMut::with_capacity(AddressCodec::length(addr));
+                AddressCodec::encode(addr, &mut addr_bytes)?;
+                addr_bytes.put(item);
+                item = addr_bytes;
+            }
+        }
+        self.cipher.encode(&self.context, item, dst)
+    }
+}
+
+impl Decoder for ClientCodec {
+    type Item = BytesMut;
+
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        self.cipher.decode(&self.context, src)
     }
 }
 
@@ -346,10 +341,11 @@ mod test {
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
-    use crate::common::codec::aead::SupportedCipher;
+    use crate::common::codec::aead::CipherKind;
     use crate::common::codec::shadowsocks::AEADCipherCodec;
     use crate::common::codec::shadowsocks::DatagramPacketCodec;
-    use crate::common::network::Network;
+    use crate::common::protocol::shadowsocks::Context;
+    use crate::common::protocol::shadowsocks::StreamType;
 
     #[test]
     fn test_generate_key() {
@@ -362,28 +358,29 @@ mod test {
 
     #[test]
     fn test_tcp() {
-        fn test_tcp(cipher: SupportedCipher) {
+        fn test_tcp(cipher: CipherKind) {
+            let context = Context::tcp(StreamType::Response);
             let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
             rand::thread_rng().fill(&mut password[..]);
-            let mut codec = AEADCipherCodec::new(cipher, &password[..], Network::TCP);
+            let mut codec = AEADCipherCodec::new(cipher, &password[..]);
             let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff * 10).map(char::from).collect();
             let src = BytesMut::from(expect.as_str());
             let mut dst = BytesMut::new();
-            codec.encode(src, &mut dst).unwrap();
-            let actual = codec.decode(&mut dst).unwrap().unwrap();
+            codec.encode(&context, src, &mut dst).unwrap();
+            let actual = codec.decode(&context, &mut dst).unwrap().unwrap();
             let actual = String::from_utf8(actual.freeze().to_vec()).unwrap();
             assert_eq!(expect, actual);
         }
 
-        SupportedCipher::VALUES.into_iter().for_each(test_tcp);
+        CipherKind::VALUES.into_iter().for_each(test_tcp);
     }
 
     #[test]
     fn test_udp() {
-        fn test_udp(cipher: SupportedCipher) {
+        fn test_udp(cipher: CipherKind) {
             let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
             rand::thread_rng().fill(&mut password[..]);
-            let codec = AEADCipherCodec::new(cipher, &password[..], Network::UDP);
+            let codec = AEADCipherCodec::new(cipher, &password[..]);
             let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
             let mut codec = DatagramPacketCodec::new(codec);
             let mut dst = BytesMut::new();
@@ -394,6 +391,6 @@ mod test {
             assert_eq!(actual.1, addr);
         }
 
-        SupportedCipher::VALUES.into_iter().for_each(test_udp);
+        CipherKind::VALUES.into_iter().for_each(test_udp);
     }
 }

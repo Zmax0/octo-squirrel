@@ -9,7 +9,7 @@ use super::AuthID;
 use super::Encrypt;
 use super::KDF;
 use crate::common::codec::aead::Aes128GcmCipher;
-use crate::common::codec::aead::Cipher;
+use crate::common::codec::aead::CipherMethod;
 use crate::common::protocol::vmess::timestamp;
 
 impl Encrypt {

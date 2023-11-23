@@ -20,7 +20,7 @@ use sha3::Shake128ReaderCore;
 
 use super::aead::Aes128GcmCipher;
 use super::aead::ChaCha20Poly1305Cipher;
-use super::aead::Cipher;
+use super::aead::CipherMethod;
 use super::chunk::PlainSizeParser;
 use super::CountingNonceGenerator;
 use super::PaddingLengthGenerator;
@@ -48,24 +48,25 @@ macro_rules! new_aead_body_codec {
         pub fn $name(header: &RequestHeader, session: &mut dyn Session) -> Self {
             let mut chunk = ChunkSizeParser::Plain(PlainSizeParser);
             let mut padding = PaddingLengthGenerator::Empty;
-            if header.option.contains(&RequestOption::CHUNK_MASKING) {
+            if header.option.contains(&RequestOption::ChunkMasking) {
                 chunk = ChunkSizeParser::Shake;
             }
-            if header.option.contains(&RequestOption::GLOBAL_PADDING) {
+            if header.option.contains(&RequestOption::GlobalPadding) {
                 padding = PaddingLengthGenerator::Shake;
             }
             let mut shake = None;
             if matches!(padding, PaddingLengthGenerator::Shake) || matches!(chunk, ChunkSizeParser::Shake) {
                 shake = Some(ShakeSizeParser::new(session.$nonce()));
             }
-            if header.option.contains(&RequestOption::AUTHENTICATED_LENGTH) {
+            if header.option.contains(&RequestOption::AuthenticatedLength) {
                 chunk = ChunkSizeParser::Auth(Self::new_aead_chunk_size_cipher(header.security, session.chunk_key()));
             }
             let cipher;
-            if header.security == SecurityType::CHACHA20_POLY1305 {
-                cipher = Self::new_aead_cipher(header.security, &Auth::generate_chacha20_poly1305_key(session.$key()));
-            } else {
-                cipher = Self::new_aead_cipher(header.security, session.$key());
+            match header.security {
+                SecurityType::Chacha20Poly1305 => {
+                    cipher = Self::new_aead_cipher(header.security, &Auth::generate_chacha20_poly1305_key(session.$key()))
+                }
+                _ => cipher = Self::new_aead_cipher(header.security, session.$key()),
             }
             Self { auth: Authenticator::new(cipher), chunk, padding, shake, payload_limit: 2048, payload_length: None, padding_length: None }
         }
@@ -78,18 +79,16 @@ impl AEADBodyCodec {
 
     fn new_aead_chunk_size_cipher(security: SecurityType, key: &[u8]) -> Authenticator {
         let key = &KDF::kdf16(key, vec![AUTH_LEN]);
-        if security == SecurityType::CHACHA20_POLY1305 {
-            Authenticator::new(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key)))
-        } else {
-            Authenticator::new(Self::new_aead_cipher(security, key))
+        match security {
+            SecurityType::Chacha20Poly1305 => Authenticator::new(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key))),
+            _ => Authenticator::new(Self::new_aead_cipher(security, key)),
         }
     }
 
-    fn new_aead_cipher(security: SecurityType, key: &[u8]) -> Box<dyn Cipher> {
-        if security == SecurityType::CHACHA20_POLY1305 {
-            Box::new(ChaCha20Poly1305Cipher::new(key))
-        } else {
-            Box::new(Aes128GcmCipher::new(key))
+    fn new_aead_cipher(security: SecurityType, key: &[u8]) -> Box<dyn CipherMethod> {
+        match security {
+            SecurityType::Chacha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(key)),
+            _ => Box::new(Aes128GcmCipher::new(key)),
         }
     }
 
@@ -197,12 +196,12 @@ enum ChunkSizeParser {
 }
 
 struct Authenticator {
-    cipher: Box<dyn Cipher>,
+    cipher: Box<dyn CipherMethod>,
     counting: CountingNonceGenerator,
 }
 
 impl Authenticator {
-    fn new(cipher: Box<dyn Cipher>) -> Self {
+    fn new(cipher: Box<dyn CipherMethod>) -> Self {
         let nonce_size = cipher.nonce_size();
         Self { cipher, counting: CountingNonceGenerator::new(nonce_size) }
     }
@@ -282,8 +281,7 @@ mod test {
 
     use crate::common::codec::vmess::AEADBodyCodec;
     use crate::common::codec::vmess::ShakeSizeParser;
-    use crate::common::protocol::socks5::message::Socks5CommandRequest;
-    use crate::common::protocol::socks5::Socks5AddressType;
+    use crate::common::protocol::address::Address;
     use crate::common::protocol::vmess::header::*;
     use crate::common::protocol::vmess::session::ClientSession;
     use crate::common::protocol::vmess::session::ServerSession;
@@ -313,8 +311,8 @@ mod test {
 
     #[test]
     fn test_aead_codec() {
-        fn new_address() -> Socks5CommandRequest {
-            Socks5CommandRequest::connect(Socks5AddressType::DOMAIN, "localhost".to_owned(), random())
+        fn new_address() -> Address {
+            Address::Domain("localhost".to_owned(), random())
         }
 
         fn test_by_security(security: SecurityType) {
@@ -323,22 +321,22 @@ mod test {
         }
 
         fn test_by_command(command: RequestCommand) {
-            let header = RequestHeader::default(command, SecurityType::CHACHA20_POLY1305, new_address(), uuid::Uuid::new_v4().to_string());
+            let header = RequestHeader::default(command, SecurityType::Chacha20Poly1305, new_address(), uuid::Uuid::new_v4().to_string());
             test_by_header(header);
         }
 
         fn test_by_option_masks() {
-            test_by_option_mask(RequestOption::CHUNK_STREAM.0);
-            test_by_option_mask(RequestOption::CHUNK_STREAM.0 | RequestOption::CHUNK_MASKING.0);
-            test_by_option_mask(RequestOption::CHUNK_STREAM.0 | RequestOption::GLOBAL_PADDING.0);
-            test_by_option_mask(RequestOption::CHUNK_STREAM.0 | RequestOption::CHUNK_MASKING.0 | RequestOption::GLOBAL_PADDING.0);
-            test_by_option_mask(RequestOption::CHUNK_STREAM.0 | RequestOption::AUTHENTICATED_LENGTH.0);
-            test_by_option_mask(RequestOption::CHUNK_STREAM.0 | RequestOption::GLOBAL_PADDING.0 | RequestOption::AUTHENTICATED_LENGTH.0);
+            test_by_option_mask(RequestOption::ChunkStream as u8);
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::ChunkMasking as u8);
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::GlobalPadding as u8);
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::ChunkMasking as u8 | RequestOption::GlobalPadding as u8);
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::AuthenticatedLength as u8);
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::GlobalPadding as u8 | RequestOption::AuthenticatedLength as u8);
             test_by_option_mask(
-                RequestOption::CHUNK_STREAM.0
-                    | RequestOption::CHUNK_MASKING.0
-                    | RequestOption::GLOBAL_PADDING.0
-                    | RequestOption::AUTHENTICATED_LENGTH.0,
+                RequestOption::ChunkStream as u8
+                    | RequestOption::ChunkMasking as u8
+                    | RequestOption::GlobalPadding as u8
+                    | RequestOption::AuthenticatedLength as u8,
             );
         }
 
@@ -347,7 +345,7 @@ mod test {
                 version: VERSION,
                 command: RequestCommand::TCP,
                 option: RequestOption::from_mask(mask),
-                security: SecurityType::CHACHA20_POLY1305,
+                security: SecurityType::Chacha20Poly1305,
                 address: new_address(),
                 id: ID::new_id(uuid::Uuid::new_v4().to_string()),
             };
@@ -356,7 +354,7 @@ mod test {
                 version: VERSION,
                 command: RequestCommand::UDP,
                 option: RequestOption::from_mask(mask),
-                security: SecurityType::AES128_GCM,
+                security: SecurityType::Aes128Gcm,
                 address: new_address(),
                 id: ID::new_id(uuid::Uuid::new_v4().to_string()),
             };
@@ -382,13 +380,13 @@ mod test {
             assert_eq!(msg, String::from_utf8(dst.freeze().to_vec()).unwrap())
         }
 
-        test_by_security(SecurityType::AES128_GCM);
-        test_by_security(SecurityType::CHACHA20_POLY1305);
-        test_by_security(SecurityType::LEGACY);
-        test_by_security(SecurityType::AUTO);
-        test_by_security(SecurityType::UNKNOWN);
-        test_by_security(SecurityType::NONE);
-        test_by_security(SecurityType::ZERO);
+        test_by_security(SecurityType::Aes128Gcm);
+        test_by_security(SecurityType::Chacha20Poly1305);
+        test_by_security(SecurityType::Legacy);
+        test_by_security(SecurityType::Auto);
+        test_by_security(SecurityType::Unknown);
+        test_by_security(SecurityType::None);
+        test_by_security(SecurityType::Zero);
         test_by_command(RequestCommand::TCP);
         test_by_command(RequestCommand::UDP);
         test_by_option_masks();

@@ -13,19 +13,18 @@ use futures::StreamExt;
 use log::debug;
 use log::info;
 use octo_squirrel::common::codec::aead::Aes128GcmCipher;
-use octo_squirrel::common::codec::aead::Cipher;
-use octo_squirrel::common::codec::aead::SupportedCipher;
+use octo_squirrel::common::codec::aead::CipherKind;
+use octo_squirrel::common::codec::aead::CipherMethod;
 use octo_squirrel::common::codec::vmess::AEADBodyCodec;
 use octo_squirrel::common::network::DatagramPacket;
-use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
-use octo_squirrel::common::protocol::socks5::Socks5CommandType;
+use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::vmess::aead::*;
 use octo_squirrel::common::protocol::vmess::header::RequestCommand;
 use octo_squirrel::common::protocol::vmess::header::RequestHeader;
 use octo_squirrel::common::protocol::vmess::header::RequestOption;
 use octo_squirrel::common::protocol::vmess::header::SecurityType;
 use octo_squirrel::common::protocol::vmess::session::ClientSession;
-use octo_squirrel::common::protocol::vmess::Address;
+use octo_squirrel::common::protocol::vmess::AddressCodec;
 use octo_squirrel::common::protocol::vmess::VERSION;
 use octo_squirrel::common::util::Dice;
 use octo_squirrel::common::util::FNV;
@@ -67,13 +66,13 @@ impl Encoder<BytesMut> for ClientAEADCodec {
             header.put_u8(RequestOption::get_mask(&self.header.option)); // option mask
             let padding_len = rand::thread_rng().gen_range(0..16); // dice roll 16
             let security = self.header.security;
-            header.put_u8((padding_len << 4) | security.0);
+            header.put_u8((padding_len << 4) | security as u8);
             header.put_u8(0);
-            header.put_u8(self.header.command.0);
-            Address::write_address_port(&self.header.address, &mut header)?; // address
+            header.put_u8(self.header.command as u8);
+            AddressCodec::write_address_port(&self.header.address, &mut header)?; // address
             header.put_slice(&Dice::roll_bytes(padding_len as usize)); // padding
             header.put_u32(FNV::fnv1a32(&header));
-            dst.put(&Encrypt::seal_header(&self.header.id,header.freeze())[..]);
+            dst.put(&Encrypt::seal_header(&self.header.id, header.freeze())[..]);
             self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &mut self.session));
         }
         if self.header.command == RequestCommand::UDP {
@@ -135,9 +134,9 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub async fn transfer_tcp(inbound: TcpStream, request: Socks5CommandRequest, config: ServerConfig) -> Result<(), io::Error> {
-    let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
-    let header = RequestHeader::default(RequestCommand::TCP, security, request, config.password);
+pub async fn transfer_tcp(inbound: TcpStream, addr: Address, config: ServerConfig) -> Result<(), io::Error> {
+    let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
+    let header = RequestHeader::default(RequestCommand::TCP, security, addr, config.password);
     let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
     let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split();
     let (mut outbound_sink, mut outbound_stream) = Framed::new(outbound, ClientAEADCodec::new(header)).split();
@@ -163,9 +162,8 @@ pub async fn transfer_udp_outbound(
     let outbound = TcpStream::connect(proxy.clone()).await?;
     let outbound_local_addr = outbound.local_addr()?;
     debug!("New udp binding; sender={}, outbound={}", sender, outbound_local_addr);
-    let security = if config.cipher == SupportedCipher::ChaCha20Poly1305 { SecurityType::CHACHA20_POLY1305 } else { SecurityType::AES128_GCM };
-    let request = Socks5CommandRequest::from(Socks5CommandType::CONNECT, recipient);
-    let header = RequestHeader::default(RequestCommand::UDP, security, request, config.password.clone());
+    let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
+    let header = RequestHeader::default(RequestCommand::UDP, security, recipient.into(), config.password.clone());
     let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
     let (mut outbound_sink, mut outbound_stream) = outbound.split();
     let (tx, mut rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);

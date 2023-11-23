@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum SupportedCipher {
+pub enum CipherKind {
     #[serde(rename = "aes-128-gcm")]
     Aes128Gcm,
     #[serde(rename = "aes-256-gcm")]
@@ -21,19 +21,19 @@ pub enum SupportedCipher {
     ChaCha20Poly1305,
 }
 
-impl SupportedCipher {
-    pub const VALUES: [SupportedCipher; 3] = [SupportedCipher::Aes128Gcm, SupportedCipher::Aes256Gcm, SupportedCipher::ChaCha20Poly1305];
+impl CipherKind {
+    pub const VALUES: [CipherKind; 3] = [CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
 
-    pub fn to_aead_cipher(&self, key: &[u8]) -> Box<dyn Cipher> {
+    pub fn to_aead_cipher(&self, key: &[u8]) -> Box<dyn CipherMethod> {
         match self {
-            SupportedCipher::Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
-            SupportedCipher::Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
-            SupportedCipher::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(&key)),
+            CipherKind::Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
+            CipherKind::Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
+            CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(&key)),
         }
     }
 }
 
-pub trait Cipher: Send {
+pub trait CipherMethod: Send {
     fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
     fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Vec<u8>;
     fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer);
@@ -59,7 +59,7 @@ macro_rules! aead_impl {
             }
         }
 
-        impl Cipher for $name {
+        impl CipherMethod for $name {
             fn encrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Vec<u8> {
                 self.cipher.encrypt(nonce.into(), Payload { msg, aad }).unwrap()
             }
@@ -97,14 +97,14 @@ aead_impl!(ChaCha20Poly1305Cipher, ChaCha20Poly1305);
 
 #[cfg(test)]
 mod test {
-    use super::SupportedCipher;
+    use super::CipherKind;
 
     #[test]
     fn test_json_serialize() {
-        let vec = vec![SupportedCipher::Aes128Gcm, SupportedCipher::Aes256Gcm, SupportedCipher::ChaCha20Poly1305];
+        let vec = vec![CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
         let str = serde_json::to_string(&vec).unwrap();
         assert_eq!("[\"aes-128-gcm\",\"aes-256-gcm\",\"chacha20-poly1305\"]", str);
-        let ciphers: Vec<SupportedCipher> = serde_json::from_str(str.as_str()).unwrap();
+        let ciphers: Vec<CipherKind> = serde_json::from_str(str.as_str()).unwrap();
         assert_eq!(vec, ciphers);
     }
 }

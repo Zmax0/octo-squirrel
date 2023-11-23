@@ -17,11 +17,10 @@ use log::debug;
 use log::error;
 use log::info;
 use octo_squirrel::common::network::DatagramPacket;
+use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::common::protocol::socks5::handshake::ServerHandShake;
-use octo_squirrel::common::protocol::socks5::message::Socks5CommandRequest;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandResponse;
-use octo_squirrel::common::protocol::socks5::Socks5AddressType;
 use octo_squirrel::common::protocol::socks5::Socks5CommandStatus;
 use octo_squirrel::config::ServerConfig;
 use tokio::io::AsyncWriteExt;
@@ -87,22 +86,17 @@ where
 
 pub async fn transfer_tcp<Fn, Fut>(listener: TcpListener, current: &ServerConfig, mut f: Fn) -> Result<(), Box<dyn error::Error>>
 where
-    Fn: FnMut(TcpStream, Socks5CommandRequest, ServerConfig) -> Fut,
+    Fn: FnMut(TcpStream, Address, ServerConfig) -> Fut,
     Fut: Future<Output = Result<(), io::Error>> + Send + 'static,
 {
     while let Ok((mut inbound, _)) = listener.accept().await {
         let local_addr = inbound.local_addr().unwrap();
-        let response = Socks5CommandResponse::new(
-            Socks5CommandStatus::SUCCESS,
-            if local_addr.is_ipv4() { Socks5AddressType::IPV4 } else { Socks5AddressType::IPV6 },
-            local_addr.ip().to_string(),
-            local_addr.port(),
-        );
+        let response = Socks5CommandResponse::new(Socks5CommandStatus::Success, local_addr.into());
         let handshake = ServerHandShake::no_auth(&mut inbound, response).await;
         if let Ok(request) = handshake {
             let request_str = request.to_string();
             info!("Accept tcp inbound; dest={}, protocol={}", request_str, current.protocol);
-            let transfer = f(inbound, request, current.clone()).map(move |r| {
+            let transfer = f(inbound, request.into(), current.clone()).map(move |r| {
                 if let Err(e) = r {
                     error!("Failed to transfer tcp; request={}; error={}", request_str, e);
                 }

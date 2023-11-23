@@ -28,13 +28,13 @@ impl ClientHandShake {
         let mut stream = TcpStream::connect(proxy_addr).await?;
         let (rh, wh) = stream.split();
         let mut writer = FramedWrite::new(wh, Socks5ClientEncoder);
-        writer.send(Box::new(Socks5InitialRequest::new(vec![Socks5AuthMethod::NO_AUTH]))).await?;
+        writer.send(Box::new(Socks5InitialRequest::new(vec![Socks5AuthMethod::NoAuth]))).await?;
         let mut reader = FramedRead::new(rh, Socks5InitialResponseDecoder);
         let initial_response = reader.next().map(Option::unwrap).await?;
-        if initial_response.auth_method != Socks5AuthMethod::NO_AUTH {
+        if initial_response.auth_method != Socks5AuthMethod::NoAuth {
             return Err(io::Error::new(io::ErrorKind::Unsupported, "proxy's auth method is not NO_AUTH"));
         }
-        writer.send(Box::new(Socks5CommandRequest::from(command_type, dst_add))).await?;
+        writer.send(Box::new(Socks5CommandRequest::new(command_type, dst_add.into()))).await?;
         let mut reader = FramedRead::new(reader.into_inner(), Socks5CommandResponseDecoder);
         let command_response = reader.next().map(Option::unwrap).await?;
         Ok(command_response)
@@ -50,7 +50,7 @@ impl ServerHandShake {
         reader.next().map(Option::unwrap).await?;
         let mut reader = FramedRead::new(reader.into_inner(), Socks5CommandRequestDecoder);
         let mut writer = FramedWrite::new(wh, Socks5ServerEncoder);
-        writer.send(Box::new(Socks5InitialResponse::new(Socks5AuthMethod::NO_AUTH))).await?;
+        writer.send(Box::new(Socks5InitialResponse::new(Socks5AuthMethod::NoAuth))).await?;
         let command_request = reader.next().map(Option::unwrap).await?;
         writer.send(Box::new(response)).await?;
         Ok(command_request)
@@ -68,7 +68,7 @@ mod test {
     async fn no_auth() -> Result<(), Box<dyn Error>> {
         let proxy_addr = "127.0.0.1:7890".parse().unwrap();
         let dst_addr = "127.0.0.1:9090".parse().unwrap();
-        let response = ClientHandShake::no_auth(Socks5CommandType::CONNECT, proxy_addr, dst_addr).await?;
+        let response = ClientHandShake::no_auth(Socks5CommandType::Connet, proxy_addr, dst_addr).await?;
         assert_eq!(response.bnd_addr, "127.0.0.1");
         assert_eq!(response.bnd_port, 7890);
         Ok(())

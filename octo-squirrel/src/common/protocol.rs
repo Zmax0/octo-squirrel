@@ -4,6 +4,8 @@ use std::fmt::Formatter;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub mod address;
+pub mod shadowsocks;
 pub mod socks5;
 pub mod vmess;
 
