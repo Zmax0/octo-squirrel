@@ -2,5 +2,6 @@
 resolver = "2"
 members = [
     "octo-squirrel",
-    "octo-squirrel-client"
+    "octo-squirrel-client",
+    "octo-squirrel-test"
 ]

@@ -47,20 +47,18 @@ struct Hmac {
 
 impl Hmac {
     fn new(hash: Box<dyn Hash>, key: &[u8]) -> Self {
-        let mut hm = Self { inner: hash.new(), outer: hash.new(), ipad: [0; 64], opad: [0; 64] };
         let key_len = key.len();
-        if key_len > hm.inner.output_size() {
-            hm.outer.update(key);
-            return Hmac::new(hash, &hm.outer.do_final());
+        if key_len > hash.output_size() {
+            let mut outer = hash.new();
+            outer.update(key);
+            return Hmac::new(hash, &outer.do_final());
         }
+        let mut hm = Self { inner: hash.new(), outer: hash.new(), ipad: [0; 64], opad: [0; 64] };
         hm.ipad[0..key_len].copy_from_slice(key);
         hm.opad[0..key_len].copy_from_slice(key);
-        for i in 0..hm.ipad.len() {
-            hm.ipad[i] ^= 0x36;
-        }
-        for i in 0..hm.opad.len() {
-            hm.opad[i] ^= 0x5c;
-        }
+
+        hm.ipad.iter_mut().for_each(|x| *x ^= 0x36);
+        hm.opad.iter_mut().for_each(|x| *x ^= 0x5c);
         hm.inner.update(&hm.ipad);
         return hm;
     }

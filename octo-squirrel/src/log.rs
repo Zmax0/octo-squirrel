@@ -27,7 +27,7 @@ fn default(config: &Logger) -> Config {
     Config::builder()
         .appender(Appender::builder().build(
             name,
-            Box::new(ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {l} {M} - {m}{n}"))).build()),
+            Box::new(ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {h({l}):<5} {M} - {m}{n}"))).build()),
         ))
         .build(Root::builder().appender(name).build(LevelFilter::from_str(config.level.as_str()).unwrap()))
         .unwrap()

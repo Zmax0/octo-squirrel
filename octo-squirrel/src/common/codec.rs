@@ -1,73 +1,46 @@
 use std::fmt::Display;
 use std::mem::size_of;
-use std::sync::Arc;
-
-use crate::common::protocol::vmess::session::AtomicU8Array;
 
 pub mod aead;
 pub mod chunk;
 pub mod shadowsocks;
 pub mod vmess;
 
-pub trait PaddingLengthGenerator: Send {
-    fn next_padding_length(&mut self) -> usize;
+#[derive(PartialEq, Eq)]
+pub enum PaddingLengthGenerator {
+    Empty,
+    Shake,
 }
 
-pub trait BytesGenerator: Send {
-    fn generate(&mut self) -> Vec<u8>;
-}
-
-pub struct EmptyPaddingLengthGenerator;
-
-impl PaddingLengthGenerator for EmptyPaddingLengthGenerator {
-    fn next_padding_length(&mut self) -> usize {
-        0
-    }
-}
-
-pub struct EmptyBytesGenerator;
-
-impl BytesGenerator for EmptyBytesGenerator {
-    fn generate(&mut self) -> Vec<u8> {
-        Vec::new()
-    }
+pub enum BytesGenerator {
+    Counting(CountingNonceGenerator),
+    Increasing(IncreasingNonceGenerator),
+    Empty,
+    Static,
 }
 
 pub struct CountingNonceGenerator {
     count: u16,
-    nonce: Arc<AtomicU8Array<16>>,
     nonce_size: usize,
 }
 
 impl CountingNonceGenerator {
-    pub fn new(nonce: Arc<AtomicU8Array<16>>, nonce_size: usize) -> Self {
-        Self { count: 0, nonce, nonce_size }
+    pub fn new(nonce_size: usize) -> Self {
+        Self { count: 0, nonce_size }
     }
 }
 
-impl BytesGenerator for CountingNonceGenerator {
-    fn generate(&mut self) -> Vec<u8> {
-        let res: [u8; 16] = self.nonce.update(|nonce| {
-            nonce[..size_of::<u16>()].copy_from_slice(&self.count.to_be_bytes());
-            self.count = self.count.overflowing_add(1).0;
-        });
-        res[..self.nonce_size].to_vec()
+impl CountingNonceGenerator {
+    fn generate(&mut self, nonce: &mut [u8]) -> Vec<u8> {
+        nonce[..size_of::<u16>()].copy_from_slice(&self.count.to_be_bytes());
+        self.count = self.count.overflowing_add(1).0;
+        nonce[..self.nonce_size].to_vec()
     }
 }
 
 impl Display for CountingNonceGenerator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "count={}, nonce={:?}", self.count, self.nonce.load())
-    }
-}
-
-pub struct StaticBytesGenerator {
-    nonce: Vec<u8>,
-}
-
-impl BytesGenerator for StaticBytesGenerator {
-    fn generate(&mut self) -> Vec<u8> {
-        self.nonce.to_vec()
+        write!(f, "count={}", self.count)
     }
 }
 
@@ -75,8 +48,8 @@ pub struct IncreasingNonceGenerator {
     nonce: Vec<u8>,
 }
 
-impl BytesGenerator for IncreasingNonceGenerator {
-    fn generate(&mut self) -> Vec<u8> {
+impl IncreasingNonceGenerator {
+    pub fn generate(&mut self) -> Vec<u8> {
         for i in 0..self.nonce.len() {
             self.nonce[i] = self.nonce[i].overflowing_add(1).0;
             if self.nonce[i] != 0 {
@@ -85,9 +58,7 @@ impl BytesGenerator for IncreasingNonceGenerator {
         }
         return self.nonce.to_vec();
     }
-}
 
-impl IncreasingNonceGenerator {
     pub fn generate_initial_aead_nonce() -> Self {
         Self { nonce: vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff] }
     }
@@ -95,16 +66,10 @@ impl IncreasingNonceGenerator {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
     use base64ct::Encoding;
-    use rand::random;
 
     use super::CountingNonceGenerator;
-    use crate::common::codec::BytesGenerator;
     use crate::common::codec::IncreasingNonceGenerator;
-    use crate::common::codec::StaticBytesGenerator;
-    use crate::common::protocol::vmess::session::AtomicU8Array;
 
     #[test]
     fn test_generate_increasing_nonce() {
@@ -119,21 +84,14 @@ mod test {
     }
 
     #[test]
-    fn test_generate_static_nonce() {
-        let nonce: [u8; 12] = random();
-        let mut generator = StaticBytesGenerator { nonce: nonce.to_vec() };
-        assert_eq!(nonce.to_vec(), generator.generate())
-    }
-
-    #[test]
     fn test_generate_counting_nonce() {
-        let nonce = Arc::new(AtomicU8Array::new());
-        let mut generator = CountingNonceGenerator::new(nonce.clone(), 12);
+        let mut nonce: [u8; 16] = [0; 16];
+        let mut generator = CountingNonceGenerator::new(12);
         let mut generated = Vec::new();
         for _ in 0..65536 {
-            generated = generator.generate();
+            generated = generator.generate(&mut nonce);
         }
         assert_eq!("//8AAAAAAAAAAAAA", base64ct::Base64::encode_string(&generated[..]));
-        assert_eq!("//8AAAAAAAAAAAAAAAAAAA==", base64ct::Base64::encode_string(&nonce.load()));
+        assert_eq!("//8AAAAAAAAAAAAAAAAAAA==", base64ct::Base64::encode_string(&nonce));
     }
 }

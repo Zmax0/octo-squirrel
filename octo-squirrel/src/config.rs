@@ -6,7 +6,7 @@ use std::io::BufReader;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::common::codec::aead::SupportedCipher;
+use crate::common::codec::aead::CipherKind;
 use crate::common::network::Network;
 use crate::common::network::PacketEncoding;
 use crate::common::protocol::Protocols;
@@ -17,7 +17,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub password: String,
-    pub cipher: SupportedCipher,
+    pub cipher: CipherKind,
     pub protocol: Protocols,
     pub remark: String,
     #[serde(default = "Vec::new")]
@@ -59,7 +59,7 @@ mod test {
     use rand::Rng;
     use serde_json::json;
 
-    use crate::common::codec::aead::SupportedCipher;
+    use crate::common::codec::aead::CipherKind;
     use crate::common::network::Network;
     use crate::common::network::PacketEncoding;
     use crate::common::protocol::Protocols;
@@ -94,7 +94,7 @@ mod test {
         let current = client_config.get_current().unwrap();
         assert_eq!(server_host, current.host);
         assert_eq!(server_port, current.port);
-        assert_eq!(SupportedCipher::ChaCha20Poly1305, current.cipher);
+        assert_eq!(CipherKind::ChaCha20Poly1305, current.cipher);
         assert_eq!(Protocols::VMess, current.protocol);
         assert_eq!(vec![Network::TCP, Network::UDP], current.networks);
         assert_eq!(PacketEncoding::None, current.packet_encoding);

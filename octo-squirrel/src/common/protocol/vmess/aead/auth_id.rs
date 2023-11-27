@@ -27,7 +27,7 @@ impl AuthID {
         let crc32 = vmess::crc32(&buf);
         buf.put_i32(crc32 as i32);
         auth_id.copy_from_slice(&buf);
-        Cipher::encrypt(&KDF::kdf16(key, vec![b"AES Auth ID Encryption"]), &mut auth_id, 16);
+        Aes128EcbNoPadding::encrypt(&KDF::kdf16(key, vec![b"AES Auth ID Encryption"]), &mut auth_id, 16);
         auth_id
     }
 
@@ -35,7 +35,7 @@ impl AuthID {
         for key in keys {
             let mut cur = [0; 16];
             cur.copy_from_slice(authid);
-            Cipher::decrypt(&KDF::kdf16(key, vec![b"AES Auth ID Encryption"]), &mut cur);
+            Aes128EcbNoPadding::decrypt(&KDF::kdf16(key, vec![b"AES Auth ID Encryption"]), &mut cur);
             let crc32 = vmess::crc32(&cur[..12]);
             let (l, r) = cur.split_at(12);
             let now = i64::from_be_bytes(l[..8].try_into().unwrap());
@@ -47,9 +47,9 @@ impl AuthID {
     }
 }
 
-struct Cipher;
+struct Aes128EcbNoPadding;
 
-impl Cipher {
+impl Aes128EcbNoPadding {
     fn encrypt(key: &[u8], buf: &mut [u8], len: usize) {
         Aes128EcbEnc::new_from_slice(key).expect("Invalid length").encrypt_padded_mut::<NoPadding>(buf, len).expect("Encrypt error");
     }
@@ -66,7 +66,7 @@ fn test_cipher() {
     let buf = &mut [0; 16];
     buf[0..text.len()].copy_from_slice(text);
     let expected = buf.clone();
-    Cipher::encrypt(&key, buf, 16);
-    Cipher::decrypt(&key, buf);
+    Aes128EcbNoPadding::encrypt(&key, buf, 16);
+    Aes128EcbNoPadding::decrypt(&key, buf);
     assert_eq!(expected, *buf);
 }

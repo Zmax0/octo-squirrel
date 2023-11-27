@@ -3,9 +3,11 @@ pub mod encoding;
 pub mod header;
 pub mod session;
 use std::io::Error;
-use std::io::ErrorKind;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
+use std::net::SocketAddr;
+use std::net::SocketAddrV4;
+use std::net::SocketAddrV6;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -21,8 +23,7 @@ use md5::Md5;
 use rand::Rng;
 use uuid::Uuid;
 
-use super::socks5::message::Socks5CommandRequest;
-use crate::common::protocol::socks5::Socks5AddressType;
+use super::address::Address;
 use crate::common::protocol::vmess::header::AddressType;
 
 pub const VERSION: u8 = 1;
@@ -40,52 +41,48 @@ pub fn timestamp(delta: i32) -> i64 {
     return now() - range_in_delta as i64;
 }
 
-pub struct Address;
+pub struct AddressCodec;
 
-impl Address {
-    pub fn write_address_port(address: &Socks5CommandRequest, buf: &mut BytesMut) -> Result<(), Error> {
-        if address.dst_addr.is_empty() {
-            panic!("Empty destination address")
-        }
-        let dst_addr_type = address.dst_addr_type;
-        buf.put_u16(address.dst_port);
-        if dst_addr_type == Socks5AddressType::IPV4 {
-            buf.put_u8(header::IPV4.0);
-            let ip_v4: Ipv4Addr = address.dst_addr.parse().unwrap();
-            buf.put_slice(&ip_v4.octets());
-        } else if dst_addr_type == Socks5AddressType::IPV6 {
-            buf.put_u8(header::IPV6.0);
-            let ip_v6: Ipv6Addr = address.dst_addr.parse().unwrap();
-            buf.put_slice(&ip_v6.octets());
-        } else if dst_addr_type == Socks5AddressType::DOMAIN {
-            let bytes = address.dst_addr.as_bytes();
-            buf.put_u8(header::DOMAIN.0);
-            buf.put_u8(bytes.len() as u8);
-            buf.put_slice(bytes);
-        } else {
-            let msg = format!("unsupported address type: {}", dst_addr_type.0 & 0xff);
-            return Err(Error::new(ErrorKind::InvalidData, msg));
+impl AddressCodec {
+    pub fn write_address_port(address: &Address, buf: &mut BytesMut) -> Result<(), Error> {
+        match address {
+            Address::Domain(host, port) => {
+                if host.is_empty() {
+                    panic!("Empty destination address")
+                }
+                buf.put_u16(*port);
+                let bytes = host.as_bytes();
+                buf.put_u8(AddressType::Domain as u8);
+                buf.put_u8(bytes.len() as u8);
+                buf.put_slice(bytes);
+            }
+            Address::Socket(addr) => match addr {
+                SocketAddr::V4(v4) => {
+                    buf.put_u16(v4.port());
+                    buf.put_u8(AddressType::Ipv4 as u8);
+                    buf.put_slice(&v4.ip().octets());
+                }
+                SocketAddr::V6(v6) => {
+                    buf.put_u16(v6.port());
+                    buf.put_u8(AddressType::Ipv6 as u8);
+                    buf.put_slice(&v6.ip().octets());
+                }
+            },
         }
         Ok(())
     }
 
-    pub fn read_address_port(buf: &mut BytesMut) -> Result<Socks5CommandRequest, Error> {
-        let dst_port = buf.get_u16();
-        let dst_addr;
-        let dst_addr_type;
-        let addr_type = AddressType(buf.get_u8());
-        if addr_type == header::IPV4 {
-            dst_addr_type = Socks5AddressType::IPV4;
-            dst_addr = Ipv4Addr::from(buf.get_u32()).to_string();
-        } else if addr_type == header::IPV6 {
-            dst_addr_type = Socks5AddressType::IPV6;
-            dst_addr = Ipv6Addr::from(buf.get_u128()).to_string();
-        } else {
-            dst_addr_type = Socks5AddressType::DOMAIN;
-            let length = buf.get_u8() as usize;
-            dst_addr = String::from_utf8(buf.copy_to_bytes(length).to_vec()).unwrap();
+    pub fn read_address_port(buf: &mut BytesMut) -> Result<Address, Error> {
+        let port = buf.get_u16();
+        let addr_type = AddressType::new(buf.get_u8());
+        match addr_type {
+            AddressType::Ipv4 => Ok(Address::Socket(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(buf.get_u32()), port)))),
+            AddressType::Domain => {
+                let length = buf.get_u8() as usize;
+                Ok(Address::Domain(String::from_utf8(buf.copy_to_bytes(length).to_vec()).unwrap(), port))
+            }
+            AddressType::Ipv6 => Ok(Address::Socket(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(buf.get_u128()), port, 0, 0)))),
         }
-        Ok(Socks5CommandRequest::connect(dst_addr_type, dst_addr, dst_port))
     }
 }
 
@@ -122,31 +119,27 @@ mod test {
     use bytes::Buf;
     use bytes::BytesMut;
 
-    use super::Address;
+    use super::AddressCodec;
     use super::ID;
-    use crate::common::protocol::socks5::message::Socks5CommandRequest;
-    use crate::common::protocol::socks5::Socks5AddressType;
+    use crate::common::protocol::address::Address;
 
     #[test]
     fn test_address_codec() {
-        fn test_address_codec(address: &Socks5CommandRequest) {
+        fn test_address_codec(address: Address) {
             let buf = &mut BytesMut::new();
-            let res = Address::write_address_port(address, buf);
-            let mut actual = None;
+            let res = AddressCodec::write_address_port(&address, buf);
             if let Ok(()) = res {
-                let res = Address::read_address_port(buf);
-                if let Ok(request) = res {
-                    actual = Some(request);
+                let res = AddressCodec::read_address_port(buf);
+                if let Ok(actual) = res {
+                    assert_eq!(address, actual);
                 }
             }
             assert!(!buf.has_remaining());
-            let actual = actual.unwrap();
-            assert_eq!(*address, actual);
         }
 
-        test_address_codec(&Socks5CommandRequest::connect(Socks5AddressType::IPV4, "192.168.1.1".to_string(), 443));
-        test_address_codec(&Socks5CommandRequest::connect(Socks5AddressType::IPV6, "abcd:ef01:2345:6789:abcd:ef01:2345:6789".to_string(), 80));
-        test_address_codec(&Socks5CommandRequest::connect(Socks5AddressType::DOMAIN, "www.w3.org".to_string(), 0xFFF));
+        test_address_codec(Address::Socket("192.168.1.1:443".parse().unwrap()));
+        test_address_codec(Address::Socket("[abcd:ef01:2345:6789:abcd:ef01:2345:6789]:443".parse().unwrap()));
+        test_address_codec(Address::Domain("www.w3.org".to_owned(), 0xFFF));
     }
 
     #[test]
