@@ -13,8 +13,8 @@ use sha1::Sha1;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::aead::CipherKind;
-use super::aead::CipherMethod;
+use super::CipherKind;
+use super::CipherMethod;
 use super::IncreasingNonceGenerator;
 use crate::common::network::DatagramPacket;
 use crate::common::network::Network;
@@ -341,9 +341,9 @@ mod test {
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
+    use crate::common::codec::aead::shadowsocks::AEADCipherCodec;
+    use crate::common::codec::aead::shadowsocks::DatagramPacketCodec;
     use crate::common::codec::aead::CipherKind;
-    use crate::common::codec::shadowsocks::AEADCipherCodec;
-    use crate::common::codec::shadowsocks::DatagramPacketCodec;
     use crate::common::protocol::shadowsocks::Context;
     use crate::common::protocol::shadowsocks::StreamType;
 

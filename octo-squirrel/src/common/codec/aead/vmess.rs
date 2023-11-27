@@ -18,12 +18,12 @@ use rand::Rng;
 use sha3::Shake128;
 use sha3::Shake128ReaderCore;
 
-use super::aead::Aes128GcmCipher;
-use super::aead::ChaCha20Poly1305Cipher;
-use super::aead::CipherMethod;
-use super::chunk::PlainSizeParser;
+use super::Aes128GcmCipher;
+use super::ChaCha20Poly1305Cipher;
+use super::CipherMethod;
 use super::CountingNonceGenerator;
 use super::PaddingLengthGenerator;
+use crate::common::codec::chunk::PlainSizeParser;
 use crate::common::protocol::vmess::aead::KDF;
 use crate::common::protocol::vmess::encoding::Auth;
 use crate::common::protocol::vmess::header::RequestHeader;
@@ -279,8 +279,8 @@ mod test {
     use rand::random;
     use rand::Rng;
 
-    use crate::common::codec::vmess::AEADBodyCodec;
-    use crate::common::codec::vmess::ShakeSizeParser;
+    use crate::common::codec::aead::vmess::AEADBodyCodec;
+    use crate::common::codec::aead::vmess::ShakeSizeParser;
     use crate::common::protocol::address::Address;
     use crate::common::protocol::vmess::header::*;
     use crate::common::protocol::vmess::session::ClientSession;
