@@ -1,6 +1,3 @@
-pub mod shadowsocks;
-pub mod vmess;
-
 use std::fmt::Display;
 use std::mem::size_of;
 

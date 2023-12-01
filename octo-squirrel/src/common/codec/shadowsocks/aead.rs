@@ -1,7 +1,7 @@
-use std::io;
 use std::mem::size_of;
 
 use aead::Buffer;
+use anyhow::Result;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
@@ -13,9 +13,9 @@ use sha1::Sha1;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::CipherKind;
-use super::CipherMethod;
-use super::IncreasingNonceGenerator;
+use crate::common::codec::aead::CipherKind;
+use crate::common::codec::aead::CipherMethod;
+use crate::common::codec::aead::IncreasingNonceGenerator;
 use crate::common::network::DatagramPacket;
 use crate::common::network::Network;
 use crate::common::protocol::address::Address;
@@ -23,41 +23,6 @@ use crate::common::protocol::shadowsocks::Context;
 use crate::common::protocol::shadowsocks::StreamType;
 use crate::common::protocol::socks5::address::AddressCodec;
 use crate::common::util::Dice;
-
-struct CipherEncoder {
-    payload_limit: usize,
-    auth: Authenticator,
-}
-
-impl CipherEncoder {
-    pub fn new(payload_limit: usize, auth: Authenticator) -> Self {
-        Self { payload_limit, auth }
-    }
-
-    fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
-        let tag_size = self.auth.method.tag_size();
-        let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.auth.size_bytes());
-        trace!("Encode payload; payload length={}", encrypted_size);
-        let encrypted_size_bytes = self.auth.encode_size(encrypted_size + tag_size);
-        dst.put_slice(&encrypted_size_bytes);
-        let mut payload_bytes = src.split_to(encrypted_size);
-        self.auth.seal(&mut payload_bytes);
-        dst.put(payload_bytes);
-    }
-}
-
-impl CipherEncoder {
-    fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
-        while src.has_remaining() {
-            self.seal(&mut src, dst);
-        }
-    }
-
-    fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
-        self.auth.seal(&mut src);
-        dst.put(src);
-    }
-}
 
 struct Authenticator {
     method: Box<dyn CipherMethod>,
@@ -94,6 +59,41 @@ impl Authenticator {
     }
 }
 
+struct CipherEncoder {
+    payload_limit: usize,
+    auth: Authenticator,
+}
+
+impl CipherEncoder {
+    pub fn new(payload_limit: usize, auth: Authenticator) -> Self {
+        Self { payload_limit, auth }
+    }
+
+    fn seal(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
+        let tag_size = self.auth.method.tag_size();
+        let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.auth.size_bytes());
+        trace!("Encode payload; payload length={}", encrypted_size);
+        let encrypted_size_bytes = self.auth.encode_size(encrypted_size + tag_size);
+        dst.put_slice(&encrypted_size_bytes);
+        let mut payload_bytes = src.split_to(encrypted_size);
+        self.auth.seal(&mut payload_bytes);
+        dst.put(payload_bytes);
+    }
+}
+
+impl CipherEncoder {
+    fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
+        while src.has_remaining() {
+            self.seal(&mut src, dst);
+        }
+    }
+
+    fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
+        self.auth.seal(&mut src);
+        dst.put(src);
+    }
+}
+
 struct CipherDecoder {
     payload_length: Option<usize>,
     auth: Authenticator,
@@ -106,13 +106,13 @@ impl CipherDecoder {
 }
 
 impl CipherDecoder {
-    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
+    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>> {
         let mut opened = src.split_off(0);
         self.auth.open(&mut opened);
         Ok(Some(opened))
     }
 
-    fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
+    fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>> {
         let size_bytes = self.auth.size_bytes();
         let mut dst = Vec::new();
         while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
@@ -205,7 +205,7 @@ impl AEADCipherCodec {
         Authenticator::new(self.cipher.to_aead_cipher(&key), IncreasingNonceGenerator::generate_initial_aead_nonce())
     }
 
-    fn encode(&mut self, context: &Context, item: BytesMut, dst: &mut BytesMut) -> Result<(), io::Error> {
+    fn encode(&mut self, context: &Context, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
         match context.network {
             Network::TCP => {
                 if self.encoder.is_none() {
@@ -225,7 +225,7 @@ impl AEADCipherCodec {
         }
     }
 
-    fn decode(&mut self, context: &Context, src: &mut BytesMut) -> Result<Option<BytesMut>, io::Error> {
+    fn decode(&mut self, context: &Context, src: &mut BytesMut) -> Result<Option<BytesMut>> {
         if src.is_empty() {
             return Ok(None);
         }
@@ -262,9 +262,9 @@ impl DatagramPacketCodec {
 }
 
 impl Encoder<DatagramPacket> for DatagramPacketCodec {
-    type Error = io::Error;
+    type Error = anyhow::Error;
 
-    fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<()> {
         let addr = Address::from(item.1);
         let mut temp = BytesMut::with_capacity(item.0.len() + AddressCodec::length(&addr));
         AddressCodec::encode(&addr, &mut temp)?;
@@ -277,9 +277,9 @@ impl Encoder<DatagramPacket> for DatagramPacketCodec {
 impl Decoder for DatagramPacketCodec {
     type Item = DatagramPacket;
 
-    type Error = io::Error;
+    type Error = anyhow::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
         let context = Context::udp(StreamType::Response);
         if let Some(mut content) = self.cipher.decode(&context, src)? {
             let recipient = AddressCodec::decode(&mut content)?;
@@ -302,9 +302,9 @@ impl ClientCodec {
 }
 
 impl Encoder<BytesMut> for ClientCodec {
-    type Error = io::Error;
+    type Error = anyhow::Error;
 
-    fn encode(&mut self, mut item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, mut item: BytesMut, dst: &mut BytesMut) -> Result<()> {
         if self.cipher.encoder.is_none() {
             if let StreamType::Request(ref addr) = self.context.stream_type {
                 let mut addr_bytes = BytesMut::with_capacity(AddressCodec::length(addr));
@@ -320,9 +320,9 @@ impl Encoder<BytesMut> for ClientCodec {
 impl Decoder for ClientCodec {
     type Item = BytesMut;
 
-    type Error = io::Error;
+    type Error = anyhow::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
         self.cipher.decode(&self.context, src)
     }
 }
@@ -341,9 +341,9 @@ mod test {
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
-    use crate::common::codec::aead::shadowsocks::AEADCipherCodec;
-    use crate::common::codec::aead::shadowsocks::DatagramPacketCodec;
     use crate::common::codec::aead::CipherKind;
+    use crate::common::codec::shadowsocks::aead::AEADCipherCodec;
+    use crate::common::codec::shadowsocks::aead::DatagramPacketCodec;
     use crate::common::protocol::shadowsocks::Context;
     use crate::common::protocol::shadowsocks::StreamType;
 

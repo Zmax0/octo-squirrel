@@ -1,7 +1,7 @@
-use std::io;
 use std::mem::size_of;
 
 use aead::Buffer;
+use anyhow::Result;
 use base64ct::Base64;
 use base64ct::Encoding;
 use bytes::Buf;
@@ -18,11 +18,11 @@ use rand::Rng;
 use sha3::Shake128;
 use sha3::Shake128ReaderCore;
 
-use super::Aes128GcmCipher;
-use super::ChaCha20Poly1305Cipher;
-use super::CipherMethod;
-use super::CountingNonceGenerator;
-use super::PaddingLengthGenerator;
+use crate::common::codec::aead::Aes128GcmCipher;
+use crate::common::codec::aead::ChaCha20Poly1305Cipher;
+use crate::common::codec::aead::CipherMethod;
+use crate::common::codec::aead::CountingNonceGenerator;
+use crate::common::codec::aead::PaddingLengthGenerator;
 use crate::common::codec::chunk::PlainSizeParser;
 use crate::common::protocol::vmess::aead::KDF;
 use crate::common::protocol::vmess::encoding::Auth;
@@ -141,7 +141,7 @@ impl AEADBodyCodec {
         self.encode_chunk(&mut src, dst, session);
     }
 
-    pub fn decode_packet(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, io::Error> {
+    pub fn decode_packet(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>> {
         let padding_length = self.next_padding_length();
         let packet_length = self.decode_size(&mut src.split_to(self.size_bytes()), session.chunk_nonce()) - padding_length;
         let mut packet_bytes = src.split_to(packet_length);
@@ -150,7 +150,7 @@ impl AEADBodyCodec {
         Ok(Some(packet_bytes))
     }
 
-    pub fn decode_payload(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, io::Error> {
+    pub fn decode_payload(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>> {
         let size_bytes = self.size_bytes();
         let mut dst = Vec::new();
         while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
@@ -279,8 +279,8 @@ mod test {
     use rand::random;
     use rand::Rng;
 
-    use crate::common::codec::aead::vmess::AEADBodyCodec;
-    use crate::common::codec::aead::vmess::ShakeSizeParser;
+    use crate::common::codec::vmess::aead::AEADBodyCodec;
+    use crate::common::codec::vmess::aead::ShakeSizeParser;
     use crate::common::protocol::address::Address;
     use crate::common::protocol::vmess::header::*;
     use crate::common::protocol::vmess::session::ClientSession;

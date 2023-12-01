@@ -1,7 +1,7 @@
 use std::fmt::Display;
-use std::io::Error;
 use std::net::SocketAddr;
 
+use anyhow::Result;
 use bytes::BufMut;
 
 use super::address::AddressCodec;
@@ -13,7 +13,7 @@ use super::VERSION;
 use crate::common::protocol::address::Address;
 
 pub trait Socks5Message: Send + Sync {
-    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<(), Error>;
+    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<()>;
 }
 
 pub struct Socks5InitialRequest {
@@ -26,7 +26,7 @@ impl Socks5InitialRequest {
     }
 }
 impl Socks5Message for Socks5InitialRequest {
-    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<(), Error> {
+    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<()> {
         dst.put_u8(VERSION);
         dst.put_u8(self.auth_methods.len() as u8);
         for auth_method in self.auth_methods.iter() {
@@ -47,7 +47,7 @@ impl Socks5InitialResponse {
 }
 
 impl Socks5Message for Socks5InitialResponse {
-    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<(), Error> {
+    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<()> {
         dst.put_u8(VERSION);
         dst.put_u8(self.auth_method as u8);
         Ok(())
@@ -89,7 +89,7 @@ impl Display for Socks5CommandRequest {
 }
 
 impl Socks5Message for Socks5CommandRequest {
-    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<(), Error> {
+    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<()> {
         dst.put_u8(VERSION);
         dst.put_u8(self.command_type as u8);
         dst.put_u8(0x00);
@@ -134,7 +134,7 @@ pub struct Socks5CommandResponse {
 }
 
 impl Socks5Message for Socks5CommandResponse {
-    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<(), Error> {
+    fn encode(&mut self, dst: &mut bytes::BytesMut) -> Result<()> {
         dst.put_u8(VERSION);
         dst.put_u8(self.command_status as u8);
         dst.put_u8(0x00);

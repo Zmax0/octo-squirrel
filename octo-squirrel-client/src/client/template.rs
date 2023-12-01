@@ -1,12 +1,11 @@
-use std::error;
 use std::future::Future;
 use std::hash::Hash;
-use std::io;
 use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Result;
 use bytes::BytesMut;
 use dashmap::mapref::entry::Entry::Vacant;
 use dashmap::DashMap;
@@ -46,16 +45,11 @@ where
     type Output = Fut::Output;
 }
 
-pub async fn transfer_udp<Key, FnKey, FnOutbound>(
-    socket: UdpSocket,
-    config: ServerConfig,
-    f_key: FnKey,
-    mut f_outbound: FnOutbound,
-) -> Result<(), io::Error>
+pub async fn transfer_udp<Key, FnKey, FnOutbound>(socket: UdpSocket, config: ServerConfig, f_key: FnKey, mut f_outbound: FnOutbound) -> Result<()>
 where
     Key: Copy + Eq + Hash + Send + Sync + 'static,
     FnKey: FnOnce(SocketAddr, SocketAddr) -> Key + Copy,
-    FnOutbound: for<'a> AsyncUdpOutbound<&'a ServerConfig, Output = Result<Sender<(DatagramPacket, SocketAddr)>, io::Error>>,
+    FnOutbound: for<'a> AsyncUdpOutbound<&'a ServerConfig, Output = Result<Sender<(DatagramPacket, SocketAddr)>>>,
 {
     let inbound = UdpFramed::new(socket, Socks5UdpCodec);
     let (mut sink, mut stream) = inbound.split();
@@ -84,10 +78,10 @@ where
     Ok(())
 }
 
-pub async fn transfer_tcp<Fn, Fut>(listener: TcpListener, current: &ServerConfig, mut f: Fn) -> Result<(), Box<dyn error::Error>>
+pub async fn transfer_tcp<Fn, Fut>(listener: TcpListener, current: &ServerConfig, mut f: Fn) -> Result<()>
 where
     Fn: FnMut(TcpStream, Address, ServerConfig) -> Fut,
-    Fut: Future<Output = Result<(), io::Error>> + Send + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
 {
     while let Ok((mut inbound, _)) = listener.accept().await {
         let local_addr = inbound.local_addr().unwrap();

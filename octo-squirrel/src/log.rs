@@ -1,6 +1,6 @@
-use std::error::Error;
 use std::str::FromStr;
 
+use anyhow::Result;
 use log::info;
 use log::LevelFilter;
 use log4rs::append::console::ConsoleAppender;
@@ -11,7 +11,7 @@ use log4rs::Config;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub fn init(config: &Logger) -> Result<(), Box<dyn Error>> {
+pub fn init(config: &Logger) -> Result<()> {
     let path = "log4rs.yaml";
     if let Ok(()) = log4rs::init_file(path, Default::default()) {
         info!("Init custom logger.");
