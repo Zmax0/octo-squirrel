@@ -157,6 +157,8 @@ impl AEADCipherCodec {
                 let key: [u8; 32] = Self::generate_key(password);
                 Self { cipher, key: key.to_vec(), encoder: None, decoder: None }
             }
+            CipherKind::Aead2022Blake3Aes128Gcm => todo!(),
+            CipherKind::Aead2022Blake3Aes256Gcm => todo!(),
         }
     }
 

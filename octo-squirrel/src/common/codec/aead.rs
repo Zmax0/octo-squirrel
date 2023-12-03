@@ -22,6 +22,10 @@ pub enum CipherKind {
     Aes256Gcm,
     #[serde(rename = "chacha20-poly1305")]
     ChaCha20Poly1305,
+    #[serde(rename = "2022-blake3-aes-128-gcm")]
+    Aead2022Blake3Aes128Gcm,
+    #[serde(rename = "2022-blake3-aes-256-gcm")]
+    Aead2022Blake3Aes256Gcm,
 }
 
 impl CipherKind {
@@ -29,8 +33,8 @@ impl CipherKind {
 
     pub fn to_aead_cipher(&self, key: &[u8]) -> Box<dyn CipherMethod> {
         match self {
-            CipherKind::Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
-            CipherKind::Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
+            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
+            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
             CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(&key)),
         }
     }
