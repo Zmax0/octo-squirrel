@@ -7,6 +7,22 @@ pub enum StreamType {
     Response,
 }
 
+impl StreamType {
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            StreamType::Request(_) => 0,
+            StreamType::Response => 1,
+        }
+    }
+
+    pub fn expect_u8(&self) -> u8 {
+        match self {
+            StreamType::Request(_) => 1,
+            StreamType::Response => 0,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Context {
     pub stream_type: StreamType,

@@ -38,6 +38,13 @@ impl CipherKind {
             CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(&key)),
         }
     }
+
+    pub fn is_aead_2022(&self) -> bool {
+        match self {
+            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => true,
+            _ => false,
+        }
+    }
 }
 
 pub trait CipherMethod: Send {
@@ -145,6 +152,10 @@ pub struct IncreasingNonceGenerator {
 }
 
 impl IncreasingNonceGenerator {
+    pub fn init() -> Self {
+        Self { nonce: vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff] }
+    }
+
     pub fn generate(&mut self) -> Vec<u8> {
         for i in 0..self.nonce.len() {
             self.nonce[i] = self.nonce[i].overflowing_add(1).0;
@@ -153,10 +164,6 @@ impl IncreasingNonceGenerator {
             }
         }
         return self.nonce.to_vec();
-    }
-
-    pub fn generate_initial_aead_nonce() -> Self {
-        Self { nonce: vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff] }
     }
 }
 
@@ -186,7 +193,7 @@ mod test {
 
     #[test]
     fn test_generate_initial_aead_nonce() {
-        assert_eq!(IncreasingNonceGenerator::generate_initial_aead_nonce().generate(), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        assert_eq!(IncreasingNonceGenerator::init().generate(), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     }
 
     #[test]
