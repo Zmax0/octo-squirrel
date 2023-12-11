@@ -8,7 +8,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use log::debug;
 use octo_squirrel::common::codec::shadowsocks::AEADCipherCodec;
-use octo_squirrel::common::codec::shadowsocks::CilentCodec;
+use octo_squirrel::common::codec::shadowsocks::ClientCodec;
 use octo_squirrel::common::codec::shadowsocks::DatagramPacketCodec;
 use octo_squirrel::common::codec::BytesCodec;
 use octo_squirrel::common::network::DatagramPacket;
@@ -29,7 +29,7 @@ pub async fn transfer_tcp(inbound: TcpStream, addr: Address, config: ServerConfi
     let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec).split();
     let (mut outbound_sink, mut outbound_stream) = Framed::new(
         outbound,
-        CilentCodec::new(Context::tcp(StreamType::Request(addr)), AEADCipherCodec::new(config.cipher, config.password.as_bytes())?),
+        ClientCodec::new(Context::tcp(StreamType::Request(addr)), AEADCipherCodec::new(config.cipher, config.password.as_bytes())?),
     )
     .split();
     let client_to_server = async { outbound_sink.send_all(&mut inbound_stream).await };

@@ -12,6 +12,7 @@ use base64ct::Base64;
 use base64ct::Encoding;
 use bytes::Buf;
 use bytes::BufMut;
+use bytes::Bytes;
 use bytes::BytesMut;
 use log::trace;
 use tokio_util::codec::Decoder;
@@ -95,7 +96,7 @@ impl ChunkEncoder {
 
     fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
         let tag_size = self.auth.method.tag_size();
-        let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.auth.size_bytes());
+        let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.size_bytes());
         trace!("Encode payload; payload length={}", encrypted_size);
         let encrypted_size_bytes = self.encode_size(encrypted_size + tag_size);
         dst.put_slice(&encrypted_size_bytes);
@@ -113,6 +114,13 @@ impl ChunkEncoder {
     fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut) {
         self.auth.seal(&mut src);
         dst.put(src);
+    }
+
+    fn size_bytes(&self) -> usize {
+        match self.chunk {
+            ChunkSizeParser::Auth => self.auth.size_bytes(),
+            ChunkSizeParser::Empty => 0,
+        }
     }
 
     fn encode_size(&mut self, size: usize) -> Vec<u8> {
@@ -142,9 +150,8 @@ impl ChunkDecoder {
         Ok(Some(opened))
     }
 
-    fn decode_payload(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>> {
-        let size_bytes = self.auth.size_bytes();
-        let mut dst = Vec::new();
+    fn decode_payload(&mut self, src: &mut BytesMut, dst: &mut BytesMut) {
+        let size_bytes = self.size_bytes();
         while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
             if let Some(payload_length) = self.payload_length {
                 let mut payload_btyes = src.split_to(payload_length);
@@ -152,15 +159,17 @@ impl ChunkDecoder {
                 dst.put(payload_btyes);
                 self.payload_length = None;
             } else {
-                let payload_length = self.auth.decode_size(&mut src.split_to(size_bytes));
+                let payload_length = self.decode_size(&mut src.split_to(size_bytes));
                 trace!("Decode payload; payload length={:?}", payload_length);
                 self.payload_length = Some(payload_length);
             }
         }
-        if dst.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(BytesMut::from(&dst[..])))
+    }
+
+    fn size_bytes(&self) -> usize {
+        match self.chunk {
+            ChunkSizeParser::Auth => self.auth.size_bytes(),
+            ChunkSizeParser::Empty => 0,
         }
     }
 
@@ -228,7 +237,7 @@ impl AEADCipherCodec {
     fn init_tcp_payload_encoder(&mut self, dst: &mut BytesMut) {
         let salt = Dice::roll_bytes(self.key.len());
         trace!("New request salt; {}", Base64::encode_string(&salt));
-        dst.put_slice(&salt[..]);
+        dst.put(&salt[..]);
         self.encoder = Some(self.new_encoder(&salt));
     }
 
@@ -241,7 +250,7 @@ impl AEADCipherCodec {
                 if is_aead_2022 {
                     let padding = aead_2022::next_padding_length(&msg);
                     temp.put_u16(padding);
-                    temp.put_slice(&Dice::roll_bytes(padding as usize))
+                    temp.put(&Dice::roll_bytes(padding as usize)[..])
                 }
                 temp.put(msg);
                 if is_aead_2022 {
@@ -266,14 +275,19 @@ impl AEADCipherCodec {
         }
         match context.network {
             Network::TCP => {
-                let mut res = BytesMut::new();
+                let mut dst = BytesMut::new();
                 if self.decoder.is_none() {
-                    // res.put(self.init_tcp_payload_decoder(context, src)?);
-                    if self.decoder.is_none() {
-                        return Ok(None);
-                    }
+                    self.init_tcp_payload_decoder(context, src, &mut dst)?;
                 }
-                self.decoder.as_mut().unwrap().decode_payload(src)
+                if self.decoder.is_none() {
+                    return Ok(None);
+                }
+                self.decoder.as_mut().unwrap().decode_payload(src, &mut dst);
+                if dst.has_remaining() {
+                    Ok(Some(dst))
+                } else {
+                    Ok(None)
+                }
             }
             Network::UDP => {
                 if src.remaining() < self.key.len() {
@@ -285,26 +299,21 @@ impl AEADCipherCodec {
         }
     }
 
-    fn init_tcp_payload_decoder(&mut self, context: &Context, src: &mut BytesMut) -> Result<Option<BytesMut>> {
+    fn init_tcp_payload_decoder(&mut self, context: &Context, src: &mut BytesMut, dst: &mut BytesMut) -> Result<()> {
         if src.remaining() < self.request_salt.len() {
-            return Ok(None);
+            return Ok(());
         }
-        let mut salt = BytesMut::with_capacity(self.request_salt.len());
         let mut cursor = Cursor::new(src);
-        let pos = cursor.position();
-        cursor.copy_to_slice(&mut salt);
+        let salt = cursor.copy_to_bytes(self.request_salt.len());
         trace!("Get request salt {}", Base64::encode_string(&salt));
         if self.kind.is_aead_2022() {
-            if let Some(msg) = self.init_aead_2022_tcp_payload_decoder(context, &salt, &mut cursor)? {
-                Ok(Some(msg))
-            } else {
-                cursor.set_position(pos);
-                Ok(None)
-            }
+            self.init_aead_2022_tcp_payload_decoder(context, &salt, &mut cursor, dst)?
         } else {
-            self.init_aead_tcp_payload_decoder(&salt);
-            Ok(None)
+            self.decoder = Some(aead::new_decoder(self.kind, &self.key, &salt));
         }
+        let pos = cursor.position();
+        cursor.into_inner().advance(pos as usize);
+        Ok(())
     }
 
     fn new_encoder(&self, salt: &[u8]) -> ChunkEncoder {
@@ -323,39 +332,43 @@ impl AEADCipherCodec {
         }
     }
 
-    fn init_aead_tcp_payload_decoder(&mut self, salt: &[u8]) {
-        let decoder = aead::new_decoder(self.kind, &self.key, salt);
-        self.decoder = Some(decoder);
-    }
-
-    fn init_aead_2022_tcp_payload_decoder(&mut self, context: &Context, salt: &[u8], cursor: &mut Cursor<&mut BytesMut>) -> Result<Option<BytesMut>> {
+    fn init_aead_2022_tcp_payload_decoder(
+        &mut self,
+        context: &Context,
+        salt: &[u8],
+        src: &mut Cursor<&mut BytesMut>,
+        dst: &mut BytesMut,
+    ) -> Result<()> {
         let mut decoder = aead_2022::Tcp::new_decoder(self.kind, &self.key, salt);
         let tag_size = decoder.auth.method.tag_size();
         let salt_size = match context.stream_type {
             StreamType::Request(_) => self.request_salt.len(),
             StreamType::Response => 0,
         };
-        let mut header_bytes = BytesMut::with_capacity(1 + 8 + salt_size + 2 + tag_size);
-        cursor.copy_to_slice(&mut header_bytes);
-        decoder.auth.open(&mut header_bytes);
-        let stream_type_byte = header_bytes.get_u8();
+        let mut fixed = vec![0; 1 + 8 + salt_size + 2 + tag_size];
+        src.copy_to_slice(&mut fixed);
+        decoder.auth.open(&mut fixed);
+        let mut fixed = Bytes::from(fixed);
+        let stream_type_byte = fixed.get_u8();
         let expect_stream_type_byte = context.stream_type.expect_u8();
         if stream_type_byte != expect_stream_type_byte {
-            bail!("invalid stream type, expecting {}, but found {}", expect_stream_type_byte, stream_type_byte)
+            bail!("Invalid stream type, expecting {}, but found {}", expect_stream_type_byte, stream_type_byte)
         }
-        aead_2022::validate_timestamp(cursor.get_u64())?;
-        match context.stream_type {
-            StreamType::Request(_) => header_bytes.copy_to_slice(&mut self.request_salt),
-            StreamType::Response => header_bytes.advance(salt_size),
+        aead_2022::validate_timestamp(fixed.get_u64())?;
+        if matches!(context.stream_type, StreamType::Request(_)) {
+            fixed.copy_to_slice(&mut self.request_salt);
+            trace!("Get request header salt {}", Base64::encode_string(&self.request_salt));
         };
-        let length = header_bytes.get_u16() as usize;
-        if cursor.remaining() < length + tag_size {
-            return Ok(None);
+        let length = fixed.get_u16() as usize;
+        if src.remaining() < length + tag_size {
+            bail!("Invalid via request header length")
         }
-        let mut payload_bytes = BytesMut::with_capacity(length + tag_size);
-        decoder.auth.open(&mut payload_bytes);
+        let mut via = vec![0; length + tag_size];
+        src.copy_to_slice(&mut via);
+        decoder.auth.open(&mut via);
         self.decoder = Some(decoder);
-        Ok(Some(payload_bytes))
+        dst.put(&via[..]);
+        Ok(())
     }
 }
 
@@ -398,34 +411,26 @@ impl Decoder for DatagramPacketCodec {
     }
 }
 
-pub struct CilentCodec {
+pub struct ClientCodec {
     context: Context,
     cipher: AEADCipherCodec,
 }
 
-impl CilentCodec {
+impl ClientCodec {
     pub fn new(context: Context, cipher: AEADCipherCodec) -> Self {
         Self { context, cipher }
     }
 }
 
-impl Encoder<BytesMut> for CilentCodec {
+impl Encoder<BytesMut> for ClientCodec {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, mut item: BytesMut, dst: &mut BytesMut) -> Result<()> {
-        if self.cipher.encoder.is_none() {
-            if let StreamType::Request(ref addr) = self.context.stream_type {
-                let mut addr_bytes = BytesMut::with_capacity(AddressCodec::length(addr));
-                AddressCodec::encode(addr, &mut addr_bytes)?;
-                addr_bytes.put(item);
-                item = addr_bytes;
-            }
-        }
+    fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
         self.cipher.encode(&self.context, item, dst)
     }
 }
 
-impl Decoder for CilentCodec {
+impl Decoder for ClientCodec {
     type Item = BytesMut;
 
     type Error = anyhow::Error;

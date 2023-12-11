@@ -83,9 +83,9 @@ impl Tcp {
         if let Some(request_salt) = request_salt {
             fixed.put_slice(request_salt);
         }
-        let len = msg.remaining().min(0xffff - salt_len - 1 - 8);
+        let len = msg.remaining().min(0xffff);
         let mut via = msg.split_to(len);
-        fixed.put_u16((1 + 8 + salt_len + len) as u16);
+        fixed.put_u16(len as u16);
         auth.seal(&mut fixed);
         auth.seal(&mut via);
         (fixed.freeze(), via.freeze())

@@ -29,8 +29,6 @@ pub enum CipherKind {
 }
 
 impl CipherKind {
-    pub const VALUES: [CipherKind; 3] = [CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
-
     pub fn to_aead_cipher(&self, key: &[u8]) -> Box<dyn CipherMethod> {
         match self {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
