@@ -14,37 +14,6 @@ use chacha20poly1305::ChaCha20Poly1305;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum CipherKind {
-    #[serde(rename = "aes-128-gcm")]
-    Aes128Gcm,
-    #[serde(rename = "aes-256-gcm")]
-    Aes256Gcm,
-    #[serde(rename = "chacha20-poly1305")]
-    ChaCha20Poly1305,
-    #[serde(rename = "2022-blake3-aes-128-gcm")]
-    Aead2022Blake3Aes128Gcm,
-    #[serde(rename = "2022-blake3-aes-256-gcm")]
-    Aead2022Blake3Aes256Gcm,
-}
-
-impl CipherKind {
-    pub fn to_aead_cipher(&self, key: &[u8]) -> Box<dyn CipherMethod> {
-        match self {
-            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
-            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
-            CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(&key)),
-        }
-    }
-
-    pub fn is_aead_2022(&self) -> bool {
-        match self {
-            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => true,
-            _ => false,
-        }
-    }
-}
-
 pub trait CipherMethod: Send {
     fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
     fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Vec<u8>;
@@ -107,6 +76,55 @@ aead_impl!(Aes128GcmCipher, Aes128Gcm);
 aead_impl!(Aes256GcmCipher, Aes256Gcm);
 aead_impl!(ChaCha20Poly1305Cipher, ChaCha20Poly1305);
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum CipherKind {
+    #[serde(rename = "aes-128-gcm")]
+    Aes128Gcm,
+    #[serde(rename = "aes-256-gcm")]
+    Aes256Gcm,
+    #[serde(rename = "chacha20-poly1305")]
+    ChaCha20Poly1305,
+    #[serde(rename = "2022-blake3-aes-128-gcm")]
+    Aead2022Blake3Aes128Gcm,
+    #[serde(rename = "2022-blake3-aes-256-gcm")]
+    Aead2022Blake3Aes256Gcm,
+}
+
+macro_rules! match_method_const {
+    ($self:ident, $const:ident) => {
+        match $self {
+            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Aes128GcmCipher::$const,
+            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Aes256GcmCipher::$const,
+            CipherKind::ChaCha20Poly1305 => ChaCha20Poly1305Cipher::$const,
+        }
+    };
+}
+
+impl CipherKind {
+    pub fn to_cipher_method(&self, key: &[u8]) -> Box<dyn CipherMethod> {
+        match self {
+            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
+            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
+            CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(&key)),
+        }
+    }
+
+    pub fn is_aead_2022(&self) -> bool {
+        match self {
+            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => true,
+            _ => false,
+        }
+    }
+
+    pub fn tag_size(&self) -> usize {
+        match_method_const!(self, TAG_SIZE)
+    }
+
+    pub fn ciphertext_overhead(&self) -> usize {
+        match_method_const!(self, CIPHERTEXT_OVERHEAD)
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub enum PaddingLengthGenerator {
     Empty,
@@ -154,14 +172,14 @@ impl IncreasingNonceGenerator {
         Self { nonce: vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff] }
     }
 
-    pub fn generate(&mut self) -> Vec<u8> {
+    pub fn generate(&mut self) -> &[u8] {
         for i in 0..self.nonce.len() {
             self.nonce[i] = self.nonce[i].overflowing_add(1).0;
             if self.nonce[i] != 0 {
                 break;
             }
         }
-        return self.nonce.to_vec();
+        return &self.nonce;
     }
 }
 

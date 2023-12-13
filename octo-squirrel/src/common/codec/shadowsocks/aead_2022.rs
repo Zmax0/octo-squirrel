@@ -1,4 +1,6 @@
-use std::io::Cursor;
+pub(super) mod tcp;
+pub(super) mod udp;
+
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -7,19 +9,8 @@ use anyhow::Result;
 use base64ct::Base64;
 use base64ct::Encoding;
 use bytes::Buf;
-use bytes::BufMut;
-use bytes::Bytes;
 use bytes::BytesMut;
 use rand::Rng;
-
-use super::ChunkDecoder;
-use super::ChunkEncoder;
-use crate::common::codec::aead::CipherKind;
-use crate::common::codec::aead::IncreasingNonceGenerator;
-use crate::common::codec::shadowsocks::Authenticator;
-use crate::common::codec::shadowsocks::ChunkSizeParser;
-use crate::common::codec::shadowsocks::NonceGenerator;
-use crate::common::protocol::shadowsocks::StreamType;
 
 const SERVER_STREAM_TIMESTAMP_MAX_DIFF: u64 = 30;
 const MIN_PADDING_LENGTH: u16 = 0;
@@ -61,58 +52,6 @@ pub fn next_padding_length(msg: &BytesMut) -> u16 {
         0
     } else {
         rand::thread_rng().gen_range(MIN_PADDING_LENGTH..=MAX_PADDING_LENGTH)
-    }
-}
-
-pub struct Header {
-    pub fixed: Bytes,
-    pub variable: Bytes,
-}
-
-pub struct Tcp;
-
-impl Tcp {
-    pub fn new_header(auth: &mut Authenticator, msg: &mut BytesMut, stream_type: &StreamType, request_salt: Option<&[u8]>) -> (Bytes, Bytes) {
-        let mut salt_len = 0;
-        if let Some(request_salt) = request_salt {
-            salt_len = request_salt.len();
-        }
-        let mut fixed = BytesMut::with_capacity(1 + 8 + salt_len + 2);
-        fixed.put_u8(stream_type.to_u8());
-        fixed.put_u64(now());
-        if let Some(request_salt) = request_salt {
-            fixed.put_slice(request_salt);
-        }
-        let len = msg.remaining().min(0xffff);
-        let mut via = msg.split_to(len);
-        fixed.put_u16(len as u16);
-        auth.seal(&mut fixed);
-        auth.seal(&mut via);
-        (fixed.freeze(), via.freeze())
-    }
-
-    pub fn session_sub_key(key: &[u8], salt: &[u8]) -> [u8; 32] {
-        session_sub_key(key, salt)
-    }
-
-    pub fn new_encoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkEncoder {
-        let key = session_sub_key(key, salt);
-        let auth = Authenticator::new(kind.to_aead_cipher(&key), NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
-        ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth)
-    }
-
-    pub fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkDecoder {
-        let key = session_sub_key(key, salt);
-        let auth = Authenticator::new(kind.to_aead_cipher(&key), NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
-        ChunkDecoder::new(auth, ChunkSizeParser::Auth)
-    }
-}
-
-pub struct Udp;
-
-impl Udp {
-    pub fn session_sub_key(key: &[u8], session_id: u64) -> [u8; 32] {
-        session_sub_key(key, &session_id.to_be_bytes())
     }
 }
 

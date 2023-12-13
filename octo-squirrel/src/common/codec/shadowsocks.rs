@@ -1,5 +1,5 @@
-pub mod aead;
-pub mod aead_2022;
+mod aead;
+mod aead_2022;
 
 use std::io::Cursor;
 use std::mem::size_of;
@@ -18,9 +18,11 @@ use log::trace;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use self::aead_2022::tcp;
 use super::aead::CipherKind;
 use super::aead::CipherMethod;
 use super::aead::IncreasingNonceGenerator;
+use crate::common::codec::shadowsocks::aead_2022::udp;
 use crate::common::network::DatagramPacket;
 use crate::common::network::Network;
 use crate::common::protocol::address::Address;
@@ -31,14 +33,14 @@ use crate::common::util::Dice;
 
 enum NonceGenerator {
     Increasing(IncreasingNonceGenerator),
-    Empty,
+    Static(Box<[u8]>),
 }
 
 impl NonceGenerator {
-    pub fn generate(&mut self) -> Vec<u8> {
+    pub fn generate(&mut self) -> &[u8] {
         match self {
             NonceGenerator::Increasing(ref mut inner) => inner.generate(),
-            NonceGenerator::Empty => Vec::new(),
+            NonceGenerator::Static(nonce) => nonce,
         }
     }
 }
@@ -215,37 +217,80 @@ impl AEADCipherCodec {
         }
     }
 
-    fn encode(&mut self, context: &Context, mut item: BytesMut, dst: &mut BytesMut) -> Result<()> {
+    fn encode(&mut self, context: &mut Context, mut item: BytesMut, dst: &mut BytesMut) -> Result<()> {
         match context.network {
             Network::TCP => {
-                if self.encoder.is_none() {
-                    self.init_tcp_payload_encoder(dst);
-                    item = self.handle_header(context, item, dst)?;
+                if let None = self.encoder {
+                    self.init_payload_encoder(dst);
+                    item = self.handle_payload_header(context, item, dst)?;
                 }
                 self.encoder.as_mut().unwrap().encode_payload(item, dst);
                 Ok(())
             }
-            Network::UDP => {
-                let salt = Dice::roll_bytes(self.key.len());
-                dst.put(&salt[..]);
-                self.new_encoder(&salt).encode_packet(item, dst);
-                Ok(())
-            }
+            Network::UDP => self.encode_packet(context, item, dst),
         }
     }
 
-    fn init_tcp_payload_encoder(&mut self, dst: &mut BytesMut) {
+    fn encode_packet(&self, context: &mut Context, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
+        if self.kind.is_aead_2022() {
+            let padding_length = aead_2022::next_padding_length(&item);
+            let nonce_length = udp::nonce_length(self.kind)?;
+            let tag_size = self.kind.tag_size();
+            let mut temp = BytesMut::with_capacity(
+                nonce_length
+                    + 8
+                    + 8
+                    + 1
+                    + 8
+                    + 2
+                    + padding_length as usize
+                    + AddressCodec::length(context.address.as_ref().unwrap())
+                    + item.remaining()
+                    + tag_size,
+            );
+            temp.put_u64(0);
+            context.session.packet_id += 1;
+            temp.put_u64(context.session.packet_id);
+            temp.put_u8(context.stream_type.to_u8());
+            temp.put_u64(aead_2022::now());
+            temp.put_u16(padding_length);
+            temp.put(&Dice::roll_bytes(padding_length as usize)[..]);
+            if matches!(context.stream_type, StreamType::Response) {
+                temp.put_u64(context.session.client_session_id);
+            }
+            AddressCodec::encode(context.address.as_ref().unwrap(), &mut temp)?;
+            temp.put(item);
+            let mut nonce: [u8; 12] = [0; 12];
+            nonce.copy_from_slice(&temp[4..16]);
+            let mut header: [u8; 16] = [0; 16];
+            header.copy_from_slice(&temp.split_to(16));
+            udp::encrypt_packet_header(self.kind, &self.key, &mut header)?;
+            dst.put(&header[..]);
+            udp::new_encoder(self.kind, &self.key, 0, nonce).encode_packet(temp, dst);
+        } else {
+            let salt = Dice::roll_bytes(self.key.len());
+            dst.put(&salt[..]);
+            let address = context.address.as_ref().unwrap();
+            let mut temp = BytesMut::with_capacity(AddressCodec::length(address) + item.remaining());
+            AddressCodec::encode(address, &mut temp)?;
+            temp.put(item);
+            self.new_encoder(&salt).encode_packet(temp, dst);
+        }
+        Ok(())
+    }
+
+    fn init_payload_encoder(&mut self, dst: &mut BytesMut) {
         let salt = Dice::roll_bytes(self.key.len());
         trace!("New request salt; {}", Base64::encode_string(&salt));
         dst.put(&salt[..]);
         self.encoder = Some(self.new_encoder(&salt));
     }
 
-    fn handle_header(&mut self, context: &Context, mut msg: BytesMut, dst: &mut BytesMut) -> Result<BytesMut> {
+    fn handle_payload_header(&mut self, context: &Context, mut msg: BytesMut, dst: &mut BytesMut) -> Result<BytesMut> {
         match context.stream_type {
-            StreamType::Request(ref addr) => {
+            StreamType::Request => {
                 let mut temp = BytesMut::new();
-                AddressCodec::encode(addr, &mut temp)?;
+                AddressCodec::encode(context.address.as_ref().unwrap(), &mut temp)?;
                 let is_aead_2022 = self.kind.is_aead_2022();
                 if is_aead_2022 {
                     let padding = aead_2022::next_padding_length(&msg);
@@ -254,7 +299,7 @@ impl AEADCipherCodec {
                 }
                 temp.put(msg);
                 if is_aead_2022 {
-                    let (fix, via) = aead_2022::Tcp::new_header(&mut self.encoder.as_mut().unwrap().auth, &mut temp, &context.stream_type, None);
+                    let (fix, via) = tcp::new_header(&mut self.encoder.as_mut().unwrap().auth, &mut temp, &context.stream_type, None);
                     dst.put(fix);
                     dst.put(via);
                 }
@@ -262,24 +307,24 @@ impl AEADCipherCodec {
             }
             StreamType::Response => {
                 if self.kind.is_aead_2022() {
-                    aead_2022::Tcp::new_header(&mut self.encoder.as_mut().unwrap().auth, &mut msg, &context.stream_type, Some(&self.request_salt));
+                    tcp::new_header(&mut self.encoder.as_mut().unwrap().auth, &mut msg, &context.stream_type, Some(&self.request_salt));
                 }
                 Ok(msg)
             }
         }
     }
 
-    fn decode(&mut self, context: &Context, src: &mut BytesMut) -> Result<Option<BytesMut>> {
+    fn decode(&mut self, context: &mut Context, src: &mut BytesMut) -> Result<Option<BytesMut>> {
         if src.is_empty() {
             return Ok(None);
         }
         match context.network {
             Network::TCP => {
                 let mut dst = BytesMut::new();
-                if self.decoder.is_none() {
-                    self.init_tcp_payload_decoder(context, src, &mut dst)?;
+                if let None = self.decoder {
+                    self.init_payload_decoder(context, src, &mut dst)?;
                 }
-                if self.decoder.is_none() {
+                if let None = self.decoder {
                     return Ok(None);
                 }
                 self.decoder.as_mut().unwrap().decode_payload(src, &mut dst);
@@ -289,17 +334,50 @@ impl AEADCipherCodec {
                     Ok(None)
                 }
             }
-            Network::UDP => {
-                if src.remaining() < self.key.len() {
-                    return Ok(None);
-                }
-                let salt = src.split_to(self.key.len());
-                self.new_decoder(&salt).decode_packet(src)
-            }
+            Network::UDP => Ok(Some(self.decode_packet(context, src)?)),
         }
     }
 
-    fn init_tcp_payload_decoder(&mut self, context: &Context, src: &mut BytesMut, dst: &mut BytesMut) -> Result<()> {
+    fn decode_packet(&self, context: &mut Context, src: &mut BytesMut) -> Result<BytesMut> {
+        if self.kind.is_aead_2022() {
+            let nonce_length = udp::nonce_length(self.kind)?;
+            let tag_size = self.kind.tag_size();
+            let header_length = nonce_length + tag_size + 8 + 8 + 1 + 8 + 2;
+            if src.remaining() < header_length {
+                bail!("Packet too short, at least {} bytes, but found {} bytes", header_length, src.remaining());
+            }
+            let mut header: [u8; 16] = [0; 16];
+            header.copy_from_slice(&src.split_to(16));
+            udp::decrypt_packet_header(self.kind, &self.key, &mut header)?;
+            let mut nonce: [u8; 12] = [0; 12];
+            nonce.copy_from_slice(&header[4..16]);
+            let mut header = Bytes::from(header.to_vec());
+            let server_session_id = header.get_u64();
+            header.get_u64(); // pack id
+            let mut packet = udp::new_decoder(self.kind, &self.key, server_session_id, nonce).decode_packet(src)?.unwrap();
+            packet.get_u8(); // stream type
+            aead_2022::validate_timestamp(packet.get_u64())?;
+            let padding_length = packet.get_u16();
+            if padding_length > 0 {
+                packet.advance(padding_length as usize);
+            }
+            if matches!(context.stream_type, StreamType::Request) {
+                context.session.client_session_id = packet.get_u64();
+            }
+            context.address = Some(AddressCodec::decode(&mut packet)?);
+            Ok(packet)
+        } else {
+            if src.remaining() < self.key.len() {
+                bail!("Invalid packet length");
+            }
+            let salt = src.split_to(self.key.len());
+            let mut packet = self.new_payload_decoder(&salt).decode_packet(src)?.unwrap();
+            context.address = Some(AddressCodec::decode(&mut packet)?);
+            Ok(packet)
+        }
+    }
+
+    fn init_payload_decoder(&mut self, context: &Context, src: &mut BytesMut, dst: &mut BytesMut) -> Result<()> {
         if src.remaining() < self.request_salt.len() {
             return Ok(());
         }
@@ -307,7 +385,7 @@ impl AEADCipherCodec {
         let salt = cursor.copy_to_bytes(self.request_salt.len());
         trace!("Get request salt {}", Base64::encode_string(&salt));
         if self.kind.is_aead_2022() {
-            self.init_aead_2022_tcp_payload_decoder(context, &salt, &mut cursor, dst)?
+            self.init_aead_2022_payload_decoder(context, &salt, &mut cursor, dst)?
         } else {
             self.decoder = Some(aead::new_decoder(self.kind, &self.key, &salt));
         }
@@ -318,31 +396,25 @@ impl AEADCipherCodec {
 
     fn new_encoder(&self, salt: &[u8]) -> ChunkEncoder {
         if self.kind.is_aead_2022() {
-            aead_2022::Tcp::new_encoder(self.kind, &self.key, salt)
+            tcp::new_encoder(self.kind, &self.key, salt)
         } else {
             aead::new_encoder(self.kind, &self.key, salt)
         }
     }
 
-    fn new_decoder(&self, salt: &BytesMut) -> ChunkDecoder {
+    fn new_payload_decoder(&self, salt: &BytesMut) -> ChunkDecoder {
         if self.kind.is_aead_2022() {
-            aead_2022::Tcp::new_decoder(self.kind, &self.key, salt)
+            tcp::new_decoder(self.kind, &self.key, salt)
         } else {
             aead::new_decoder(self.kind, &self.key, salt)
         }
     }
 
-    fn init_aead_2022_tcp_payload_decoder(
-        &mut self,
-        context: &Context,
-        salt: &[u8],
-        src: &mut Cursor<&mut BytesMut>,
-        dst: &mut BytesMut,
-    ) -> Result<()> {
-        let mut decoder = aead_2022::Tcp::new_decoder(self.kind, &self.key, salt);
+    fn init_aead_2022_payload_decoder(&mut self, context: &Context, salt: &[u8], src: &mut Cursor<&mut BytesMut>, dst: &mut BytesMut) -> Result<()> {
+        let mut decoder = tcp::new_decoder(self.kind, &self.key, salt);
         let tag_size = decoder.auth.method.tag_size();
         let salt_size = match context.stream_type {
-            StreamType::Request(_) => self.request_salt.len(),
+            StreamType::Request => self.request_salt.len(),
             StreamType::Response => 0,
         };
         let mut fixed = vec![0; 1 + 8 + salt_size + 2 + tag_size];
@@ -355,7 +427,7 @@ impl AEADCipherCodec {
             bail!("Invalid stream type, expecting {}, but found {}", expect_stream_type_byte, stream_type_byte)
         }
         aead_2022::validate_timestamp(fixed.get_u64())?;
-        if matches!(context.stream_type, StreamType::Request(_)) {
+        if matches!(context.stream_type, StreamType::Request) {
             fixed.copy_to_slice(&mut self.request_salt);
             trace!("Get request header salt {}", Base64::encode_string(&self.request_salt));
         };
@@ -373,12 +445,13 @@ impl AEADCipherCodec {
 }
 
 pub struct DatagramPacketCodec {
+    context: Context,
     cipher: AEADCipherCodec,
 }
 
 impl DatagramPacketCodec {
-    pub fn new(cipher: AEADCipherCodec) -> Self {
-        Self { cipher }
+    pub fn new(context: Context, cipher: AEADCipherCodec) -> Self {
+        Self { context, cipher }
     }
 }
 
@@ -386,12 +459,8 @@ impl Encoder<DatagramPacket> for DatagramPacketCodec {
     type Error = anyhow::Error;
 
     fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<()> {
-        let addr = Address::from(item.1);
-        let mut temp = BytesMut::with_capacity(item.0.len() + AddressCodec::length(&addr));
-        AddressCodec::encode(&addr, &mut temp)?;
-        temp.put(item.0);
-        let context = Context::udp(StreamType::Request(addr));
-        self.cipher.encode(&context, temp, dst)
+        self.context.address = Some(Address::from(item.1));
+        self.cipher.encode(&mut self.context, item.0, dst)
     }
 }
 
@@ -401,41 +470,39 @@ impl Decoder for DatagramPacketCodec {
     type Error = anyhow::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
-        let context = Context::udp(StreamType::Response);
-        if let Some(mut content) = self.cipher.decode(&context, src)? {
-            let recipient = AddressCodec::decode(&mut content)?;
-            Ok(Some((content.split_off(0), recipient.into())))
+        if let Some(content) = self.cipher.decode(&mut self.context, src)? {
+            Ok(Some((content, self.context.address.take().unwrap().into())))
         } else {
             Ok(None)
         }
     }
 }
 
-pub struct ClientCodec {
+pub struct PayloadCodec {
     context: Context,
     cipher: AEADCipherCodec,
 }
 
-impl ClientCodec {
+impl PayloadCodec {
     pub fn new(context: Context, cipher: AEADCipherCodec) -> Self {
         Self { context, cipher }
     }
 }
 
-impl Encoder<BytesMut> for ClientCodec {
+impl Encoder<BytesMut> for PayloadCodec {
     type Error = anyhow::Error;
 
     fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
-        self.cipher.encode(&self.context, item, dst)
+        self.cipher.encode(&mut self.context, item, dst)
     }
 }
 
-impl Decoder for ClientCodec {
+impl Decoder for PayloadCodec {
     type Item = BytesMut;
 
     type Error = anyhow::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
-        self.cipher.decode(&self.context, src)
+        self.cipher.decode(&mut self.context, src)
     }
 }

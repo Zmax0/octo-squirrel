@@ -8,7 +8,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use log::debug;
 use octo_squirrel::common::codec::shadowsocks::AEADCipherCodec;
-use octo_squirrel::common::codec::shadowsocks::ClientCodec;
+use octo_squirrel::common::codec::shadowsocks::PayloadCodec;
 use octo_squirrel::common::codec::shadowsocks::DatagramPacketCodec;
 use octo_squirrel::common::codec::BytesCodec;
 use octo_squirrel::common::network::DatagramPacket;
@@ -29,7 +29,7 @@ pub async fn transfer_tcp(inbound: TcpStream, addr: Address, config: ServerConfi
     let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec).split();
     let (mut outbound_sink, mut outbound_stream) = Framed::new(
         outbound,
-        ClientCodec::new(Context::tcp(StreamType::Request(addr)), AEADCipherCodec::new(config.cipher, config.password.as_bytes())?),
+        PayloadCodec::new(Context::tcp(StreamType::Request, Some(addr)), AEADCipherCodec::new(config.cipher, config.password.as_bytes())?),
     )
     .split();
     let client_to_server = async { outbound_sink.send_all(&mut inbound_stream).await };
@@ -50,7 +50,10 @@ pub async fn transfer_udp_outbound(
 ) -> Result<Sender<(DatagramPacket, SocketAddr)>> {
     let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
     let outbound_local_addr = outbound.local_addr()?;
-    let outbound = UdpFramed::new(outbound, DatagramPacketCodec::new(AEADCipherCodec::new(config.cipher, config.password.as_bytes())?));
+    let outbound = UdpFramed::new(
+        outbound,
+        DatagramPacketCodec::new(Context::udp(StreamType::Request, None), AEADCipherCodec::new(config.cipher, config.password.as_bytes())?),
+    );
     let (tx, mut rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
     let (mut outbound_sink, mut outbound_stream) = outbound.split();
     tokio::spawn(async move {

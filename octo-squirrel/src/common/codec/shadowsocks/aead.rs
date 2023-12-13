@@ -53,7 +53,7 @@ fn hkdfsha1(ikm: &[u8], salt: &[u8]) -> Vec<u8> {
 }
 
 fn new_auth(kind: CipherKind, key: &[u8]) -> Authenticator {
-    let method = kind.to_aead_cipher(key);
+    let method = kind.to_cipher_method(key);
     Authenticator::new(method, NonceGenerator::Increasing(IncreasingNonceGenerator::init()))
 }
 
@@ -92,15 +92,15 @@ mod test {
     #[test]
     fn test_tcp() {
         fn test_tcp(cipher: CipherKind) {
-            let context = Context::tcp(StreamType::Response);
+            let mut context = Context::tcp(StreamType::Response, None);
             let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
             rand::thread_rng().fill(&mut password[..]);
             let mut codec = AEADCipherCodec::new(cipher, &password[..]).unwrap();
             let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(1).map(char::from).collect();
             let src = BytesMut::from(expect.as_str());
             let mut dst = BytesMut::new();
-            codec.encode(&context, src, &mut dst).unwrap();
-            let actual = codec.decode(&context, &mut dst).unwrap().unwrap();
+            codec.encode(&mut context, src, &mut dst).unwrap();
+            let actual = codec.decode(&mut context, &mut dst).unwrap().unwrap();
             let actual = String::from_utf8(actual.freeze().to_vec()).unwrap();
             assert_eq!(expect, actual);
         }
@@ -115,7 +115,7 @@ mod test {
             rand::thread_rng().fill(&mut password[..]);
             let codec = AEADCipherCodec::new(cipher, &password[..]).unwrap();
             let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
-            let mut codec = DatagramPacketCodec::new(codec);
+            let mut codec = DatagramPacketCodec::new(Context::udp(StreamType::Response, None), codec);
             let mut dst = BytesMut::new();
             let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random()));
             codec.encode((expect.as_bytes().into(), addr), &mut dst).unwrap();
