@@ -1,10 +1,10 @@
-use std::io;
 use std::io::Cursor;
-use std::io::ErrorKind;
 use std::mem::size_of;
 use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
 
+use anyhow::bail;
+use anyhow::Result;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
@@ -15,7 +15,8 @@ use log::info;
 use octo_squirrel::common::codec::aead::Aes128GcmCipher;
 use octo_squirrel::common::codec::aead::CipherKind;
 use octo_squirrel::common::codec::aead::CipherMethod;
-use octo_squirrel::common::codec::vmess::AEADBodyCodec;
+use octo_squirrel::common::codec::vmess::aead::AEADBodyCodec;
+use octo_squirrel::common::codec::BytesCodec;
 use octo_squirrel::common::network::DatagramPacket;
 use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::vmess::aead::*;
@@ -33,7 +34,6 @@ use rand::Rng;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
-use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
@@ -54,7 +54,7 @@ impl ClientAEADCodec {
 }
 
 impl Encoder<BytesMut> for ClientAEADCodec {
-    type Error = io::Error;
+    type Error = anyhow::Error;
 
     fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
         if let None = self.body_encoder {
@@ -87,7 +87,7 @@ impl Encoder<BytesMut> for ClientAEADCodec {
 impl Decoder for ClientAEADCodec {
     type Item = BytesMut;
 
-    type Error = io::Error;
+    type Error = anyhow::Error;
 
     fn decode(&mut self, mut src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if src.is_empty() {
@@ -121,8 +121,7 @@ impl Decoder for ClientAEADCodec {
             let mut header_bytes = src.split_to(header_length + header_length_cipher.tag_size());
             header_cipher.decrypt_in_place(&header_iv, b"", &mut header_bytes);
             if self.session.response_header != header_bytes[0] {
-                let error = format!("Unexpected response header: expecting {} but actually {}", self.session.response_header, header_bytes[0]);
-                return Err(io::Error::new(ErrorKind::InvalidData, error));
+                bail!("Unexpected response header: expecting {} but actually {}", self.session.response_header, header_bytes[0]);
             }
             self.body_decoder = Some(AEADBodyCodec::decoder(&self.header, &mut self.session));
         }
@@ -134,11 +133,11 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub async fn transfer_tcp(inbound: TcpStream, addr: Address, config: ServerConfig) -> Result<(), io::Error> {
+pub async fn transfer_tcp(inbound: TcpStream, addr: Address, config: ServerConfig) -> Result<()> {
     let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
     let header = RequestHeader::default(RequestCommand::TCP, security, addr, config.password);
     let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split();
+    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec).split();
     let (mut outbound_sink, mut outbound_stream) = Framed::new(outbound, ClientAEADCodec::new(header)).split();
 
     let client_to_server = async { outbound_sink.send_all(&mut inbound_stream).await };
@@ -157,7 +156,7 @@ pub async fn transfer_udp_outbound(
     sender: SocketAddr,
     recipient: SocketAddr,
     callback: Sender<(DatagramPacket, SocketAddr)>,
-) -> Result<Sender<(DatagramPacket, SocketAddr)>, io::Error> {
+) -> Result<Sender<(DatagramPacket, SocketAddr)>> {
     let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
     let outbound = TcpStream::connect(proxy.clone()).await?;
     let outbound_local_addr = outbound.local_addr()?;
@@ -169,15 +168,15 @@ pub async fn transfer_udp_outbound(
     let (tx, mut rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
     tokio::spawn(async move {
         while let Some(((content, _), _)) = rx.recv().await {
-            outbound_sink.send(content).await.unwrap()
+            outbound_sink.send(content).await.expect("Failed to send");
         }
     });
     tokio::spawn(async move {
         while let Some(Ok(content)) = outbound_stream.next().await {
-            callback.send(((content, recipient), sender)).await.unwrap();
+            callback.send(((content, recipient), sender)).await.expect("Failed to send");
         }
         debug!("No item in outbound stream; sender={}, outbound={}", sender, outbound_local_addr);
-        Ok::<(), io::Error>(())
+        Ok::<(), anyhow::Error>(())
     });
     Ok(tx.clone())
 }

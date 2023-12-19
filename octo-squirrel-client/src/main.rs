@@ -1,7 +1,6 @@
-use std::error::Error;
-use std::io;
 use std::net::Ipv4Addr;
 use std::net::SocketAddrV4;
+use anyhow::Result;
 
 use log::info;
 use octo_squirrel::common::network::Network;
@@ -17,7 +16,7 @@ use crate::client::vmess;
 mod client;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     let config = octo_squirrel::config::init()?;
     octo_squirrel::log::init(&config.logger)?;
     let current = config.get_current().expect("Empty proxy server.");
@@ -36,7 +35,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(), Box<dyn Error>> {
+async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<()> {
     match current.protocol {
         Protocols::Shadowsocks => template::transfer_tcp(listener, current, shadowsocks::transfer_tcp).await?,
         Protocols::VMess => template::transfer_tcp(listener, current, vmess::transfer_tcp).await?,
@@ -44,7 +43,7 @@ async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(
     Ok(())
 }
 
-async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<(), io::Error> {
+async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<()> {
     match current.protocol {
         Protocols::Shadowsocks => template::transfer_udp(socket, current, shadowsocks::get_udp_key, shadowsocks::transfer_udp_outbound).await?,
         Protocols::VMess => template::transfer_udp(socket, current, vmess::get_udp_key, vmess::transfer_udp_outbound).await?,

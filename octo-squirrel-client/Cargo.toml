@@ -17,3 +17,4 @@ bytes = "1.4.0"
 rand = { version = "0.8.5", features = ["small_rng"] }
 dashmap = "5.5.3"
 uuid = { version = "1.4.1", features = ["v4"] }
+anyhow = "1.0.75"

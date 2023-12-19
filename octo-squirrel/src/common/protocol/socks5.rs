@@ -1,3 +1,6 @@
+use anyhow::bail;
+use anyhow::Result;
+
 pub mod address;
 pub mod codec;
 pub mod handshake;
@@ -12,13 +15,13 @@ pub enum Socks5CommandStatus {
 }
 
 impl Socks5CommandStatus {
-    pub fn new(byte: u8) -> Self {
+    pub fn new(byte: u8) -> Result<Self> {
         if Self::Success as u8 == byte {
-            Self::Success
+            Ok(Self::Success)
         } else if Self::Failure as u8 == byte {
-            Self::Failure
+            Ok(Self::Failure)
         } else {
-            panic!("unsupported command status: {}", byte as u8 & 0xff);
+            bail!("unsupported command status: {}", byte as u8 & 0xff);
         }
     }
 }
@@ -31,15 +34,15 @@ pub enum Socks5AddressType {
 }
 
 impl Socks5AddressType {
-    pub fn new(byte: u8) -> Self {
+    pub fn new(byte: u8) -> Result<Self> {
         if Self::Ipv4 as u8 == byte {
-            Self::Ipv4
+            Ok(Self::Ipv4)
         } else if Self::Domain as u8 == byte {
-            Self::Domain
+            Ok(Self::Domain)
         } else if Self::Ipv6 as u8 == byte {
-            Self::Ipv6
+            Ok(Self::Ipv6)
         } else {
-            panic!("unsupported address type: {}", byte as u8 & 0xff);
+            bail!("unsupported address type: {}", byte as u8 & 0xff);
         }
     }
 }
@@ -52,15 +55,15 @@ pub enum Socks5CommandType {
 }
 
 impl Socks5CommandType {
-    pub fn new(byte: u8) -> Self {
+    pub fn new(byte: u8) -> Result<Self> {
         if Self::Connet as u8 == byte {
-            Self::Connet
+            Ok(Self::Connet)
         } else if Self::Bind as u8 == byte {
-            Self::Bind
+            Ok(Self::Bind)
         } else if Self::UdpAssociate as u8 == byte {
-            Self::UdpAssociate
+            Ok(Self::UdpAssociate)
         } else {
-            panic!("unsupported command type: {}", byte as u8 & 0xff);
+            bail!("unsupported command type: {}", byte as u8 & 0xff);
         }
     }
 }
@@ -74,17 +77,17 @@ pub enum Socks5AuthMethod {
 }
 
 impl Socks5AuthMethod {
-    pub fn new(byte: u8) -> Self {
+    pub fn new(byte: u8) -> Result<Self> {
         if Self::NoAuth as u8 == byte {
-            Self::NoAuth
+            Ok(Self::NoAuth)
         } else if Self::Gssapi as u8 == byte {
-            Self::Gssapi
+            Ok(Self::Gssapi)
         } else if Self::Password as u8 == byte {
-            Self::Password
+            Ok(Self::Password)
         } else if Self::Unaccepted as u8 == byte {
-            Self::Unaccepted
+            Ok(Self::Unaccepted)
         } else {
-            panic!("unsupported auth method: {}", byte as u8 & 0xff)
+            bail!("unsupported auth method: {}", byte as u8 & 0xff)
         }
     }
 }

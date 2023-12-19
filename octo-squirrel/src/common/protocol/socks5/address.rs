@@ -1,10 +1,10 @@
-use std::io::Error;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
 use std::net::SocketAddrV6;
 
+use anyhow::Result;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
@@ -15,7 +15,7 @@ use crate::common::protocol::address::Address;
 pub struct AddressCodec;
 
 impl AddressCodec {
-    pub fn encode(addr: &Address, dst: &mut BytesMut) -> Result<(), Error> {
+    pub fn encode(addr: &Address, dst: &mut BytesMut) -> Result<()> {
         match addr {
             Address::Domain(host, port) => {
                 dst.put_u8(Socks5AddressType::Domain as u8);
@@ -49,8 +49,8 @@ impl AddressCodec {
         Ok(())
     }
 
-    pub fn decode(src: &mut BytesMut) -> Result<Address, Error> {
-        let addr_type = Socks5AddressType::new(src.get_u8());
+    pub fn decode(src: &mut BytesMut) -> Result<Address> {
+        let addr_type = Socks5AddressType::new(src.get_u8())?;
         match addr_type {
             Socks5AddressType::Ipv4 => {
                 let ip_v4 = Ipv4Addr::from(src.get_u32());
