@@ -10,11 +10,13 @@ For study purposes only.
 | UDP |      ✔      |   ✔   |
 
 ### Ciphers
-|                   | Shadowsocks |  VMess  |
-|:------------------|:-----------:|:-------:|
-| aes-128-gcm       |     `C`     |   `C`   |
-| aes-256-gcm       |     `C`     |         |
-| chacha20-poly1305 |     `C`     |   `C`   |
+|                         | Shadowsocks |  VMess  |
+|:------------------------|:-----------:|:-------:|
+| aes-128-gcm             |     `C`     |   `C`   |
+| aes-256-gcm             |     `C`     |         |
+| chacha20-poly1305       |     `C`     |   `C`   |
+| 2022-blake3-aes-128-gcm |     `C`     |         |
+| 2022-blake3-aes-256-gcm |     `C`     |         |
 
 `C` for client
 
@@ -41,13 +43,13 @@ For study purposes only.
     }
     ```
     > port: which port client will be listening on
-    
-    > index: `servers[index]` will be the server config
-    
+
+    > index: `servers[index]` will be the client config
+
     > protocol: "shadowsocks" | "vmess"
-    
+
     > cipher: see Ciphers
-    
+
     > networks: see Transmission
 
 2. running command

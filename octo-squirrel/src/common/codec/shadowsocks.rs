@@ -6,7 +6,6 @@ use std::mem::size_of;
 
 use ::aead::Buffer;
 use anyhow::bail;
-use anyhow::Ok;
 use anyhow::Result;
 use base64ct::Base64;
 use base64ct::Encoding;
@@ -248,7 +247,10 @@ impl AEADCipherCodec {
                     + item.remaining()
                     + tag_size,
             );
-            temp.put_u64(0);
+            match context.stream_type {
+                StreamType::Request => temp.put_u64(context.session.server_session_id),
+                StreamType::Response => temp.put_u64(context.session.client_session_id),
+            }
             context.session.packet_id += 1;
             temp.put_u64(context.session.packet_id);
             temp.put_u8(context.stream_type.to_u8());
