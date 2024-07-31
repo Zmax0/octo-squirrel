@@ -1,7 +1,7 @@
 use rand::random;
 
 use super::address::Address;
-use crate::common::network::Network;
+use crate::common::network::Transport;
 
 #[derive(Clone)]
 pub enum StreamType {
@@ -28,7 +28,7 @@ impl StreamType {
 #[derive(Clone)]
 pub struct Context {
     pub stream_type: StreamType,
-    pub network: Network,
+    pub network: Transport,
     pub address: Option<Address>,
     pub session: Session,
 }
@@ -36,11 +36,11 @@ pub struct Context {
 impl Context {
     pub fn tcp(stream_type: StreamType, address: Option<Address>) -> Self {
         let session = Session::from(&stream_type);
-        Self { stream_type, network: Network::TCP, address, session }
+        Self { stream_type, network: Transport::TCP, address, session }
     }
     pub fn udp(stream_type: StreamType, address: Option<Address>) -> Self {
         let session = Session::from(&stream_type);
-        Self { stream_type, network: Network::UDP, address, session }
+        Self { stream_type, network: Transport::UDP, address, session }
     }
 }
 

@@ -8,33 +8,29 @@ use futures::SinkExt;
 use futures::StreamExt;
 use log::debug;
 use octo_squirrel::common::codec::shadowsocks::AEADCipherCodec;
-use octo_squirrel::common::codec::shadowsocks::PayloadCodec;
 use octo_squirrel::common::codec::shadowsocks::DatagramPacketCodec;
-use octo_squirrel::common::codec::BytesCodec;
+use octo_squirrel::common::codec::shadowsocks::PayloadCodec;
 use octo_squirrel::common::network::DatagramPacket;
 use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::shadowsocks::Context;
 use octo_squirrel::common::protocol::shadowsocks::StreamType;
 use octo_squirrel::config::ServerConfig;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::time;
-use tokio_util::codec::Framed;
 use tokio_util::udp::UdpFramed;
 
-pub async fn transfer_tcp(inbound: TcpStream, addr: Address, config: ServerConfig) -> Result<()> {
-    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec).split();
-    let (mut outbound_sink, mut outbound_stream) = Framed::new(
-        outbound,
-        PayloadCodec::new(Context::tcp(StreamType::Request, Some(addr)), AEADCipherCodec::new(config.cipher, config.password.as_bytes())?),
-    )
-    .split();
-    let client_to_server = async { outbound_sink.send_all(&mut inbound_stream).await };
-    let server_to_client = async { inbound_sink.send_all(&mut outbound_stream).await };
-    tokio::try_join!(client_to_server, server_to_client)?;
+use super::template;
+
+pub async fn transfer_tcp(mut inbound: TcpStream, addr: Address, config: ServerConfig) -> Result<()> {
+    let mut outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
+    let codec = PayloadCodec::new(Context::tcp(StreamType::Request, Some(addr)), AEADCipherCodec::new(config.cipher, config.password.as_bytes())?);
+    if let Err(_) = template::relay_tcp(&mut inbound, &mut outbound, codec).await {
+        outbound.shutdown().await?
+    };
     Ok(())
 }
 

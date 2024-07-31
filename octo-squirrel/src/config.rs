@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::common::codec::aead::CipherKind;
-use crate::common::network::Network;
+use crate::common::network::Transport;
 use crate::common::network::PacketEncoding;
 use crate::common::protocol::Protocols;
 use crate::log::Logger;
@@ -21,7 +21,7 @@ pub struct ServerConfig {
     pub protocol: Protocols,
     pub remark: String,
     #[serde(default = "Vec::new")]
-    pub networks: Vec<Network>,
+    pub transport: Vec<Transport>,
     #[serde(rename = "packetEncoding")]
     #[serde(default)]
     pub packet_encoding: PacketEncoding,
@@ -60,7 +60,7 @@ mod test {
     use serde_json::json;
 
     use crate::common::codec::aead::CipherKind;
-    use crate::common::network::Network;
+    use crate::common::network::Transport;
     use crate::common::network::PacketEncoding;
     use crate::common::protocol::Protocols;
     use crate::config::ClientConfig;
@@ -96,7 +96,7 @@ mod test {
         assert_eq!(server_port, current.port);
         assert_eq!(CipherKind::ChaCha20Poly1305, current.cipher);
         assert_eq!(Protocols::VMess, current.protocol);
-        assert_eq!(vec![Network::TCP, Network::UDP], current.networks);
+        assert_eq!(vec![Transport::TCP, Transport::UDP], current.transport);
         assert_eq!(PacketEncoding::None, current.packet_encoding);
     }
 }

@@ -4,15 +4,12 @@ use bytes::BytesMut;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug)]
-pub struct Direction(&'static str);
-pub const INBOUND: Direction = Direction("←");
-pub const OUTBOUND: Direction = Direction("→");
-
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum Network {
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
     TCP,
     UDP,
+    WS,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy, Default, Serialize, Deserialize)]

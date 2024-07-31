@@ -29,6 +29,9 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::time;
+use tokio_util::codec::Decoder;
+use tokio_util::codec::Encoder;
+use tokio_util::codec::Framed;
 use tokio_util::udp::UdpFramed;
 
 pub trait AsyncUdpOutbound<T>: FnMut(T, SocketAddr, SocketAddr, Sender<(DatagramPacket, SocketAddr)>) -> <Self as AsyncUdpOutbound<T>>::Fut {
@@ -101,5 +104,30 @@ where
             inbound.shutdown().await?;
         }
     }
+    Ok(())
+}
+
+// pub async fn connect<Codec>(inbound: &mut TcpStream, outbound: &mut TcpStream, codec: Codec) -> Result<(), std::io::Error>
+// where
+//     Codec: Encoder<BytesMut, Error = std::io::Error> + Decoder<Item = BytesMut, Error = std::io::Error>,
+// {
+//     let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec::new()).split::<BytesMut>();
+//     let (mut outbound_sink, mut outbound_stream) = codec.framed(outbound).split();
+//     let client_to_server = async { inbound_sink.send_all(&mut outbound_stream).await };
+//     let server_to_client = async { outbound_sink.send_all(&mut inbound_stream).await };
+//     tokio::try_join!(client_to_server, server_to_client)?;
+//     Ok(())
+// }
+
+pub async fn relay_tcp<T>(inbound: &mut TcpStream, outbound: &mut TcpStream, codec: T) -> Result<(), anyhow::Error>
+where
+    T: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error>,
+{
+    use octo_squirrel::common::codec::BytesCodec;
+    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec).split::<BytesMut>();
+    let (mut outbound_sink, mut outbound_stream) = codec.framed(outbound).split();
+    let client_to_server = async { inbound_sink.send_all(&mut outbound_stream).await };
+    let server_to_client = async { outbound_sink.send_all(&mut inbound_stream).await };
+    tokio::try_join!(client_to_server, server_to_client)?;
     Ok(())
 }

@@ -23,7 +23,7 @@ use super::aead::CipherMethod;
 use super::aead::IncreasingNonceGenerator;
 use crate::common::codec::shadowsocks::aead_2022::udp;
 use crate::common::network::DatagramPacket;
-use crate::common::network::Network;
+use crate::common::network::Transport;
 use crate::common::protocol::address::Address;
 use crate::common::protocol::shadowsocks::Context;
 use crate::common::protocol::shadowsocks::StreamType;
@@ -218,7 +218,7 @@ impl AEADCipherCodec {
 
     fn encode(&mut self, context: &mut Context, mut item: BytesMut, dst: &mut BytesMut) -> Result<()> {
         match context.network {
-            Network::TCP => {
+            Transport::TCP => {
                 if let None = self.encoder {
                     self.init_payload_encoder(dst);
                     item = self.handle_payload_header(context, item, dst)?;
@@ -226,7 +226,8 @@ impl AEADCipherCodec {
                 self.encoder.as_mut().unwrap().encode_payload(item, dst);
                 Ok(())
             }
-            Network::UDP => self.encode_packet(context, item, dst),
+            Transport::UDP => self.encode_packet(context, item, dst),
+            Transport::WS => todo!(),
         }
     }
 
@@ -321,7 +322,7 @@ impl AEADCipherCodec {
             return Ok(None);
         }
         match context.network {
-            Network::TCP => {
+            Transport::TCP => {
                 let mut dst = BytesMut::new();
                 if let None = self.decoder {
                     self.init_payload_decoder(context, src, &mut dst)?;
@@ -336,7 +337,8 @@ impl AEADCipherCodec {
                     Ok(None)
                 }
             }
-            Network::UDP => Ok(Some(self.decode_packet(context, src)?)),
+            Transport::UDP => Ok(Some(self.decode_packet(context, src)?)),
+            Transport::WS => todo!(),
         }
     }
 
