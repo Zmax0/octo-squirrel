@@ -64,7 +64,8 @@ mod test {
     use anyhow::Result;
 
     use crate::common::protocol::socks5::handshake::ClientHandShake;
-    use crate::common::protocol::socks5::{Socks5CommandStatus, Socks5CommandType};
+    use crate::common::protocol::socks5::Socks5CommandStatus;
+    use crate::common::protocol::socks5::Socks5CommandType;
     #[tokio::test]
     async fn no_auth() -> Result<()> {
         let proxy_addr = "127.0.0.1:51089".parse().unwrap();

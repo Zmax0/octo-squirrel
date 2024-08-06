@@ -1,7 +1,7 @@
 use std::net::Ipv4Addr;
 use std::net::SocketAddrV4;
-use anyhow::Result;
 
+use anyhow::Result;
 use log::info;
 use octo_squirrel::common::network::Transport;
 use octo_squirrel::common::protocol::Protocols;
@@ -37,8 +37,8 @@ async fn main() -> Result<()> {
 
 async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<()> {
     match current.protocol {
-        Protocols::Shadowsocks => template::transfer_tcp(listener, current, shadowsocks::transfer_tcp).await?,
-        Protocols::VMess => template::transfer_tcp(listener, current, vmess::transfer_tcp).await?,
+        Protocols::Shadowsocks => template::transfer_tcp(listener, current, shadowsocks::tcp::new_payload_codec).await?,
+        Protocols::VMess => template::transfer_tcp(listener, current, vmess::tcp::new_client_aead_codec).await?,
         Protocols::Trojan => todo!(),
     }
     Ok(())
@@ -46,8 +46,28 @@ async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(
 
 async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<()> {
     match current.protocol {
-        Protocols::Shadowsocks => template::transfer_udp(socket, current, shadowsocks::get_udp_key, shadowsocks::transfer_udp_outbound).await?,
-        Protocols::VMess => template::transfer_udp(socket, current, vmess::get_udp_key, vmess::transfer_udp_outbound).await?,
+        Protocols::Shadowsocks => {
+            template::transfer_udp(
+                socket,
+                &current,
+                shadowsocks::udp::new_key,
+                shadowsocks::udp::new_outbound,
+                shadowsocks::udp::to_inbound_recv,
+                shadowsocks::udp::to_outbound_send,
+            )
+            .await?;
+        }
+        Protocols::VMess => {
+            template::transfer_udp(
+                socket,
+                &current,
+                vmess::udp::new_key,
+                vmess::udp::new_outbound,
+                vmess::udp::to_inbound_recv,
+                vmess::udp::to_outbound_send,
+            )
+            .await?
+        }
         Protocols::Trojan => todo!(),
     }
     Ok(())

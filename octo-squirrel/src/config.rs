@@ -7,8 +7,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::common::codec::aead::CipherKind;
-use crate::common::network::Transport;
 use crate::common::network::PacketEncoding;
+use crate::common::network::Transport;
 use crate::common::protocol::Protocols;
 use crate::log::Logger;
 
@@ -60,8 +60,8 @@ mod test {
     use serde_json::json;
 
     use crate::common::codec::aead::CipherKind;
-    use crate::common::network::Transport;
     use crate::common::network::PacketEncoding;
+    use crate::common::network::Transport;
     use crate::common::protocol::Protocols;
     use crate::config::ClientConfig;
 

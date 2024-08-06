@@ -1,42 +1,28 @@
 use std::io::Cursor;
 use std::mem::size_of;
-use std::net::SocketAddr;
-use std::net::ToSocketAddrs;
 
 use anyhow::bail;
 use anyhow::Result;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
-use futures::SinkExt;
-use futures::StreamExt;
 use log::debug;
 use log::info;
 use octo_squirrel::common::codec::aead::Aes128GcmCipher;
-use octo_squirrel::common::codec::aead::CipherKind;
 use octo_squirrel::common::codec::aead::CipherMethod;
 use octo_squirrel::common::codec::vmess::aead::AEADBodyCodec;
-use octo_squirrel::common::codec::BytesCodec;
-use octo_squirrel::common::network::DatagramPacket;
-use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::vmess::aead::*;
 use octo_squirrel::common::protocol::vmess::header::RequestCommand;
 use octo_squirrel::common::protocol::vmess::header::RequestHeader;
 use octo_squirrel::common::protocol::vmess::header::RequestOption;
-use octo_squirrel::common::protocol::vmess::header::SecurityType;
 use octo_squirrel::common::protocol::vmess::session::ClientSession;
 use octo_squirrel::common::protocol::vmess::AddressCodec;
 use octo_squirrel::common::protocol::vmess::VERSION;
 use octo_squirrel::common::util::Dice;
 use octo_squirrel::common::util::FNV;
-use octo_squirrel::config::ServerConfig;
 use rand::Rng;
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::Sender;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
-use tokio_util::codec::Framed;
 
 pub struct ClientAEADCodec {
     header: RequestHeader,
@@ -133,50 +119,65 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub async fn transfer_tcp(inbound: TcpStream, addr: Address, config: ServerConfig) -> Result<()> {
-    let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-    let header = RequestHeader::default(RequestCommand::TCP, security, addr, config.password);
-    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-    let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec).split();
-    let (mut outbound_sink, mut outbound_stream) = Framed::new(outbound, ClientAEADCodec::new(header)).split();
+pub(crate) mod tcp {
+    use octo_squirrel::common::codec::aead::CipherKind;
+    use octo_squirrel::common::protocol::address::Address;
+    use octo_squirrel::common::protocol::vmess::header::RequestCommand;
+    use octo_squirrel::common::protocol::vmess::header::RequestHeader;
+    use octo_squirrel::common::protocol::vmess::header::SecurityType;
+    use octo_squirrel::config::ServerConfig;
 
-    let client_to_server = async { outbound_sink.send_all(&mut inbound_stream).await };
-    let server_to_client = async { inbound_sink.send_all(&mut outbound_stream).await };
+    use super::ClientAEADCodec;
 
-    tokio::try_join!(client_to_server, server_to_client)?;
-    Ok(())
+    pub fn new_client_aead_codec(addr: Address, config: &ServerConfig) -> ClientAEADCodec {
+        let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
+        let header = RequestHeader::default(RequestCommand::TCP, security, addr, config.password.clone());
+        ClientAEADCodec::new(header)
+    }
 }
 
-pub fn get_udp_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
-    (sender, recipient)
-}
+pub(crate) mod udp {
+    use std::net::SocketAddr;
+    use std::net::ToSocketAddrs;
 
-pub async fn transfer_udp_outbound(
-    config: &ServerConfig,
-    sender: SocketAddr,
-    recipient: SocketAddr,
-    callback: Sender<(DatagramPacket, SocketAddr)>,
-) -> Result<Sender<(DatagramPacket, SocketAddr)>> {
-    let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
-    let outbound = TcpStream::connect(proxy.clone()).await?;
-    let outbound_local_addr = outbound.local_addr()?;
-    debug!("New udp binding; sender={}, outbound={}", sender, outbound_local_addr);
-    let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-    let header = RequestHeader::default(RequestCommand::UDP, security, recipient.into(), config.password.clone());
-    let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
-    let (mut outbound_sink, mut outbound_stream) = outbound.split();
-    let (tx, mut rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
-    tokio::spawn(async move {
-        while let Some(((content, _), _)) = rx.recv().await {
-            outbound_sink.send(content).await.expect("Failed to send");
-        }
-    });
-    tokio::spawn(async move {
-        while let Some(Ok(content)) = outbound_stream.next().await {
-            callback.send(((content, recipient), sender)).await.expect("Failed to send");
-        }
-        debug!("No item in outbound stream; sender={}, outbound={}", sender, outbound_local_addr);
-        Ok::<(), anyhow::Error>(())
-    });
-    Ok(tx.clone())
+    use anyhow::Result;
+    use bytes::BytesMut;
+    use futures::stream::SplitSink;
+    use futures::stream::SplitStream;
+    use futures::StreamExt;
+    use octo_squirrel::common::codec::aead::CipherKind;
+    use octo_squirrel::common::network::DatagramPacket;
+    use octo_squirrel::common::protocol::address::Address;
+    use octo_squirrel::common::protocol::vmess::header::RequestCommand;
+    use octo_squirrel::common::protocol::vmess::header::RequestHeader;
+    use octo_squirrel::common::protocol::vmess::header::SecurityType;
+    use octo_squirrel::config::ServerConfig;
+    use tokio::net::TcpStream;
+    use tokio_util::codec::Framed;
+
+    use super::ClientAEADCodec;
+
+    pub fn new_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
+        (sender, recipient)
+    }
+
+    pub async fn new_outbound(
+        recipient: Address,
+        config: &ServerConfig,
+    ) -> Result<(SplitSink<Framed<TcpStream, ClientAEADCodec>, BytesMut>, SplitStream<Framed<TcpStream, ClientAEADCodec>>)> {
+        let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
+        let outbound = TcpStream::connect(proxy).await?;
+        let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
+        let header = RequestHeader::default(RequestCommand::UDP, security, recipient.into(), config.password.clone());
+        let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
+        Ok(outbound.split())
+    }
+
+    pub fn to_outbound_send(item: ((BytesMut, SocketAddr), SocketAddr), _: SocketAddr) -> BytesMut {
+        item.0 .0
+    }
+
+    pub fn to_inbound_recv(item: BytesMut, recipient: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+        ((item, recipient), sender)
+    }
 }
