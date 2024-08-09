@@ -72,18 +72,18 @@ where
     Ok(())
 }
 
-pub trait AsyncOutbound<Config, Sink, Stream, Item>: FnOnce(Address, Config) -> <Self as AsyncOutbound<Config, Sink, Stream, Item>>::Fut {
-    type Fut: Future<Output = <Self as AsyncOutbound<Config, Sink, Stream, Item>>::Output>;
+pub trait AsyncOutbound<Config, Sink, Stream, Item>: FnOnce(Address, Config) -> <Self as AsyncOutbound<Config, Sink, Stream, Item>>::Future {
+    type Future: Future<Output = <Self as AsyncOutbound<Config, Sink, Stream, Item>>::Output>;
     type Output;
 }
 
-impl<Config, Sink, Stream, Item, F, Fut> AsyncOutbound<Config, Sink, Stream, Item> for F
+impl<Config, Sink, Stream, Item, Fn, Res> AsyncOutbound<Config, Sink, Stream, Item> for Fn
 where
-    F: FnOnce(Address, Config) -> Fut,
-    Fut: Future,
+    Fn: FnOnce(Address, Config) -> Res,
+    Res: Future,
 {
-    type Fut = Fut;
-    type Output = Fut::Output;
+    type Future = Res;
+    type Output = Res::Output;
 }
 
 pub async fn transfer_udp<OutboundSink, OutboundStream, Key, NewKey, NewOutbound, ToOutboundSend, OutboundSend, OutboundRecv, ToInboundRecv>(
@@ -112,15 +112,15 @@ where
     ToInboundRecv: FnOnce(OutboundRecv, SocketAddr, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
 {
     let (inbound_sink, mut inbound_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
-    let binding: Arc<DashMap<Key, SplitSink<OutboundSink, OutboundSend>>> = Arc::new(DashMap::new());
+    let outbound_map: Arc<DashMap<Key, SplitSink<OutboundSink, OutboundSend>>> = Arc::new(DashMap::new());
     let inbound_sink: Arc<Mutex<SplitSink<UdpFramed<Socks5UdpCodec>, ((BytesMut, SocketAddr), SocketAddr)>>> = Arc::new(Mutex::new(inbound_sink));
     while let Some(Ok((inbound_recv, sender))) = inbound_stream.next().await {
         let key = new_key(sender, inbound_recv.1);
-        if let Vacant(entry) = binding.entry(key) {
+        if let Vacant(entry) = outbound_map.entry(key) {
             debug!("[udp] new binding; key={:?}", key);
             let (outbound_sink, mut outbound_stream) = new_outbound(inbound_recv.1.into(), &config).await?;
             entry.insert(outbound_sink);
-            let _binding = binding.clone();
+            let _binding = outbound_map.clone();
             tokio::spawn(async move {
                 time::sleep(Duration::from_secs(600)).await;
                 if let Some(_) = _binding.remove(&key) {
@@ -135,7 +135,7 @@ where
             });
         }
         let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
-        binding.get_mut(&key).unwrap().send(to_outbound_send((inbound_recv, sender), proxy)).await?;
+        outbound_map.get_mut(&key).unwrap().send(to_outbound_send((inbound_recv, sender), proxy)).await?;
     }
     Ok(())
 }

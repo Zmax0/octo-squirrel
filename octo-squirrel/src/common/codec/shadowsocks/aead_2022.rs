@@ -12,24 +12,26 @@ use bytes::Buf;
 use bytes::BytesMut;
 use rand::Rng;
 
+use super::Keys;
+
 const SERVER_STREAM_TIMESTAMP_MAX_DIFF: u64 = 30;
 const MIN_PADDING_LENGTH: u16 = 0;
 const MAX_PADDING_LENGTH: u16 = 900;
 
-pub(super) fn generate_key(password: &[u8], expect_len: usize) -> Result<Vec<u8>> {
-    let res = Base64::decode_vec(std::str::from_utf8(password)?).map_err(|e| e.to_string());
+pub(super) fn generate_key(password: &[u8], expect_len: usize) -> Result<Box<[u8]>> {
+    let res = Base64::decode_vec(std::str::from_utf8(password)?);
     match res {
         Ok(key) => {
             if key.len() != expect_len {
                 bail!("Expecting a {} bytes key, but password: {:?} ({} bytes after decode))", expect_len, password, key.len())
             }
-            Ok(key)
+            Ok(key.into_boxed_slice())
         }
-        Err(msg) => bail!("Decode password failed: {}", msg),
+        Err(e) => bail!("Decode password failed: {}", e),
     }
 }
 
-fn session_sub_key(key: &[u8], salt: &[u8]) -> [u8; 32] {
+fn session_sub_key(key: &[u8], salt: &[u8]) -> [u8; blake3::OUT_LEN] {
     let key_material = [key, salt].concat();
     blake3::derive_key("shadowsocks 2022 session subkey", &key_material)
 }
@@ -53,6 +55,21 @@ pub fn next_padding_length(msg: &BytesMut) -> u16 {
     } else {
         rand::thread_rng().gen_range(MIN_PADDING_LENGTH..=MAX_PADDING_LENGTH)
     }
+}
+
+pub fn password_to_keys<const N: usize>(password: &String) -> Result<Keys<N>> {
+    let split = password.split(":");
+    let mut identity_keys = Vec::new();
+
+    for s in split {
+        let mut bytes = [0; N];
+        if let Err(e) = Base64::decode(s, &mut bytes) {
+            bail!(e)
+        };
+        identity_keys.push(bytes);
+    }
+    let enc_key = identity_keys.remove(identity_keys.len() - 1);
+    Ok(Keys::new(enc_key, identity_keys))
 }
 
 #[cfg(test)]

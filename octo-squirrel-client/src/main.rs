@@ -3,6 +3,7 @@ use std::net::SocketAddrV4;
 
 use anyhow::Result;
 use log::info;
+use octo_squirrel::common::codec::aead::CipherKind;
 use octo_squirrel::common::network::Transport;
 use octo_squirrel::common::protocol::Protocols;
 use octo_squirrel::config::ServerConfig;
@@ -37,7 +38,16 @@ async fn main() -> Result<()> {
 
 async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<()> {
     match current.protocol {
-        Protocols::Shadowsocks => template::transfer_tcp(listener, current, shadowsocks::tcp::new_payload_codec).await?,
+        Protocols::Shadowsocks => {
+            match current.cipher {
+                CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
+                    template::transfer_tcp(listener, current, shadowsocks::tcp::new_payload_codec::<16>).await?
+                }
+                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
+                    template::transfer_tcp(listener, current, shadowsocks::tcp::new_payload_codec::<32>).await?
+                }
+            };
+        }
         Protocols::VMess => template::transfer_tcp(listener, current, vmess::tcp::new_client_aead_codec).await?,
         Protocols::Trojan => todo!(),
     }
@@ -47,15 +57,30 @@ async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<(
 async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<()> {
     match current.protocol {
         Protocols::Shadowsocks => {
-            template::transfer_udp(
-                socket,
-                &current,
-                shadowsocks::udp::new_key,
-                shadowsocks::udp::new_outbound,
-                shadowsocks::udp::to_inbound_recv,
-                shadowsocks::udp::to_outbound_send,
-            )
-            .await?;
+            match current.cipher {
+                CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
+                    template::transfer_udp(
+                        socket,
+                        &current,
+                        shadowsocks::udp::new_key,
+                        shadowsocks::udp::new_outbound::<16>,
+                        shadowsocks::udp::to_inbound_recv,
+                        shadowsocks::udp::to_outbound_send,
+                    )
+                    .await?;
+                }
+                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
+                    template::transfer_udp(
+                        socket,
+                        &current,
+                        shadowsocks::udp::new_key,
+                        shadowsocks::udp::new_outbound::<32>,
+                        shadowsocks::udp::to_inbound_recv,
+                        shadowsocks::udp::to_outbound_send,
+                    )
+                    .await?;
+                }
+            };
         }
         Protocols::VMess => {
             template::transfer_udp(

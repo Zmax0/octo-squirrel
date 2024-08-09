@@ -116,6 +116,10 @@ impl CipherKind {
         }
     }
 
+    pub fn support_eih(&self) -> bool {
+        return self.is_aead_2022();
+    }
+
     pub fn tag_size(&self) -> usize {
         match_method_const!(self, TAG_SIZE)
     }
