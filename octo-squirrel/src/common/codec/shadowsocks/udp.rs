@@ -162,7 +162,7 @@ impl<const N: usize> AEADCipherCodec<N> {
 
     fn new_payload_decoder(&self, salt: &BytesMut) -> ChunkDecoder {
         if self.kind.is_aead_2022() {
-            super::aead_2022::tcp::new_decoder(self.kind, &self.key, salt)
+            super::aead_2022::tcp::new_decoder::<N>(self.kind, &self.key, salt)
         } else {
             super::aead::new_decoder(self.kind, &self.key, salt)
         }

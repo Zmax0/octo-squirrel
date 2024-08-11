@@ -42,13 +42,13 @@ where
     NewCodec: FnOnce(Address, &ServerConfig) -> Codec + Copy,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static,
 {
-    while let Ok((mut inbound, _)) = listener.accept().await {
+    while let Ok((mut inbound, src)) = listener.accept().await {
         let local_addr = inbound.local_addr().unwrap();
         let response = Socks5CommandResponse::new(Socks5CommandStatus::Success, local_addr.into());
         let handshake = ServerHandShake::no_auth(&mut inbound, response).await;
         if let Ok(request) = handshake {
             let request_str = request.to_string();
-            info!("[tcp] accept inbound; dest={}, protocol={}", request_str, config.protocol);
+            info!("[tcp] accept inbound: src={}, dest={}, protocol={}", src, request_str, config.protocol);
             let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
             tokio::spawn(relay_tcp(inbound, outbound, new_codec(request.into(), config)));
         } else {

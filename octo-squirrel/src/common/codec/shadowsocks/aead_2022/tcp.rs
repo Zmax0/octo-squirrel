@@ -50,9 +50,9 @@ pub(crate) fn new_encoder<const N: usize>(kind: CipherKind, key: &[u8], salt: &[
     ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth)
 }
 
-pub(crate) fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkDecoder {
+pub(crate) fn new_decoder<const N: usize>(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkDecoder {
     let key = session_sub_key(key, salt);
-    let auth = Authenticator::new(kind.to_cipher_method(&key), NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
+    let auth = Authenticator::new(kind.to_cipher_method(&key[..N]), NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
     ChunkDecoder::new(auth, ChunkSizeParser::Auth)
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn new_decoder_with_eih<const N: usize>(
     if let Some(user) = user_manager.get_user_by_hash(&user_hash) {
         trace!("{} chosen by EIH", user);
         identity.user = Some(user.clone());
-        Ok(new_decoder(kind, &user.key, salt))
+        Ok(new_decoder::<N>(kind, &user.key, salt))
     } else {
         bail!("invalid client user identity {:?}", user_hash)
     }
@@ -107,12 +107,13 @@ fn make_eih(kind: &CipherKind, sub_key: &[u8], ipsk: &[u8], out: &mut BytesMut) 
 
 #[cfg(test)]
 mod test {
-    use base64ct::{Base64, Encoding};
+    use base64ct::Base64;
+    use base64ct::Encoding;
     use bytes::BytesMut;
 
-    use crate::common::codec::{aead::CipherKind, shadowsocks::aead_2022::password_to_keys};
-
     use super::with_eih;
+    use crate::common::codec::aead::CipherKind;
+    use crate::common::codec::shadowsocks::aead_2022::password_to_keys;
 
     #[test]
     fn test() {

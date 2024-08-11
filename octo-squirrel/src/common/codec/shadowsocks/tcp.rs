@@ -7,6 +7,7 @@ use anyhow::bail;
 use anyhow::Result;
 use base64ct::Base64;
 use base64ct::Encoding;
+use byte_string::ByteStr;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
@@ -107,7 +108,7 @@ impl<const N: usize> AEADCipherCodec<N> {
     fn init_payload_encoder(&mut self, session: &mut Session<N>, is_aead_2022: bool, dst: &mut BytesMut) {
         Self::with_identity(session, &self.kind, &self.keys, dst);
         let salt = session.identity.salt;
-        trace!("New request salt; {}", Base64::encode_string(&salt));
+        trace!("[tcp] new request salt: {:?}", &ByteStr::new(&salt));
         if is_aead_2022 {
             match session.identity.user.as_ref() {
                 Some(user) => self.encoder = Some(aead_2022::tcp::new_encoder::<N>(self.kind, &user.key, &salt)),
@@ -184,7 +185,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             self.init_aead_2022_payload_decoder(session, &mut cursor, dst)?
         } else {
             let salt = cursor.copy_to_bytes(session.identity.salt.len());
-            trace!("Get request salt {}", Base64::encode_string(&salt));
+            trace!("[tcp] get request salt {}", Base64::encode_string(&salt));
             self.decoder = Some(super::aead::new_decoder(self.kind, &self.keys.enc_key, &salt));
         }
         let pos = cursor.position();
@@ -204,7 +205,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         let eih_len = if require_eih { 16 } else { 0 };
         let mut salt = [0; N];
         src.copy_to_slice(&mut salt);
-        trace!("Get request salt {}", Base64::encode_string(&salt));
+        trace!("[tcp] get request salt {}", Base64::encode_string(&salt));
         if session.context.check_nonce_and_set(&salt) {
             bail!("detected repeated nonce salt {:?}", salt);
         }
@@ -227,7 +228,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                 session.user_manager.as_ref().unwrap(),
             )?
         } else {
-            super::aead_2022::tcp::new_decoder(self.kind, &self.keys.enc_key, &salt)
+            super::aead_2022::tcp::new_decoder::<N>(self.kind, &self.keys.enc_key, &salt)
         };
         decoder.auth.open(&mut header);
         let mut header = Bytes::from(header);
@@ -239,7 +240,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         super::aead_2022::validate_timestamp(header.get_u64())?;
         if matches!(session.mode, Mode::Client) {
             header.copy_to_slice(session.identity.request_salt.as_mut().unwrap());
-            trace!("Get request header salt {}", Base64::encode_string(session.identity.request_salt.as_ref().unwrap()));
+            trace!("[tcp] get request header salt {}", Base64::encode_string(session.identity.request_salt.as_ref().unwrap()));
         };
         let length = header.get_u16() as usize;
         if src.remaining() < length + tag_size {

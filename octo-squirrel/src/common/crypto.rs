@@ -36,11 +36,11 @@ define_aes_impl!(Aes256EcbNoPadding, Aes256);
 
 #[cfg(test)]
 mod test {
-    use base64ct::{Base64, Encoding};
-
-    use crate::common::crypto::Aes256EcbNoPadding;
+    use base64ct::Base64;
+    use base64ct::Encoding;
 
     use super::Aes128EcbNoPadding;
+    use crate::common::crypto::Aes256EcbNoPadding;
 
     #[test]
     fn test_aes_128() {
