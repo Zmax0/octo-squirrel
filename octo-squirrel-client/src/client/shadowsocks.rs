@@ -1,13 +1,15 @@
 pub(crate) mod tcp {
     use std::sync::Arc;
 
+    use octo_squirrel::common::codec::aead::CipherMethod;
+    use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::tcp::Context;
     use octo_squirrel::common::codec::shadowsocks::tcp::PayloadCodec;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::shadowsocks::Mode;
     use octo_squirrel::config::ServerConfig;
 
-    pub fn new_payload_codec<const N: usize>(addr: Address, config: &ServerConfig) -> PayloadCodec<N> {
+    pub fn new_payload_codec<const N: usize, CM: CipherMethod + KeyInit>(addr: Address, config: &ServerConfig) -> PayloadCodec<N, CM> {
         PayloadCodec::new(Arc::new(Context::default()), config, addr, Mode::Client, None)
     }
 }
@@ -20,6 +22,8 @@ pub(crate) mod udp {
     use futures::stream::SplitSink;
     use futures::stream::SplitStream;
     use futures::StreamExt;
+    use octo_squirrel::common::codec::aead::CipherMethod;
+    use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
     use octo_squirrel::common::codec::shadowsocks::udp::DatagramPacketCodec;
     use octo_squirrel::common::network::DatagramPacket;
@@ -34,11 +38,11 @@ pub(crate) mod udp {
         from
     }
 
-    pub async fn new_outbound<const N: usize>(
+    pub async fn new_outbound<const N: usize, CM: CipherMethod + KeyInit>(
         _: Address,
         config: &ServerConfig,
     ) -> Result<
-        (SplitSink<UdpFramed<DatagramPacketCodec<N>>, (DatagramPacket, SocketAddr)>, SplitStream<UdpFramed<DatagramPacketCodec<N>>>),
+        (SplitSink<UdpFramed<DatagramPacketCodec<N, CM>>, (DatagramPacket, SocketAddr)>, SplitStream<UdpFramed<DatagramPacketCodec<N, CM>>>),
         anyhow::Error,
     > {
         let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;

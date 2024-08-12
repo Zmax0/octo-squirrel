@@ -8,8 +8,9 @@ use super::ChunkDecoder;
 use super::ChunkEncoder;
 use super::ChunkSizeParser;
 use super::NonceGenerator;
-use crate::common::codec::aead::CipherKind;
+use crate::common::codec::aead::CipherMethod;
 use crate::common::codec::aead::IncreasingNonceGenerator;
+use crate::common::codec::aead::KeyInit;
 
 pub(super) fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
     let mut encoded: [u8; N] = [0; N];
@@ -33,15 +34,15 @@ pub(super) fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
     encoded
 }
 
-pub(super) fn new_encoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkEncoder {
+pub(super) fn new_encoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> ChunkEncoder<CM> {
     let key = hkdfsha1(key, salt);
-    let auth: Authenticator = new_auth(kind, &key);
+    let auth = new_auth(&key);
     ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth)
 }
 
-pub(super) fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkDecoder {
+pub(super) fn new_decoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> ChunkDecoder<CM> {
     let key = hkdfsha1(key, salt);
-    let auth = new_auth(kind, &key);
+    let auth = new_auth(&key);
     ChunkDecoder::new(auth, ChunkSizeParser::Auth)
 }
 
@@ -52,8 +53,8 @@ fn hkdfsha1(ikm: &[u8], salt: &[u8]) -> Vec<u8> {
     okm.to_vec()
 }
 
-fn new_auth(kind: CipherKind, key: &[u8]) -> Authenticator {
-    let method = kind.to_cipher_method(key);
+fn new_auth<CM: CipherMethod + KeyInit>(key: &[u8]) -> Authenticator<CM> {
+    let method = CM::init(key);
     Authenticator::new(method, NonceGenerator::Increasing(IncreasingNonceGenerator::init()))
 }
 

@@ -18,6 +18,7 @@ use log::trace;
 use super::aead::CipherKind;
 use super::aead::CipherMethod;
 use super::aead::IncreasingNonceGenerator;
+use super::aead::KeyInit;
 
 enum NonceGenerator {
     Increasing(IncreasingNonceGenerator),
@@ -38,13 +39,13 @@ pub enum ChunkSizeParser {
     Empty,
 }
 
-pub struct Authenticator {
-    method: Box<dyn CipherMethod>,
+pub struct Authenticator<CM> {
+    method: CM,
     nonce_generator: NonceGenerator,
 }
 
-impl Authenticator {
-    fn new(method: Box<dyn CipherMethod>, nonce_generator: NonceGenerator) -> Self {
+impl<CM: CipherMethod + KeyInit> Authenticator<CM> {
+    fn new(method: CM, nonce_generator: NonceGenerator) -> Self {
         Self { method, nonce_generator }
     }
 
@@ -73,14 +74,14 @@ impl Authenticator {
     }
 }
 
-pub struct ChunkEncoder {
+pub struct ChunkEncoder<CM> {
     payload_limit: usize,
-    auth: Authenticator,
+    auth: Authenticator<CM>,
     chunk: ChunkSizeParser,
 }
 
-impl ChunkEncoder {
-    pub fn new(payload_limit: usize, auth: Authenticator, chunk: ChunkSizeParser) -> Self {
+impl<CM: CipherMethod + KeyInit> ChunkEncoder<CM> {
+    fn new(payload_limit: usize, auth: Authenticator<CM>, chunk: ChunkSizeParser) -> Self {
         Self { payload_limit, auth, chunk }
     }
 
@@ -121,19 +122,17 @@ impl ChunkEncoder {
     }
 }
 
-pub struct ChunkDecoder {
+pub struct ChunkDecoder<CM> {
     payload_length: Option<usize>,
-    auth: Authenticator,
+    auth: Authenticator<CM>,
     chunk: ChunkSizeParser,
 }
 
-impl ChunkDecoder {
-    pub fn new(auth: Authenticator, chunk: ChunkSizeParser) -> Self {
+impl<CM: CipherMethod + KeyInit> ChunkDecoder<CM> {
+    fn new(auth: Authenticator<CM>, chunk: ChunkSizeParser) -> Self {
         Self { payload_length: None, auth, chunk }
     }
-}
 
-impl ChunkDecoder {
     fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>> {
         let mut opened = src.split_off(0);
         self.auth.open(&mut opened);
@@ -150,7 +149,7 @@ impl ChunkDecoder {
                 self.payload_length = None;
             } else {
                 let payload_length = self.decode_size(&mut src.split_to(size_bytes));
-                trace!("Decode payload; payload length={:?}", payload_length);
+                trace!("Decode payload; payload length={}", payload_length);
                 self.payload_length = Some(payload_length);
             }
         }

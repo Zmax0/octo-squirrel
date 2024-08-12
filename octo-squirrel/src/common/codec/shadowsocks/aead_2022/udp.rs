@@ -1,4 +1,3 @@
-use aead::KeyInit;
 use aes::cipher::BlockDecrypt;
 use aes::cipher::BlockEncrypt;
 use aes::Aes128;
@@ -8,6 +7,8 @@ use anyhow::bail;
 use anyhow::Result;
 
 use crate::common::codec::aead::CipherKind;
+use crate::common::codec::aead::CipherMethod;
+use crate::common::codec::aead::KeyInit;
 use crate::common::codec::shadowsocks::Authenticator;
 use crate::common::codec::shadowsocks::ChunkDecoder;
 use crate::common::codec::shadowsocks::ChunkEncoder;
@@ -21,15 +22,21 @@ pub fn nonce_length(kind: CipherKind) -> Result<usize> {
     }
 }
 
-pub fn new_encoder(kind: CipherKind, key: &[u8], session_id: u64, nonce: [u8; 12]) -> ChunkEncoder {
+pub fn new_encoder<CM>(key: &[u8], session_id: u64, nonce: [u8; 12]) -> ChunkEncoder<CM>
+where
+    CM: CipherMethod + KeyInit,
+{
     let key = session_sub_key(key, session_id);
-    let auth = Authenticator::new(kind.to_cipher_method(&key), NonceGenerator::Static(Box::new(nonce)));
+    let auth = Authenticator::new(CM::init(&key), NonceGenerator::Static(Box::new(nonce)));
     ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Empty)
 }
 
-pub fn new_decoder(kind: CipherKind, key: &[u8], session_id: u64, nonce: [u8; 12]) -> ChunkDecoder {
+pub fn new_decoder<CM>(key: &[u8], session_id: u64, nonce: [u8; 12]) -> ChunkDecoder<CM>
+where
+    CM: CipherMethod + KeyInit,
+{
     let key = session_sub_key(key, session_id);
-    let auth = Authenticator::new(kind.to_cipher_method(&key), NonceGenerator::Static(Box::new(nonce)));
+    let auth = Authenticator::new(CM::init(&key), NonceGenerator::Static(Box::new(nonce)));
     ChunkDecoder::new(auth, ChunkSizeParser::Empty)
 }
 
@@ -38,6 +45,7 @@ fn session_sub_key(key: &[u8], session_id: u64) -> [u8; 32] {
 }
 
 pub fn encrypt_packet_header(kind: CipherKind, key: &[u8], header: &mut [u8]) -> Result<()> {
+    use aead::KeyInit;
     match kind {
         CipherKind::Aead2022Blake3Aes128Gcm => {
             let cipher = Aes128::new_from_slice(key).expect("AES-128 init");
@@ -56,6 +64,7 @@ pub fn encrypt_packet_header(kind: CipherKind, key: &[u8], header: &mut [u8]) ->
 }
 
 pub fn decrypt_packet_header(kind: CipherKind, key: &[u8], header: &mut [u8]) -> Result<()> {
+    use aead::KeyInit;
     match kind {
         CipherKind::Aead2022Blake3Aes128Gcm => {
             let cipher = Aes128::new_from_slice(key).expect("AES-128 init");

@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::usize;
 
 use anyhow::bail;
@@ -12,6 +13,8 @@ use tokio_util::codec::Encoder;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
 use crate::common::codec::aead::CipherKind;
+use crate::common::codec::aead::CipherMethod;
+use crate::common::codec::aead::KeyInit;
 use crate::common::codec::shadowsocks::aead_2022::udp;
 use crate::common::network::DatagramPacket;
 use crate::common::protocol::address::Address;
@@ -22,40 +25,24 @@ use crate::common::util::Dice;
 
 pub struct AEADCipherCodec<const N: usize> {
     kind: CipherKind,
-    key: Box<[u8]>,
+    key: [u8; N],
 }
 
 impl<const N: usize> AEADCipherCodec<N> {
     pub fn new(cipher: CipherKind, password: &[u8]) -> Result<Self> {
         match cipher {
-            CipherKind::Aes128Gcm => {
-                let key: [u8; 16] = super::aead::openssl_bytes_to_key(password);
-                Ok(Self { kind: cipher, key: Box::new(key) })
-            }
-            CipherKind::Aes256Gcm => {
-                let key: [u8; 32] = super::aead::openssl_bytes_to_key(password);
-                Ok(Self { kind: cipher, key: Box::new(key) })
-            }
-            CipherKind::ChaCha20Poly1305 => {
-                let key: [u8; 32] = super::aead::openssl_bytes_to_key(password);
-                Ok(Self { kind: cipher, key: Box::new(key) })
-            }
-            CipherKind::Aead2022Blake3Aes128Gcm => {
-                let key = super::aead_2022::generate_key(password, 16)?;
+            CipherKind::Aes128Gcm | CipherKind::Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
+                let key: [u8; N] = super::aead::openssl_bytes_to_key(password);
                 Ok(Self { kind: cipher, key })
             }
-            CipherKind::Aead2022Blake3Aes256Gcm => {
-                let key = super::aead_2022::generate_key(password, 32)?;
+            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
+                let key = super::aead_2022::generate_key(password)?;
                 Ok(Self { kind: cipher, key })
             }
         }
     }
 
-    fn encode(&mut self, context: &mut Context, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
-        self.encode_packet(context, item, dst)
-    }
-
-    fn encode_packet(&self, context: &mut Context, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
+    fn encode<CM: CipherMethod + KeyInit>(&mut self, context: &mut Context, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
         if self.kind.is_aead_2022() {
             let padding_length = super::aead_2022::next_padding_length(&item);
             let nonce_length = udp::nonce_length(self.kind)?;
@@ -93,7 +80,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             header.copy_from_slice(&temp.split_to(16));
             udp::encrypt_packet_header(self.kind, &self.key, &mut header)?;
             dst.put(&header[..]);
-            udp::new_encoder(self.kind, &self.key, 0, nonce).encode_packet(temp, dst);
+            udp::new_encoder::<CM>(&self.key, 0, nonce).encode_packet(temp, dst);
         } else {
             let salt = Dice::roll_bytes(self.key.len());
             dst.put(&salt[..]);
@@ -101,27 +88,28 @@ impl<const N: usize> AEADCipherCodec<N> {
             let mut temp = BytesMut::with_capacity(AddressCodec::length(address) + item.remaining());
             AddressCodec::encode(address, &mut temp)?;
             temp.put(item);
-            self.new_encoder(&salt).encode_packet(temp, dst);
+            let mut encoder: ChunkEncoder<CM> = self.new_encoder(&salt);
+            encoder.encode_packet(temp, dst);
         }
         Ok(())
     }
 
-    fn new_encoder(&self, salt: &[u8]) -> ChunkEncoder {
+    fn new_encoder<CM: CipherMethod + KeyInit>(&self, salt: &[u8]) -> ChunkEncoder<CM> {
         if self.kind.is_aead_2022() {
-            super::aead_2022::tcp::new_encoder::<N>(self.kind, &self.key, salt)
+            super::aead_2022::tcp::new_encoder::<N, CM>(&self.key, salt)
         } else {
-            super::aead::new_encoder(self.kind, &self.key, salt)
+            super::aead::new_encoder(&self.key, salt)
         }
     }
 
-    fn decode(&mut self, context: &mut Context, src: &mut BytesMut) -> Result<Option<BytesMut>> {
+    fn decode<CM: CipherMethod + KeyInit>(&mut self, context: &mut Context, src: &mut BytesMut) -> Result<Option<BytesMut>> {
         if src.is_empty() {
             return Ok(None);
         }
-        Ok(Some(self.decode_packet(context, src)?))
+        Ok(Some(self.decode0::<CM>(context, src)?))
     }
 
-    fn decode_packet(&self, context: &mut Context, src: &mut BytesMut) -> Result<BytesMut> {
+    fn decode0<CM: CipherMethod + KeyInit>(&self, context: &mut Context, src: &mut BytesMut) -> Result<BytesMut> {
         if self.kind.is_aead_2022() {
             let nonce_length = udp::nonce_length(self.kind)?;
             let tag_size = self.kind.tag_size();
@@ -137,7 +125,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             let mut header = Bytes::from(header.to_vec());
             let server_session_id = header.get_u64();
             header.get_u64(); // pack id
-            let mut packet = udp::new_decoder(self.kind, &self.key, server_session_id, nonce).decode_packet(src)?.unwrap();
+            let mut packet = udp::new_decoder::<CM>(&self.key, server_session_id, nonce).decode_packet(src)?.unwrap();
             packet.get_u8(); // stream type
             super::aead_2022::validate_timestamp(packet.get_u64())?;
             let padding_length = packet.get_u16();
@@ -154,48 +142,50 @@ impl<const N: usize> AEADCipherCodec<N> {
                 bail!("Invalid packet length");
             }
             let salt = src.split_to(self.key.len());
-            let mut packet = self.new_payload_decoder(&salt).decode_packet(src)?.unwrap();
+            let mut decoder: ChunkDecoder<CM> = self.new_payload_decoder(&salt);
+            let mut packet = decoder.decode_packet(src)?.unwrap();
             context.address = Some(AddressCodec::decode(&mut packet)?);
             Ok(packet)
         }
     }
 
-    fn new_payload_decoder(&self, salt: &BytesMut) -> ChunkDecoder {
+    fn new_payload_decoder<CM: CipherMethod + KeyInit>(&self, salt: &BytesMut) -> ChunkDecoder<CM> {
         if self.kind.is_aead_2022() {
-            super::aead_2022::tcp::new_decoder::<N>(self.kind, &self.key, salt)
+            super::aead_2022::tcp::new_decoder::<N, CM>(&self.key, salt)
         } else {
-            super::aead::new_decoder(self.kind, &self.key, salt)
+            super::aead::new_decoder(&self.key, salt)
         }
     }
 }
 
-pub struct DatagramPacketCodec<const N: usize> {
+pub struct DatagramPacketCodec<const N: usize, CM> {
     context: Context,
     cipher: AEADCipherCodec<N>,
+    method: PhantomData<CM>,
 }
 
-impl<const N: usize> DatagramPacketCodec<N> {
+impl<const N: usize, CM: CipherMethod + KeyInit> DatagramPacketCodec<N, CM> {
     pub fn new(context: Context, cipher: AEADCipherCodec<N>) -> Self {
-        Self { context, cipher }
+        Self { context, cipher, method: PhantomData }
     }
 }
 
-impl<const N: usize> Encoder<DatagramPacket> for DatagramPacketCodec<N> {
+impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<DatagramPacket> for DatagramPacketCodec<N, CM> {
     type Error = anyhow::Error;
 
     fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<()> {
         self.context.address = Some(Address::from(item.1));
-        self.cipher.encode(&mut self.context, item.0, dst)
+        self.cipher.encode::<CM>(&mut self.context, item.0, dst)
     }
 }
 
-impl<const N: usize> Decoder for DatagramPacketCodec<N> {
+impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for DatagramPacketCodec<N, CM> {
     type Item = DatagramPacket;
 
     type Error = anyhow::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
-        if let Some(content) = self.cipher.decode(&mut self.context, src)? {
+        if let Some(content) = self.cipher.decode::<CM>(&mut self.context, src)? {
             Ok(Some((content, self.context.address.take().unwrap().into())))
         } else {
             Ok(None)
@@ -216,7 +206,11 @@ mod test {
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
+    use crate::common::codec::aead::Aes128GcmCipher;
+    use crate::common::codec::aead::Aes256GcmCipher;
     use crate::common::codec::aead::CipherKind;
+    use crate::common::codec::aead::CipherMethod;
+    use crate::common::codec::aead::KeyInit;
     use crate::common::codec::shadowsocks::udp::AEADCipherCodec;
     use crate::common::codec::shadowsocks::udp::DatagramPacketCodec;
     use crate::common::protocol::shadowsocks::udp::Context;
@@ -226,12 +220,12 @@ mod test {
     #[test]
     fn test_udp() {
         fn test_udp(cipher: CipherKind) {
-            fn test_udp<const N: usize>(cipher: CipherKind) {
+            fn test_udp<const N: usize, CM: CipherMethod + KeyInit>(cipher: CipherKind) {
                 let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
                 rand::thread_rng().fill(&mut password[..]);
                 let codec: AEADCipherCodec<N> = AEADCipherCodec::new(cipher, &password[..]).unwrap();
                 let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
-                let mut codec = DatagramPacketCodec::new(Context::udp(Mode::Server, None), codec);
+                let mut codec: DatagramPacketCodec<N, CM> = DatagramPacketCodec::new(Context::udp(Mode::Server, None), codec);
                 let mut dst = BytesMut::new();
                 let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random()));
                 codec.encode((expect.as_bytes().into(), addr), &mut dst).unwrap();
@@ -241,8 +235,8 @@ mod test {
             }
 
             match cipher {
-                CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_udp::<16>(cipher),
-                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_udp::<32>(cipher),
+                CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_udp::<16, Aes128GcmCipher>(cipher),
+                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_udp::<32, Aes256GcmCipher>(cipher),
             }
         }
 

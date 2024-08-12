@@ -9,7 +9,6 @@ use aes_gcm::AeadCore;
 use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::Aes256Gcm;
-use aes_gcm::KeyInit;
 use chacha20poly1305::ChaCha20Poly1305;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,6 +23,10 @@ pub trait CipherMethod: Send {
     fn ciphertext_overhead(&self) -> usize;
 }
 
+pub trait KeyInit: Sized {
+    fn init(key: &[u8]) -> Self;
+}
+
 macro_rules! aead_impl {
     ($name:ident, $cipher:ty) => {
         pub struct $name {
@@ -36,6 +39,7 @@ macro_rules! aead_impl {
             pub const CIPHERTEXT_OVERHEAD: usize = <$cipher as AeadCore>::CiphertextOverhead::USIZE;
 
             pub fn new(key: &[u8]) -> Self {
+                use aes_gcm::KeyInit;
                 Self { cipher: <$cipher>::new_from_slice(key).unwrap() }
             }
         }
@@ -67,6 +71,12 @@ macro_rules! aead_impl {
 
             fn ciphertext_overhead(&self) -> usize {
                 $name::CIPHERTEXT_OVERHEAD
+            }
+        }
+
+        impl KeyInit for $name {
+            fn init(key: &[u8]) -> Self {
+                $name::new(key)
             }
         }
     };

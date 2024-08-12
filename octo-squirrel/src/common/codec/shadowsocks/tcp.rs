@@ -23,6 +23,8 @@ use super::ChunkDecoder;
 use super::ChunkEncoder;
 use super::Keys;
 use crate::common::codec::aead::CipherKind;
+use crate::common::codec::aead::CipherMethod;
+use crate::common::codec::aead::KeyInit;
 use crate::common::manager::shadowsocks::ServerUser;
 use crate::common::manager::shadowsocks::ServerUserManager;
 use crate::common::protocol::address::Address;
@@ -54,19 +56,19 @@ impl Default for Context {
         Self { nonce_cache: Mutex::new(LruCache::with_expiry_duration_and_capacity(Duration::from_secs(30), 102400)) }
     }
 }
-pub struct PayloadCodec<const N: usize> {
+pub struct PayloadCodec<const N: usize, CM> {
     session: Session<N>,
-    cipher: AEADCipherCodec<N>,
+    cipher: AEADCipherCodec<N, CM>,
 }
 
-impl<const N: usize> PayloadCodec<N> {
+impl<const N: usize, CM: CipherMethod + KeyInit> PayloadCodec<N, CM> {
     pub fn new(context: Arc<Context>, config: &ServerConfig, address: Address, mode: Mode, user_manager: Option<Arc<ServerUserManager<N>>>) -> Self {
         let session = Session::new(mode, Identity::new(), address, context, user_manager);
         Self { session, cipher: AEADCipherCodec::new(config.cipher, &config.password).unwrap() }
     }
 }
 
-impl<const N: usize> Encoder<BytesMut> for PayloadCodec<N> {
+impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<BytesMut> for PayloadCodec<N, CM> {
     type Error = anyhow::Error;
 
     fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
@@ -74,7 +76,7 @@ impl<const N: usize> Encoder<BytesMut> for PayloadCodec<N> {
     }
 }
 
-impl<const N: usize> Decoder for PayloadCodec<N> {
+impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for PayloadCodec<N, CM> {
     type Item = BytesMut;
 
     type Error = anyhow::Error;
@@ -83,14 +85,17 @@ impl<const N: usize> Decoder for PayloadCodec<N> {
         self.cipher.decode(&mut self.session, src)
     }
 }
-struct AEADCipherCodec<const N: usize> {
+struct AEADCipherCodec<const N: usize, CM> {
     kind: CipherKind,
     keys: Keys<N>,
-    pub(self) encoder: Option<ChunkEncoder>,
-    pub(self) decoder: Option<ChunkDecoder>,
+    pub(self) encoder: Option<ChunkEncoder<CM>>,
+    pub(self) decoder: Option<ChunkDecoder<CM>>,
 }
 
-impl<const N: usize> AEADCipherCodec<N> {
+impl<const N: usize, CM> AEADCipherCodec<N, CM>
+where
+    CM: CipherMethod + KeyInit,
+{
     pub fn new(kind: CipherKind, password: &String) -> Result<Self> {
         let keys = Keys::from(kind, password)?;
         Ok(AEADCipherCodec { kind, keys, encoder: None, decoder: None })
@@ -111,11 +116,11 @@ impl<const N: usize> AEADCipherCodec<N> {
         trace!("[tcp] new request salt: {:?}", &ByteStr::new(&salt));
         if is_aead_2022 {
             match session.identity.user.as_ref() {
-                Some(user) => self.encoder = Some(aead_2022::tcp::new_encoder::<N>(self.kind, &user.key, &salt)),
-                None => self.encoder = Some(aead_2022::tcp::new_encoder::<N>(self.kind, &self.keys.enc_key, &salt)),
+                Some(user) => self.encoder = Some(aead_2022::tcp::new_encoder::<N, CM>(&user.key, &salt)),
+                None => self.encoder = Some(aead_2022::tcp::new_encoder::<N, CM>(&self.keys.enc_key, &salt)),
             };
         } else {
-            self.encoder = Some(super::aead::new_encoder(self.kind, &self.keys.enc_key, &salt));
+            self.encoder = Some(super::aead::new_encoder(&self.keys.enc_key, &salt));
         }
     }
 
@@ -186,7 +191,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         } else {
             let salt = cursor.copy_to_bytes(session.identity.salt.len());
             trace!("[tcp] get request salt {}", Base64::encode_string(&salt));
-            self.decoder = Some(super::aead::new_decoder(self.kind, &self.keys.enc_key, &salt));
+            self.decoder = Some(super::aead::new_decoder(&self.keys.enc_key, &salt));
         }
         let pos = cursor.position();
         cursor.into_inner().advance(pos as usize);
@@ -220,7 +225,6 @@ impl<const N: usize> AEADCipherCodec<N> {
             let mut eih = [0; 16];
             eih.copy_from_slice(&header[..16]);
             super::aead_2022::tcp::new_decoder_with_eih(
-                self.kind,
                 &self.keys.enc_key,
                 &salt,
                 eih,
@@ -228,7 +232,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                 session.user_manager.as_ref().unwrap(),
             )?
         } else {
-            super::aead_2022::tcp::new_decoder::<N>(self.kind, &self.keys.enc_key, &salt)
+            super::aead_2022::tcp::new_decoder::<N, CM>(&self.keys.enc_key, &salt)
         };
         decoder.auth.open(&mut header);
         let mut header = Bytes::from(header);
@@ -299,7 +303,11 @@ mod test {
     use rand::distributions::Alphanumeric;
     use rand::Rng;
 
+    use crate::common::codec::aead::Aes128GcmCipher;
+    use crate::common::codec::aead::Aes256GcmCipher;
     use crate::common::codec::aead::CipherKind;
+    use crate::common::codec::aead::CipherMethod;
+    use crate::common::codec::aead::KeyInit;
     use crate::common::codec::shadowsocks::tcp::AEADCipherCodec;
     use crate::common::codec::shadowsocks::tcp::Context;
     use crate::common::codec::shadowsocks::tcp::Identity;
@@ -312,12 +320,12 @@ mod test {
     #[test]
     fn test_tcp() {
         fn test_tcp(cipher: CipherKind) {
-            fn test_tcp<const N: usize>(cipher: CipherKind) {
+            fn test_tcp<const N: usize, CM: CipherMethod + KeyInit>(cipher: CipherKind) {
                 let context = Arc::new(Context::default());
                 let mut context: Session<N> = Session::new(Mode::Server, Identity::new(), Address::Domain("localhost".to_owned(), 0), context, None);
                 let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
                 rand::thread_rng().fill(&mut password[..]);
-                let mut codec = AEADCipherCodec::new(cipher, &String::from_utf8(password).unwrap()).unwrap();
+                let mut codec: AEADCipherCodec<N, CM> = AEADCipherCodec::new(cipher, &String::from_utf8(password).unwrap()).unwrap();
                 let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(1).map(char::from).collect();
                 let src = BytesMut::from(expect.as_str());
                 let mut dst = BytesMut::new();
@@ -328,8 +336,8 @@ mod test {
             }
 
             match cipher {
-                CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_tcp::<16>(cipher),
-                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_tcp::<32>(cipher),
+                CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_tcp::<16, Aes128GcmCipher>(cipher),
+                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_tcp::<32, Aes256GcmCipher>(cipher),
             }
         }
 
