@@ -49,23 +49,23 @@ impl Hmac {
     fn new(hash: Box<dyn Hash>, key: &[u8]) -> Self {
         let key_len = key.len();
         if key_len > hash.output_size() {
-            let mut outer = hash.new();
+            let mut outer = hash.init();
             outer.update(key);
             return Hmac::new(hash, &outer.do_final());
         }
-        let mut hm = Self { inner: hash.new(), outer: hash.new(), ipad: [0; 64], opad: [0; 64] };
+        let mut hm = Self { inner: hash.init(), outer: hash.init(), ipad: [0; 64], opad: [0; 64] };
         hm.ipad[0..key_len].copy_from_slice(key);
         hm.opad[0..key_len].copy_from_slice(key);
 
         hm.ipad.iter_mut().for_each(|x| *x ^= 0x36);
         hm.opad.iter_mut().for_each(|x| *x ^= 0x5c);
         hm.inner.update(&hm.ipad);
-        return hm;
+        hm
     }
 }
 
 trait Hash {
-    fn new(&self) -> Box<dyn Hash>;
+    fn init(&self) -> Box<dyn Hash>;
     fn update(&mut self, data: &[u8]);
     fn do_final(&mut self) -> [u8; 32];
     fn output_size(&self) -> usize;
@@ -74,7 +74,7 @@ trait Hash {
 type BoxSha256 = Box<Sha256>;
 
 impl Hash for BoxSha256 {
-    fn new(&self) -> Box<dyn Hash> {
+    fn init(&self) -> Box<dyn Hash> {
         Box::new(self.clone())
     }
 
@@ -92,8 +92,8 @@ impl Hash for BoxSha256 {
 }
 
 impl Hash for Hmac {
-    fn new(&self) -> Box<dyn Hash> {
-        Box::new(Self { inner: self.inner.new(), outer: self.outer.new(), ipad: self.ipad.clone(), opad: self.opad.clone() })
+    fn init(&self) -> Box<dyn Hash> {
+        Box::new(Self { inner: self.inner.init(), outer: self.outer.init(), ipad: self.ipad, opad: self.opad })
     }
 
     fn update(&mut self, data: &[u8]) {
@@ -119,9 +119,9 @@ struct HmacCreator<'a> {
 impl HmacCreator<'_> {
     fn create(&mut self) -> Box<dyn Hash> {
         return if let Some(parent) = self.parent.as_mut() {
-            Box::new(Hmac::new(parent.create(), &self.value))
+            Box::new(Hmac::new(parent.create(), self.value))
         } else {
-            Box::new(Hmac::new(Box::new(Box::new(Sha256::new())), &self.value))
+            Box::new(Hmac::new(Box::new(Box::new(Sha256::new())), self.value))
         };
     }
 }

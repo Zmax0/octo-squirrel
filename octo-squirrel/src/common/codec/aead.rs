@@ -113,21 +113,18 @@ macro_rules! match_method_const {
 impl CipherKind {
     pub fn to_cipher_method(&self, key: &[u8]) -> Box<dyn CipherMethod> {
         match self {
-            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
-            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
-            CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(&key)),
+            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(key)),
+            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Box::new(Aes256GcmCipher::new(key)),
+            CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(key)),
         }
     }
 
     pub fn is_aead_2022(&self) -> bool {
-        match self {
-            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => true,
-            _ => false,
-        }
+        matches!(self, CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm)
     }
 
     pub fn support_eih(&self) -> bool {
-        return self.is_aead_2022();
+        self.is_aead_2022()
     }
 
     pub fn tag_size(&self) -> usize {
@@ -193,7 +190,7 @@ impl IncreasingNonceGenerator {
                 break;
             }
         }
-        return &self.nonce;
+        &self.nonce
     }
 }
 

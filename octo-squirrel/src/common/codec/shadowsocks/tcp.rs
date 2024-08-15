@@ -47,7 +47,7 @@ impl Context {
             return true;
         }
         set.insert(nonce.to_vec(), ());
-        return false;
+        false
     }
 }
 
@@ -63,8 +63,8 @@ pub struct PayloadCodec<const N: usize, CM> {
 
 impl<const N: usize, CM: CipherMethod + KeyInit> PayloadCodec<N, CM> {
     pub fn new(context: Arc<Context>, config: &ServerConfig, address: Address, mode: Mode, user_manager: Option<Arc<ServerUserManager<N>>>) -> Self {
-        let session = Session::new(mode, Identity::new(), address, context, user_manager);
-        Self { session, cipher: AEADCipherCodec::new(config.cipher, &config.password).unwrap() }
+        let session = Session::new(mode, Identity::default(), address, context, user_manager);
+        Self { session, cipher: AEADCipherCodec::new(config.cipher, config.password.as_str()).unwrap() }
     }
 }
 
@@ -96,13 +96,13 @@ impl<const N: usize, CM> AEADCipherCodec<N, CM>
 where
     CM: CipherMethod + KeyInit,
 {
-    pub fn new(kind: CipherKind, password: &String) -> Result<Self> {
+    pub fn new(kind: CipherKind, password: &str) -> Result<Self> {
         let keys = Keys::from(kind, password)?;
         Ok(AEADCipherCodec { kind, keys, encoder: None, decoder: None })
     }
 
     pub fn encode(&mut self, session: &mut Session<N>, mut item: BytesMut, dst: &mut BytesMut) -> Result<()> {
-        if let None = self.encoder {
+        if self.encoder.is_none() {
             self.init_payload_encoder(session, self.kind.is_aead_2022(), dst);
             item = self.handle_payload_header(session, item, dst)?;
         }
@@ -167,10 +167,10 @@ where
             return Ok(None);
         }
         let mut dst = BytesMut::new();
-        if let None = self.decoder {
+        if self.decoder.is_none() {
             self.init_payload_decoder(session, src, &mut dst)?;
         }
-        if let None = self.decoder {
+        if self.decoder.is_none() {
             return Ok(None);
         }
         self.decoder.as_mut().unwrap().decode_payload(src, &mut dst);
@@ -287,11 +287,11 @@ pub struct Identity<const N: usize> {
     pub user: Option<ServerUser<N>>,
 }
 
-impl<const N: usize> Identity<N> {
-    pub fn new() -> Self {
+impl<const N: usize> Default for Identity<N> {
+    fn default() -> Self {
         let mut salt: [u8; N] = [0; N];
         rand::thread_rng().fill(&mut salt[..N]);
-        Self { salt, request_salt: None, user: None }
+        Self { salt, request_salt: Default::default(), user: Default::default() }
     }
 }
 
@@ -322,7 +322,8 @@ mod test {
         fn test_tcp(cipher: CipherKind) {
             fn test_tcp<const N: usize, CM: CipherMethod + KeyInit>(cipher: CipherKind) {
                 let context = Arc::new(Context::default());
-                let mut context: Session<N> = Session::new(Mode::Server, Identity::new(), Address::Domain("localhost".to_owned(), 0), context, None);
+                let mut context: Session<N> =
+                    Session::new(Mode::Server, Identity::default(), Address::Domain("localhost".to_owned(), 0), context, None);
                 let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
                 rand::thread_rng().fill(&mut password[..]);
                 let mut codec: AEADCipherCodec<N, CM> = AEADCipherCodec::new(cipher, &String::from_utf8(password).unwrap()).unwrap();

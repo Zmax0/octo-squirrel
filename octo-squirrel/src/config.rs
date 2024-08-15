@@ -44,10 +44,7 @@ impl ClientConfig {
 
 pub fn init() -> Result<ClientConfig, io::Error> {
     let path = args().nth(1).unwrap_or("config.json".to_owned());
-    let file = File::open(&path).expect(
-        format!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg or put the file (named 'config.json') into the same folder", &path)
-            .as_str(),
-    );
+    let file = File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg or put the file (named 'config.json') into the same folder", &path));
     let config: ClientConfig = serde_json::from_reader(BufReader::new(file))?;
     Ok(config)
 }

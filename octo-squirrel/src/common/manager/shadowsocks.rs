@@ -20,7 +20,7 @@ impl<const N: usize> ServerUserManager<N> {
 
     /// Add a new user
     pub fn add_user(&mut self, user: ServerUser<N>) {
-        self.users.insert(user.clone_identity_hash(), Arc::new(user));
+        self.users.insert(user.identity_hash(), Arc::new(user));
     }
 
     /// Get user by hash key
@@ -58,8 +58,8 @@ pub struct ServerUser<const N: usize> {
 }
 
 impl<const N: usize> ServerUser<N> {
-    pub fn clone_identity_hash(&self) -> [u8; N] {
-        self.identity_hash.clone()
+    pub fn identity_hash(&self) -> [u8; N] {
+        self.identity_hash
     }
 }
 

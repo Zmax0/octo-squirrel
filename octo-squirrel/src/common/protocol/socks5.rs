@@ -21,7 +21,7 @@ impl Socks5CommandStatus {
         } else if Self::Failure as u8 == byte {
             Ok(Self::Failure)
         } else {
-            bail!("unsupported command status: {}", byte as u8 & 0xff);
+            bail!("unsupported command status: {}", byte);
         }
     }
 }
@@ -42,7 +42,7 @@ impl Socks5AddressType {
         } else if Self::Ipv6 as u8 == byte {
             Ok(Self::Ipv6)
         } else {
-            bail!("unsupported address type: {}", byte as u8 & 0xff);
+            bail!("unsupported address type: {}", byte);
         }
     }
 }
@@ -63,7 +63,7 @@ impl Socks5CommandType {
         } else if Self::UdpAssociate as u8 == byte {
             Ok(Self::UdpAssociate)
         } else {
-            bail!("unsupported command type: {}", byte as u8 & 0xff);
+            bail!("unsupported command type: {}", byte);
         }
     }
 }
@@ -87,7 +87,7 @@ impl Socks5AuthMethod {
         } else if Self::Unaccepted as u8 == byte {
             Ok(Self::Unaccepted)
         } else {
-            bail!("unsupported auth method: {}", byte as u8 & 0xff)
+            bail!("unsupported auth method: {}", byte)
         }
     }
 }

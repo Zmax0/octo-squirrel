@@ -29,7 +29,7 @@ use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::time;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
@@ -124,26 +124,34 @@ where
     OutboundRecv: Send + Sync + 'static,
     ToInboundRecv: FnOnce(OutboundRecv, SocketAddr, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
 {
-    let (inbound_sink, mut inbound_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
+    let (mut inbound_sink, mut inbound_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
     let outbound_map: Arc<DashMap<Key, SplitSink<OutboundSink, OutboundSend>>> = Arc::new(DashMap::new());
-    let inbound_sink: Arc<Mutex<SplitSink<UdpFramed<Socks5UdpCodec>, ((BytesMut, SocketAddr), SocketAddr)>>> = Arc::new(Mutex::new(inbound_sink));
+    let (inbound_tx, mut inbound_rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
+    tokio::spawn(async move {
+        while let Some(item) = inbound_rx.recv().await {
+            inbound_sink.send(item).await.unwrap_or_else(|e| error!("[udp] failed to send inbound msg; {}", e));
+        }
+    });
     while let Some(Ok((inbound_recv, sender))) = inbound_stream.next().await {
         let key = new_key(sender, inbound_recv.1);
         if let Vacant(entry) = outbound_map.entry(key) {
             debug!("[udp] new binding; key={:?}", key);
-            let (outbound_sink, mut outbound_stream) = new_outbound(inbound_recv.1.into(), &config).await?;
+            let (outbound_sink, mut outbound_stream) = new_outbound(inbound_recv.1.into(), config).await?;
             entry.insert(outbound_sink);
             let _outbound_map = outbound_map.clone();
             tokio::spawn(async move {
                 time::sleep(Duration::from_secs(600)).await;
-                if let Some(_) = _outbound_map.remove(&key) {
+                if _outbound_map.remove(&key).is_some() {
                     debug!("[udp] remove binding; key={:?}", key);
                 }
             });
-            let _inbound_sink = inbound_sink.clone();
+            let _inbound_tx = inbound_tx.clone();
             tokio::spawn(async move {
                 while let Some(Ok(outbound_recv)) = outbound_stream.next().await {
-                    _inbound_sink.lock().await.send(to_inbound_recv(outbound_recv, inbound_recv.1, sender)).await.unwrap();
+                    _inbound_tx
+                        .send(to_inbound_recv(outbound_recv, inbound_recv.1, sender))
+                        .await
+                        .unwrap_or_else(|e| error!("[udp] failed to send inbound mpsc msg; {}", e));
                 }
             });
         }

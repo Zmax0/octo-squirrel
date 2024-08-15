@@ -1,5 +1,3 @@
-use std::u8;
-
 use bytes::BufMut;
 use bytes::BytesMut;
 use rand::random;

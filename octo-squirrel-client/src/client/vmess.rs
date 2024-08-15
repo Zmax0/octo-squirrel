@@ -43,7 +43,7 @@ impl Encoder<BytesMut> for ClientAEADCodec {
     type Error = anyhow::Error;
 
     fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        if let None = self.body_encoder {
+        if self.body_encoder.is_none() {
             let mut header = BytesMut::new();
             header.put_u8(VERSION);
             header.put_slice(&self.session.request_body_iv);
@@ -79,7 +79,7 @@ impl Decoder for ClientAEADCodec {
         if src.is_empty() {
             return Ok(None);
         }
-        if let None = self.body_decoder {
+        if self.body_decoder.is_none() {
             let header_length_cipher = Aes128GcmCipher::new(&KDF::kdf16(&self.session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_LEN_KEY]));
             if src.remaining() < size_of::<u16>() + header_length_cipher.tag_size() {
                 return Ok(None);
@@ -168,7 +168,7 @@ pub(crate) mod udp {
         let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
         let outbound = TcpStream::connect(proxy).await?;
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::UDP, security, recipient.into(), config.password.clone());
+        let header = RequestHeader::default(RequestCommand::UDP, security, recipient, config.password.clone());
         let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
         Ok(outbound.split())
     }

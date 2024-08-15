@@ -78,7 +78,7 @@ where
     CM: CipherMethod + KeyInit,
 {
     let identity_sub_key = blake3::derive_key("shadowsocks 2022 identity subkey", &[key, salt].concat());
-    let eih = user_hash.clone();
+    let eih = user_hash;
     Aes128EcbNoPadding::decrypt(&identity_sub_key, &mut user_hash);
     trace!("server EIH {:?}, hash: {:?}", eih, user_hash);
     if let Some(user) = user_manager.get_user_by_hash(&user_hash) {
@@ -114,7 +114,7 @@ fn make_eih(kind: &CipherKind, sub_key: &[u8], ipsk: &[u8], out: &mut BytesMut) 
         CipherKind::Aead2022Blake3Aes256Gcm => Aes256EcbNoPadding::encrypt(sub_key, &mut ipsk_encrypt_text, 16),
         _ => unreachable!("{:?} doesn't support EIH", kind),
     }
-    trace!("client EIH:{:?}, hash:{:?}", ByteStr::new(&ipsk_encrypt_text), ByteStr::new(&ipsk_plain_text));
+    trace!("client EIH:{:?}, hash:{:?}", ByteStr::new(&ipsk_encrypt_text), ByteStr::new(ipsk_plain_text));
     out.put_slice(&ipsk_encrypt_text);
 }
 

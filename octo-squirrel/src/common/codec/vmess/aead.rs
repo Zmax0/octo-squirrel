@@ -262,7 +262,7 @@ impl ShakeSizeParser {
     fn decode_size(&mut self, data: &[u8]) -> usize {
         let mask = self.next();
         let mut bytes = [0; 2];
-        bytes.copy_from_slice(&data);
+        bytes.copy_from_slice(data);
         let size = u16::from_be_bytes(bytes);
         (mask ^ size) as usize
     }

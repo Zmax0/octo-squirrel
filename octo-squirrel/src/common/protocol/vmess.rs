@@ -38,7 +38,7 @@ pub fn crc32(bytes: &[u8]) -> u32 {
 
 pub fn timestamp(delta: i32) -> i64 {
     let range_in_delta = rand::thread_rng().gen_range(0..delta * 2) - delta;
-    return now() - range_in_delta as i64;
+    now() - range_in_delta as i64
 }
 
 pub struct AddressCodec;

@@ -64,6 +64,12 @@ impl ClientSession {
     }
 }
 
+impl Default for ClientSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl From<&[u8]> for ClientSession {
     fn from(value: &[u8]) -> Self {
         let mut request_body_iv: [u8; 16] = [0; 16];

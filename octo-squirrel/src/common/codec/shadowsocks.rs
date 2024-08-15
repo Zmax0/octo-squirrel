@@ -66,11 +66,11 @@ impl<CM: CipherMethod + KeyInit> Authenticator<CM> {
     }
 
     fn seal(&mut self, plaintext: &mut dyn Buffer) {
-        self.method.encrypt_in_place(&self.nonce_generator.generate(), b"", plaintext)
+        self.method.encrypt_in_place(self.nonce_generator.generate(), b"", plaintext)
     }
 
     fn open(&mut self, ciphertext: &mut dyn Buffer) {
-        self.method.decrypt_in_place(&self.nonce_generator.generate(), b"", ciphertext)
+        self.method.decrypt_in_place(self.nonce_generator.generate(), b"", ciphertext)
     }
 }
 
@@ -180,7 +180,7 @@ impl<const N: usize> Keys<N> {
         Self { enc_key, identity_keys }
     }
 
-    fn from(kind: CipherKind, password: &String) -> Result<Keys<N>> {
+    fn from(kind: CipherKind, password: &str) -> Result<Keys<N>> {
         if kind.is_aead_2022() {
             aead_2022::password_to_keys(password)
         } else {

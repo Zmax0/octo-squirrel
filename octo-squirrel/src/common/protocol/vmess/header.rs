@@ -19,7 +19,7 @@ impl AddressType {
         } else if Self::Ipv6 as u8 == byte {
             Self::Ipv6
         } else {
-            panic!("unsupported address type: {}", byte as u8 & 0xff);
+            panic!("unsupported address type: {}", byte);
         }
     }
 }
@@ -48,7 +48,7 @@ impl RequestOption {
         Self::values().into_iter().filter(|op| *op as u8 & mask != 0).collect()
     }
 
-    pub fn get_mask(options: &Vec<Self>) -> u8 {
+    pub fn get_mask(options: &[Self]) -> u8 {
         options.iter().map(|x| *x as u8).reduce(|a, b| a | b).unwrap()
     }
 }

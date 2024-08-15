@@ -52,8 +52,8 @@ pub fn next_padding_length(msg: &BytesMut) -> u16 {
     }
 }
 
-pub fn password_to_keys<const N: usize>(password: &String) -> Result<Keys<N>> {
-    let split = password.split(":");
+pub fn password_to_keys<const N: usize>(password: &str) -> Result<Keys<N>> {
+    let split = password.split(':');
     let mut identity_keys = Vec::new();
 
     for s in split {

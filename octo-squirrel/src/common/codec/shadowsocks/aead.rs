@@ -25,7 +25,7 @@ pub(super) fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
     while index < size {
         let len = password_digest.len();
         container[..len].copy_from_slice(&password_digest);
-        container[len..].copy_from_slice(&password);
+        container[len..].copy_from_slice(password);
         hasher.update(&container);
         password_digest = hasher.finalize_reset();
         encoded[index..].copy_from_slice(&password_digest[..password_digest.len().min(size - index)]);
