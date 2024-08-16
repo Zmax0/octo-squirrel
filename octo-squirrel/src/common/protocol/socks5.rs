@@ -49,15 +49,15 @@ impl Socks5AddressType {
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Socks5CommandType {
-    Connet = 1,
+    Connect = 1,
     Bind = 2,
     UdpAssociate = 3,
 }
 
 impl Socks5CommandType {
     pub fn new(byte: u8) -> Result<Self> {
-        if Self::Connet as u8 == byte {
-            Ok(Self::Connet)
+        if Self::Connect as u8 == byte {
+            Ok(Self::Connect)
         } else if Self::Bind as u8 == byte {
             Ok(Self::Bind)
         } else if Self::UdpAssociate as u8 == byte {

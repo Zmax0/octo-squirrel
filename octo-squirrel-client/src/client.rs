@@ -9,6 +9,7 @@ use tokio::net::UdpSocket;
 
 pub(super) mod shadowsocks;
 pub(super) mod template;
+pub(super) mod trojan;
 pub(super) mod vmess;
 
 pub(super) async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<()> {
@@ -23,8 +24,8 @@ pub(super) async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) 
                 }
             };
         }
-        Protocols::VMess => template::transfer_tcp(listener, current, vmess::tcp::new_client_aead_codec).await?,
-        Protocols::Trojan => todo!(),
+        Protocols::VMess => template::transfer_tcp(listener, current, vmess::tcp::new_codec).await?,
+        Protocols::Trojan => template::transfer_tcp(listener, current, trojan::tcp::new_codec).await?,
     }
     Ok(())
 }
@@ -68,7 +69,30 @@ pub(super) async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Re
             )
             .await?
         }
-        Protocols::Trojan => todo!(),
+        Protocols::Trojan => match &current.ssl {
+            Some(_) => {
+                template::transfer_udp(
+                    socket,
+                    &current,
+                    trojan::udp::new_key,
+                    trojan::udp::new_tls_outbound,
+                    trojan::udp::to_inbound_recv,
+                    trojan::udp::to_outbound_send,
+                )
+                .await?
+            }
+            None => {
+                template::transfer_udp(
+                    socket,
+                    &current,
+                    trojan::udp::new_key,
+                    trojan::udp::new_outbound,
+                    trojan::udp::to_inbound_recv,
+                    trojan::udp::to_outbound_send,
+                )
+                .await?
+            }
+        },
     }
     Ok(())
 }

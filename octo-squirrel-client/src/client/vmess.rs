@@ -129,7 +129,7 @@ pub(crate) mod tcp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_client_aead_codec(addr: Address, config: &ServerConfig) -> ClientAEADCodec {
+    pub fn new_codec(addr: Address, config: &ServerConfig) -> ClientAEADCodec {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
         let header = RequestHeader::default(RequestCommand::TCP, security, addr, config.password.clone());
         ClientAEADCodec::new(header)
@@ -157,7 +157,7 @@ pub(crate) mod udp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
+    pub(crate) fn new_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
         (sender, recipient)
     }
 
@@ -173,11 +173,11 @@ pub(crate) mod udp {
         Ok(outbound.split())
     }
 
-    pub fn to_outbound_send(item: ((BytesMut, SocketAddr), SocketAddr), _: SocketAddr) -> BytesMut {
+    pub(crate) fn to_outbound_send(item: ((BytesMut, SocketAddr), SocketAddr), _: SocketAddr) -> BytesMut {
         item.0 .0
     }
 
-    pub fn to_inbound_recv(item: BytesMut, recipient: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub(crate) fn to_inbound_recv(item: BytesMut, recipient: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         ((item, recipient), sender)
     }
 }

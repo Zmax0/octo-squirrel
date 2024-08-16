@@ -7,6 +7,7 @@ use serde::Serialize;
 pub mod address;
 pub mod shadowsocks;
 pub mod socks5;
+pub mod trojan;
 pub mod vmess;
 
 #[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]

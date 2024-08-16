@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::fs;
 use std::future::Future;
 use std::hash::Hash;
 use std::net::SocketAddr;
@@ -26,11 +27,16 @@ use octo_squirrel::common::protocol::socks5::handshake::ServerHandShake;
 use octo_squirrel::common::protocol::socks5::message::Socks5CommandResponse;
 use octo_squirrel::common::protocol::socks5::Socks5CommandStatus;
 use octo_squirrel::config::ServerConfig;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time;
+use tokio_native_tls::native_tls;
+use tokio_native_tls::native_tls::Certificate;
+use tokio_native_tls::TlsConnector;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
@@ -49,7 +55,19 @@ where
             let request_str = request.to_string();
             let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
             info!("[tcp] accept {}, dest={}; {}={}", &config.protocol, &request_str, &src, outbound.peer_addr()?);
-            tokio::spawn(relay_tcp(inbound, outbound, new_codec(request.into(), config)));
+            if let Some(ssl_config) = &config.ssl {
+                let pem = fs::read(ssl_config.certificate_file.as_str())?;
+                let cert = Certificate::from_pem(&pem)?;
+                let tls_connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
+                match tls_connector.connect(ssl_config.server_name.as_str(), outbound).await {
+                    Ok(outbound) => {
+                        tokio::spawn(relay_tcp(inbound, outbound, new_codec(request.into(), config)));
+                    }
+                    Err(e) => error!("tls handshake failed: {}", e),
+                }
+            } else {
+                tokio::spawn(relay_tcp(inbound, outbound, new_codec(request.into(), config)));
+            }
         } else {
             error!("[tcp] failed to handshake; error={}", handshake.unwrap_err());
         }
@@ -57,13 +75,13 @@ where
     Ok(())
 }
 
-async fn relay_tcp<Codec>(inbound: TcpStream, outbound: TcpStream, codec: Codec) -> Result<(), anyhow::Error>
+async fn relay_tcp<I, O, C>(inbound: I, outbound: O, codec: C) -> Result<(), anyhow::Error>
 where
-    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error>,
+    I: AsyncRead + AsyncWrite,
+    O: AsyncRead + AsyncWrite,
+    C: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error>,
 {
     use octo_squirrel::common::codec::BytesCodec;
-    let ir = inbound.peer_addr()?;
-    let or = outbound.peer_addr()?;
     let (mut inbound_sink, mut inbound_stream) = Framed::new(inbound, BytesCodec).split::<BytesMut>();
     let (mut outbound_sink, mut outbound_stream) = codec.framed(outbound).split();
     let server_to_client = async {
@@ -79,7 +97,7 @@ where
         outbound_sink.close().await
     };
     tokio::try_join!(client_to_server, server_to_client)?;
-    info!("[tcp] relay complete; {}!={}", ir, or);
+    info!("[tcp] relay complete");
     Ok(())
 }
 
@@ -140,9 +158,10 @@ where
             entry.insert(outbound_sink);
             let _outbound_map = outbound_map.clone();
             tokio::spawn(async move {
-                time::sleep(Duration::from_secs(600)).await;
-                if _outbound_map.remove(&key).is_some() {
+                time::sleep(Duration::from_secs(10)).await;
+                if let Some((_, mut outbound_sink)) = _outbound_map.remove(&key) {
                     debug!("[udp] remove binding; key={:?}", key);
+                    outbound_sink.close().await.unwrap_or_else(|e| error!("[udp] failed to close outbound; {}", e))
                 }
             });
             let _inbound_tx = inbound_tx.clone();

@@ -25,6 +25,8 @@ pub struct ServerConfig {
     #[serde(rename = "packetEncoding")]
     #[serde(default)]
     pub packet_encoding: PacketEncoding,
+    #[serde(default)]
+    pub ssl: Option<SslConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,6 +42,17 @@ impl ClientConfig {
     pub fn get_current(&self) -> Option<&ServerConfig> {
         self.servers.get(self.index)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SslConfig {
+    #[serde(rename = "certificateFile")]
+    pub certificate_file: String,
+    #[cfg(feature = "server")]
+    #[serde(rename = "keyFile")]
+    pub key_file: String,
+    #[serde(rename = "serverName")]
+    pub server_name: String,
 }
 
 pub fn init() -> Result<ClientConfig, io::Error> {
@@ -79,10 +92,15 @@ mod test {
               "cipher": "chacha20-poly1305",
               "protocol": "vmess",
               "remark": "",
-              "networks": [
-                "TCP",
-                "UDP"
-              ]
+              "transport": [
+                "tcp",
+                "udp"
+              ],
+              "ssl": {
+                "certificateFile": "/path/to/certificate.crt",
+                "keyFile": "/path/to/private.key",
+                "serverName": server_name
+              }
             }
           ]
         });
@@ -95,5 +113,7 @@ mod test {
         assert_eq!(Protocols::VMess, current.protocol);
         assert_eq!(vec![Transport::TCP, Transport::UDP], current.transport);
         assert_eq!(PacketEncoding::None, current.packet_encoding);
+        assert!(current.ssl.is_some());
+        assert_eq!(current.ssl.as_ref().unwrap().server_name, server_name)
     }
 }

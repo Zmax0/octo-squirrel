@@ -70,7 +70,7 @@ mod test {
     async fn no_auth() -> Result<()> {
         let proxy_addr = "127.0.0.1:51089".parse().unwrap();
         let dst_addr = "127.0.0.1:51089".parse().unwrap();
-        let response = ClientHandShake::no_auth(Socks5CommandType::Connet, proxy_addr, dst_addr).await?;
+        let response = ClientHandShake::no_auth(Socks5CommandType::Connect, proxy_addr, dst_addr).await?;
         assert_eq!(response.command_status, Socks5CommandStatus::Success);
         assert_eq!(response.bnd_addr, "127.0.0.1");
         assert_eq!(response.bnd_port, 51089);
