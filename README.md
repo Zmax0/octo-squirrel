@@ -52,17 +52,17 @@ A network tool for improved privacy and security.
 
     > index: `servers[index]` will be the client config
 
-    > protocol: "shadowsocks" | "vmess"
+    > protocol: "shadowsocks" | "vmess" | "trojan"
 
     > cipher: see Ciphers
 
     > networks: see Transmission
 
-    > `ssl`: (OPTIONAL) SSL specific configurations
+    > ssl: (OPTIONAL) SSL specific configurations
 
-    > > `certificateFile`: certificate file
+    > > certificateFile: certificate file
 
-    > > `serverName`: the Server Name Indication field in the SSL handshake.
+    > > serverName: the Server Name Indication field in the SSL handshake.
 
 2. running command
 
