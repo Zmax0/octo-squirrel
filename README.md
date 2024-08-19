@@ -1,13 +1,16 @@
 # octo-squirrel
 
-For study purposes only.
+A network tool for improved privacy and security.
 
 ## Feature
-### Transmission
-|     | Shadowsocks | VMess |
-|:----|:-----------:|:-----:|
-| TCP |      ✔      |   ✔   |
-| UDP |      ✔      |   ✔   |
+### Local
+- socks5
+
+### Transport
+|               | Shadowsocks | VMess | Trojan |
+|:--------------|:-----------:|:-----:|:------:|
+| tcp           |      ✔      |   ✔   |   ✔    |
+| udp           |      ✔      |   ✔   |   ✔    |
 
 ### Ciphers
 |                         | Shadowsocks |  VMess  |
@@ -27,21 +30,24 @@ For study purposes only.
     {
         "port": 0,
         "index": 0,
-        "servers":
-        [
+        "servers": [
             {
                 "cipher": "{cipher}",
                 "password": "{password}",
                 "port": "{port}",
                 "protocol": "{protocol}",
-                "networks":
-                [
+                "networks": [
                     "{networks}"
                 ]
             }
-        ]
+        ],
+        "ssl": {
+            "certificateFile": "/path/to/certificate.crt",
+            "serverName": ""
+        }
     }
     ```
+
     > port: which port client will be listening on
 
     > index: `servers[index]` will be the client config
@@ -52,10 +58,16 @@ For study purposes only.
 
     > networks: see Transmission
 
+    > `ssl`: (OPTIONAL) SSL specific configurations
+
+    > > `certificateFile`: certificate file
+
+    > > `serverName`: the Server Name Indication field in the SSL handshake.
+
 2. running command
 
     * Windows
 
     ```cmd
-    octo-squirrel-client.exe {config.json file path}
+    octo-squirrel-client.exe 'config.json file path'
     ```

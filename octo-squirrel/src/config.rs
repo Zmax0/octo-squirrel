@@ -20,7 +20,7 @@ pub struct ServerConfig {
     pub cipher: CipherKind,
     pub protocol: Protocols,
     pub remark: String,
-    #[serde(default = "Vec::new")]
+    #[serde(default)]
     pub transport: Vec<Transport>,
     #[serde(rename = "packetEncoding")]
     #[serde(default)]

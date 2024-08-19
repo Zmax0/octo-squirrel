@@ -116,7 +116,7 @@ where
     type Output = Res::Output;
 }
 
-pub(super) async fn transfer_udp<OutboundSink, OutboundStream, Key, NewKey, NewOutbound, Item, ToOutboundSend, ToInboundRecv>(
+pub(super) async fn transfer_udp<Item, OutboundSink, OutboundStream, Key, NewKey, NewOutbound, ToOutboundSend, ToInboundRecv>(
     inbound: UdpSocket,
     config: &ServerConfig,
     new_key: NewKey,
@@ -125,6 +125,7 @@ pub(super) async fn transfer_udp<OutboundSink, OutboundStream, Key, NewKey, NewO
     to_outbound_send: ToOutboundSend,
 ) -> Result<()>
 where
+    Item: Send + Sync + 'static,
     OutboundSink: Sink<Item, Error = anyhow::Error> + Send + 'static,
     OutboundStream: Stream<Item = Result<Item, anyhow::Error>> + Unpin + Send + 'static,
     NewKey: FnOnce(SocketAddr, SocketAddr) -> Key + Copy,
@@ -136,7 +137,6 @@ where
             Item,
             Output = Result<(SplitSink<OutboundSink, Item>, SplitStream<OutboundStream>), anyhow::Error>,
         > + Copy,
-    Item: Send + Sync + 'static,
     ToOutboundSend: FnOnce((DatagramPacket, SocketAddr), SocketAddr) -> Item + Copy,
     ToInboundRecv: FnOnce(Item, SocketAddr, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
 {
