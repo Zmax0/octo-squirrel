@@ -25,7 +25,7 @@ use crate::common::protocol::socks5::Socks5AuthMethod;
 pub struct ClientHandShake;
 
 impl ClientHandShake {
-    pub async fn no_auth(command_type: Socks5CommandType, proxy_addr: SocketAddr, dst_add: SocketAddr) -> Result<Socks5CommandResponse> {
+    pub async fn no_auth(command_type: Socks5CommandType, proxy_addr: SocketAddr, dst_addr: SocketAddr) -> Result<Socks5CommandResponse> {
         let mut stream = TcpStream::connect(proxy_addr).await?;
         let (rh, wh) = stream.split();
         let mut writer = FramedWrite::new(wh, Socks5ClientEncoder);
@@ -35,7 +35,7 @@ impl ClientHandShake {
         if initial_response.auth_method != Socks5AuthMethod::NoAuth {
             bail!("proxy's auth method is not NO_AUTH");
         }
-        writer.send(Box::new(Socks5CommandRequest::new(command_type, dst_add.into()))).await?;
+        writer.send(Box::new(Socks5CommandRequest::new(command_type, dst_addr.into()))).await?;
         let mut reader = FramedRead::new(reader.into_inner(), Socks5CommandResponseDecoder);
         let command_response = reader.next().map(Option::unwrap).await?;
         Ok(command_response)
@@ -64,14 +64,16 @@ mod test {
     use anyhow::Result;
 
     use crate::common::protocol::socks5::handshake::ClientHandShake;
+    use crate::common::protocol::socks5::Socks5CommandStatus;
     use crate::common::protocol::socks5::Socks5CommandType;
     #[tokio::test]
     async fn no_auth() -> Result<()> {
-        let proxy_addr = "127.0.0.1:7890".parse().unwrap();
-        let dst_addr = "127.0.0.1:9090".parse().unwrap();
-        let response = ClientHandShake::no_auth(Socks5CommandType::Connet, proxy_addr, dst_addr).await?;
+        let proxy_addr = "127.0.0.1:51089".parse().unwrap();
+        let dst_addr = "127.0.0.1:51089".parse().unwrap();
+        let response = ClientHandShake::no_auth(Socks5CommandType::Connect, proxy_addr, dst_addr).await?;
+        assert_eq!(response.command_status, Socks5CommandStatus::Success);
         assert_eq!(response.bnd_addr, "127.0.0.1");
-        assert_eq!(response.bnd_port, 7890);
+        assert_eq!(response.bnd_port, 51089);
         Ok(())
     }
 }

@@ -78,7 +78,7 @@ impl Socks5CommandRequest {
     }
 
     pub fn connect(dst_addr_type: Socks5AddressType, dst_addr: String, dst_port: u16) -> Self {
-        Self { command_type: Socks5CommandType::Connet, dst_addr_type, dst_addr, dst_port }
+        Self { command_type: Socks5CommandType::Connect, dst_addr_type, dst_addr, dst_port }
     }
 }
 

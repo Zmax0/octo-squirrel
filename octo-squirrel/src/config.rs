@@ -7,8 +7,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::common::codec::aead::CipherKind;
-use crate::common::network::Network;
 use crate::common::network::PacketEncoding;
+use crate::common::network::Transport;
 use crate::common::protocol::Protocols;
 use crate::log::Logger;
 
@@ -20,11 +20,13 @@ pub struct ServerConfig {
     pub cipher: CipherKind,
     pub protocol: Protocols,
     pub remark: String,
-    #[serde(default = "Vec::new")]
-    pub networks: Vec<Network>,
+    #[serde(default)]
+    pub transport: Vec<Transport>,
     #[serde(rename = "packetEncoding")]
     #[serde(default)]
     pub packet_encoding: PacketEncoding,
+    #[serde(default)]
+    pub ssl: Option<SslConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,12 +44,20 @@ impl ClientConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SslConfig {
+    #[serde(rename = "certificateFile")]
+    pub certificate_file: String,
+    #[cfg(feature = "server")]
+    #[serde(rename = "keyFile")]
+    pub key_file: String,
+    #[serde(rename = "serverName")]
+    pub server_name: String,
+}
+
 pub fn init() -> Result<ClientConfig, io::Error> {
     let path = args().nth(1).unwrap_or("config.json".to_owned());
-    let file = File::open(&path).expect(
-        format!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg or put the file (named 'config.json') into the same folder", &path)
-            .as_str(),
-    );
+    let file = File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg or put the file (named 'config.json') into the same folder", &path));
     let config: ClientConfig = serde_json::from_reader(BufReader::new(file))?;
     Ok(config)
 }
@@ -60,8 +70,8 @@ mod test {
     use serde_json::json;
 
     use crate::common::codec::aead::CipherKind;
-    use crate::common::network::Network;
     use crate::common::network::PacketEncoding;
+    use crate::common::network::Transport;
     use crate::common::protocol::Protocols;
     use crate::config::ClientConfig;
 
@@ -82,10 +92,15 @@ mod test {
               "cipher": "chacha20-poly1305",
               "protocol": "vmess",
               "remark": "",
-              "networks": [
-                "TCP",
-                "UDP"
-              ]
+              "transport": [
+                "tcp",
+                "udp"
+              ],
+              "ssl": {
+                "certificateFile": "/path/to/certificate.crt",
+                "keyFile": "/path/to/private.key",
+                "serverName": server_name
+              }
             }
           ]
         });
@@ -96,7 +111,9 @@ mod test {
         assert_eq!(server_port, current.port);
         assert_eq!(CipherKind::ChaCha20Poly1305, current.cipher);
         assert_eq!(Protocols::VMess, current.protocol);
-        assert_eq!(vec![Network::TCP, Network::UDP], current.networks);
+        assert_eq!(vec![Transport::TCP, Transport::UDP], current.transport);
         assert_eq!(PacketEncoding::None, current.packet_encoding);
+        assert!(current.ssl.is_some());
+        assert_eq!(current.ssl.as_ref().unwrap().server_name, server_name)
     }
 }

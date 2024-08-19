@@ -9,7 +9,6 @@ use aes_gcm::AeadCore;
 use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::Aes256Gcm;
-use aes_gcm::KeyInit;
 use chacha20poly1305::ChaCha20Poly1305;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,6 +23,10 @@ pub trait CipherMethod: Send {
     fn ciphertext_overhead(&self) -> usize;
 }
 
+pub trait KeyInit: Sized {
+    fn init(key: &[u8]) -> Self;
+}
+
 macro_rules! aead_impl {
     ($name:ident, $cipher:ty) => {
         pub struct $name {
@@ -36,6 +39,7 @@ macro_rules! aead_impl {
             pub const CIPHERTEXT_OVERHEAD: usize = <$cipher as AeadCore>::CiphertextOverhead::USIZE;
 
             pub fn new(key: &[u8]) -> Self {
+                use aes_gcm::KeyInit;
                 Self { cipher: <$cipher>::new_from_slice(key).unwrap() }
             }
         }
@@ -67,6 +71,12 @@ macro_rules! aead_impl {
 
             fn ciphertext_overhead(&self) -> usize {
                 $name::CIPHERTEXT_OVERHEAD
+            }
+        }
+
+        impl KeyInit for $name {
+            fn init(key: &[u8]) -> Self {
+                $name::new(key)
             }
         }
     };
@@ -103,17 +113,18 @@ macro_rules! match_method_const {
 impl CipherKind {
     pub fn to_cipher_method(&self, key: &[u8]) -> Box<dyn CipherMethod> {
         match self {
-            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(&key)),
-            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Box::new(Aes256GcmCipher::new(&key)),
-            CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(&key)),
+            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(key)),
+            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Box::new(Aes256GcmCipher::new(key)),
+            CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(key)),
         }
     }
 
     pub fn is_aead_2022(&self) -> bool {
-        match self {
-            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => true,
-            _ => false,
-        }
+        matches!(self, CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm)
+    }
+
+    pub fn support_eih(&self) -> bool {
+        self.is_aead_2022()
     }
 
     pub fn tag_size(&self) -> usize {
@@ -179,7 +190,7 @@ impl IncreasingNonceGenerator {
                 break;
             }
         }
-        return &self.nonce;
+        &self.nonce
     }
 }
 

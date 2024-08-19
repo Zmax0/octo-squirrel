@@ -7,6 +7,7 @@ use serde::Serialize;
 pub mod address;
 pub mod shadowsocks;
 pub mod socks5;
+pub mod trojan;
 pub mod vmess;
 
 #[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
@@ -14,6 +15,7 @@ pub mod vmess;
 pub enum Protocols {
     Shadowsocks,
     VMess,
+    Trojan,
 }
 
 impl Display for Protocols {
@@ -21,6 +23,7 @@ impl Display for Protocols {
         match self {
             Protocols::Shadowsocks => write!(f, "shadowsocks"),
             Protocols::VMess => write!(f, "vmess"),
+            Protocols::Trojan => write!(f, "trojan"),
         }
     }
 }
