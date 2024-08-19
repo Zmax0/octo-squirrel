@@ -1,7 +1,6 @@
 use std::net::Ipv4Addr;
 use std::net::SocketAddrV4;
 
-use anyhow::Result;
 use log::info;
 use octo_squirrel::common::network::Transport;
 use tokio::net::TcpListener;
@@ -10,7 +9,7 @@ use tokio::net::UdpSocket;
 mod client;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let config = octo_squirrel::config::init()?;
     octo_squirrel::log::init(&config.logger)?;
     let current = config.get_current().expect("Empty proxy server.");

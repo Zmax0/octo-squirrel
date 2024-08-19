@@ -134,11 +134,11 @@ pub(crate) mod udp {
         Ok(Framed::new(outbound, codec).split())
     }
 
-    pub(crate) fn to_outbound_send(item: ((BytesMut, SocketAddr), SocketAddr), _: SocketAddr) -> DatagramPacket {
+    pub(crate) fn to_outbound_send(item: (DatagramPacket, SocketAddr), _: SocketAddr) -> DatagramPacket {
         item.0
     }
 
-    pub(crate) fn to_inbound_recv(item: (BytesMut, SocketAddr), _: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub(crate) fn to_inbound_recv(item: DatagramPacket, _: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         (item, sender)
     }
 

@@ -54,7 +54,7 @@ where
         if let Ok(request) = handshake {
             let request_str = request.to_string();
             let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-            info!("[tcp] accept {}, dest={}; {}={}", &config.protocol, &request_str, &src, outbound.peer_addr()?);
+            info!("[tcp] accept {}, target={}; {}={}", &config.protocol, &request_str, &src, outbound.peer_addr()?);
             if let Some(ssl_config) = &config.ssl {
                 let pem = fs::read(ssl_config.certificate_file.as_str())?;
                 let cert = Certificate::from_pem(&pem)?;
@@ -88,16 +88,15 @@ where
         while let Some(Ok(next)) = outbound_stream.next().await {
             inbound_sink.send(next).await?;
         }
-        inbound_sink.close().await
+        Err::<(), _>(anyhow::Error::msg("server-client is interrupted"))
     };
     let client_to_server = async {
         while let Some(Ok(next)) = inbound_stream.next().await {
             outbound_sink.send(next).await?;
         }
-        outbound_sink.close().await
+        Err::<(), _>(anyhow::Error::msg("client-server is interrupted"))
     };
-    tokio::try_join!(client_to_server, server_to_client)?;
-    info!("[tcp] relay complete");
+    let _ = tokio::try_join!(client_to_server, server_to_client);
     Ok(())
 }
 
@@ -117,7 +116,7 @@ where
     type Output = Res::Output;
 }
 
-pub(super) async fn transfer_udp<OutboundSink, OutboundStream, Key, NewKey, NewOutbound, ToOutboundSend, OutboundSend, OutboundRecv, ToInboundRecv>(
+pub(super) async fn transfer_udp<OutboundSink, OutboundStream, Key, NewKey, NewOutbound, Item, ToOutboundSend, ToInboundRecv>(
     inbound: UdpSocket,
     config: &ServerConfig,
     new_key: NewKey,
@@ -126,24 +125,23 @@ pub(super) async fn transfer_udp<OutboundSink, OutboundStream, Key, NewKey, NewO
     to_outbound_send: ToOutboundSend,
 ) -> Result<()>
 where
-    OutboundSink: Sink<OutboundSend, Error = anyhow::Error> + Sized + Send + 'static,
-    OutboundStream: Stream<Item = Result<OutboundRecv, anyhow::Error>> + Send + 'static,
+    OutboundSink: Sink<Item, Error = anyhow::Error> + Send + 'static,
+    OutboundStream: Stream<Item = Result<Item, anyhow::Error>> + Unpin + Send + 'static,
     NewKey: FnOnce(SocketAddr, SocketAddr) -> Key + Copy,
     Key: Hash + Eq + Debug + Copy + Send + Sync + 'static,
     NewOutbound: for<'a> AsyncOutbound<
             &'a ServerConfig,
             OutboundSink,
             OutboundStream,
-            OutboundRecv,
-            Output = Result<(SplitSink<OutboundSink, OutboundSend>, SplitStream<OutboundStream>), anyhow::Error>,
+            Item,
+            Output = Result<(SplitSink<OutboundSink, Item>, SplitStream<OutboundStream>), anyhow::Error>,
         > + Copy,
-    ToOutboundSend: FnOnce((DatagramPacket, SocketAddr), SocketAddr) -> OutboundSend + Copy,
-    OutboundSend: Send + Sync + 'static,
-    OutboundRecv: Send + Sync + 'static,
-    ToInboundRecv: FnOnce(OutboundRecv, SocketAddr, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
+    Item: Send + Sync + 'static,
+    ToOutboundSend: FnOnce((DatagramPacket, SocketAddr), SocketAddr) -> Item + Copy,
+    ToInboundRecv: FnOnce(Item, SocketAddr, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
 {
     let (mut inbound_sink, mut inbound_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
-    let outbound_map: Arc<DashMap<Key, SplitSink<OutboundSink, OutboundSend>>> = Arc::new(DashMap::new());
+    let outbound_map: Arc<DashMap<Key, SplitSink<OutboundSink, Item>>> = Arc::new(DashMap::new());
     let (inbound_tx, mut inbound_rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
     tokio::spawn(async move {
         while let Some(item) = inbound_rx.recv().await {
@@ -156,22 +154,26 @@ where
             debug!("[udp] new binding; key={:?}", key);
             let (outbound_sink, mut outbound_stream) = new_outbound(inbound_recv.1.into(), config).await?;
             entry.insert(outbound_sink);
-            let _outbound_map = outbound_map.clone();
-            tokio::spawn(async move {
-                time::sleep(Duration::from_secs(10)).await;
-                if let Some((_, mut outbound_sink)) = _outbound_map.remove(&key) {
-                    debug!("[udp] remove binding; key={:?}", key);
-                    outbound_sink.close().await.unwrap_or_else(|e| error!("[udp] failed to close outbound; {}", e))
-                }
-            });
             let _inbound_tx = inbound_tx.clone();
-            tokio::spawn(async move {
+            let _outbound_map = outbound_map.clone();
+            let task = tokio::spawn(async move {
                 while let Some(Ok(outbound_recv)) = outbound_stream.next().await {
                     _inbound_tx
                         .send(to_inbound_recv(outbound_recv, inbound_recv.1, sender))
                         .await
                         .unwrap_or_else(|e| error!("[udp] failed to send inbound mpsc msg; {}", e));
                 }
+                if _outbound_map.remove(&key).is_some() {
+                    debug!("[udp] remove binding; key={:?}", key);
+                };
+            });
+            let _outbound_map = outbound_map.clone();
+            tokio::spawn(async move {
+                time::sleep(Duration::from_secs(20)).await;
+                task.abort();
+                if _outbound_map.remove(&key).is_some() {
+                    debug!("[udp] remove binding; key={:?}", key);
+                };
             });
         }
         let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
