@@ -5,6 +5,8 @@ A network tool for improved privacy and security.
 ## Feature
 ### Local
 - socks5
+- http
+- https
 
 ### Transport
 |               | Shadowsocks | VMess | Trojan |

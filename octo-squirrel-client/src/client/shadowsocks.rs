@@ -1,4 +1,4 @@
-pub(crate) mod tcp {
+pub(super) mod tcp {
     use std::sync::Arc;
 
     use octo_squirrel::common::codec::aead::CipherMethod;
@@ -14,7 +14,7 @@ pub(crate) mod tcp {
     }
 }
 
-pub(crate) mod udp {
+pub(super) mod udp {
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
     use std::net::SocketAddrV4;

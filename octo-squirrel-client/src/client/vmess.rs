@@ -24,7 +24,7 @@ use rand::Rng;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-pub struct ClientAEADCodec {
+pub(super) struct ClientAEADCodec {
     header: RequestHeader,
     session: ClientSession,
     body_encoder: Option<AEADBodyCodec>,
@@ -119,7 +119,7 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub(crate) mod tcp {
+pub(super) mod tcp {
     use octo_squirrel::common::codec::aead::CipherKind;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::vmess::header::RequestCommand;
@@ -136,7 +136,7 @@ pub(crate) mod tcp {
     }
 }
 
-pub(crate) mod udp {
+pub(super) mod udp {
     use std::net::SocketAddr;
     use std::net::ToSocketAddrs;
 
@@ -157,7 +157,7 @@ pub(crate) mod udp {
 
     use super::ClientAEADCodec;
 
-    pub(crate) fn new_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
+    pub fn new_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
         (sender, recipient)
     }
 
@@ -173,11 +173,11 @@ pub(crate) mod udp {
         Ok(outbound.split())
     }
 
-    pub(crate) fn to_outbound_send(item: ((BytesMut, SocketAddr), SocketAddr), _: SocketAddr) -> BytesMut {
+    pub fn to_outbound_send(item: ((BytesMut, SocketAddr), SocketAddr), _: SocketAddr) -> BytesMut {
         item.0 .0
     }
 
-    pub(crate) fn to_inbound_recv(item: BytesMut, recipient: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub fn to_inbound_recv(item: BytesMut, recipient: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         ((item, recipient), sender)
     }
 }

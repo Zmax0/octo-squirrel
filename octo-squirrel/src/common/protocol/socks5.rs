@@ -6,7 +6,7 @@ pub mod codec;
 pub mod handshake;
 pub mod message;
 
-pub const VERSION: u8 = 5;
+const VERSION: u8 = 5;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Socks5CommandStatus {

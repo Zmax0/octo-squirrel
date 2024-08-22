@@ -1,5 +1,5 @@
 pub mod aead;
-pub mod chunk;
+mod chunk;
 pub mod shadowsocks;
 pub mod vmess;
 

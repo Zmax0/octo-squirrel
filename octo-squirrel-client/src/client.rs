@@ -7,12 +7,12 @@ use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
 
-pub(super) mod shadowsocks;
-pub(super) mod template;
-pub(super) mod trojan;
-pub(super) mod vmess;
+mod shadowsocks;
+mod template;
+mod trojan;
+mod vmess;
 
-pub(super) async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<()> {
+pub async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) -> Result<()> {
     match current.protocol {
         Protocols::Shadowsocks => {
             match current.cipher {
@@ -30,7 +30,7 @@ pub(super) async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) 
     Ok(())
 }
 
-pub(super) async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<()> {
+pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) -> Result<()> {
     match current.protocol {
         Protocols::Shadowsocks => {
             match current.cipher {

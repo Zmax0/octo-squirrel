@@ -1,17 +1,23 @@
-pub(crate) mod tcp {
+enum CodecState {
+    Header,
+    Body,
+}
+
+pub(super) mod tcp {
     use bytes::BufMut;
     use bytes::BytesMut;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::socks5::address::AddressCodec;
     use octo_squirrel::common::protocol::socks5::Socks5CommandType;
     use octo_squirrel::common::protocol::trojan;
-    use octo_squirrel::common::protocol::trojan::CodecStatus;
     use octo_squirrel::common::util::hex;
     use octo_squirrel::config::ServerConfig;
     use sha2::Digest;
     use sha2::Sha224;
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
+
+    use super::CodecState;
 
     pub fn new_codec(addr: Address, config: &ServerConfig) -> ClientCodec {
         ClientCodec::new(config.password.as_bytes(), Socks5CommandType::Connect as u8, addr)
@@ -21,7 +27,7 @@ pub(crate) mod tcp {
         key: [u8; 56],
         command: u8,
         address: Address,
-        status: CodecStatus,
+        status: CodecState,
     }
 
     impl ClientCodec {
@@ -31,7 +37,7 @@ pub(crate) mod tcp {
             let hash: [u8; 28] = hasher.finalize().into();
             let mut key: [u8; 56] = [0; 56];
             key.copy_from_slice(hex::encode(&hash).as_bytes());
-            Self { key, command, address, status: CodecStatus::Header }
+            Self { key, command, address, status: CodecState::Header }
         }
     }
 
@@ -39,13 +45,13 @@ pub(crate) mod tcp {
         type Error = anyhow::Error;
 
         fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
-            if matches!(self.status, CodecStatus::Header) {
+            if matches!(self.status, CodecState::Header) {
                 dst.put_slice(&self.key);
                 dst.put_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
                 AddressCodec::encode(&self.address, dst)?;
                 dst.put_slice(&trojan::CR_LF);
-                self.status = CodecStatus::Body;
+                self.status = CodecState::Body;
             }
             dst.put(item);
             Ok(())
@@ -68,7 +74,7 @@ pub(crate) mod tcp {
     }
 }
 
-pub(crate) mod udp {
+pub(super) mod udp {
     use std::fs;
     use std::net::SocketAddr;
     use std::net::ToSocketAddrs;
@@ -86,7 +92,6 @@ pub(crate) mod udp {
     use octo_squirrel::common::protocol::socks5::address::AddressCodec;
     use octo_squirrel::common::protocol::socks5::Socks5CommandType;
     use octo_squirrel::common::protocol::trojan;
-    use octo_squirrel::common::protocol::trojan::CodecStatus;
     use octo_squirrel::common::util::hex;
     use octo_squirrel::config::ServerConfig;
     use sha2::Digest;
@@ -99,6 +104,8 @@ pub(crate) mod udp {
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
     use tokio_util::codec::Framed;
+
+    use super::CodecState;
 
     pub fn new_key(sender: SocketAddr, _: SocketAddr) -> SocketAddr {
         sender
@@ -134,11 +141,11 @@ pub(crate) mod udp {
         Ok(Framed::new(outbound, codec).split())
     }
 
-    pub(crate) fn to_outbound_send(item: (DatagramPacket, SocketAddr), _: SocketAddr) -> DatagramPacket {
+    pub fn to_outbound_send(item: (DatagramPacket, SocketAddr), _: SocketAddr) -> DatagramPacket {
         item.0
     }
 
-    pub(crate) fn to_inbound_recv(item: DatagramPacket, _: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub fn to_inbound_recv(item: DatagramPacket, _: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         (item, sender)
     }
 
@@ -146,17 +153,17 @@ pub(crate) mod udp {
         key: [u8; 56],
         command: u8,
         address: Address,
-        status: CodecStatus,
+        status: CodecState,
     }
 
     impl ClientCodec {
-        pub(super) fn new(password: &[u8], command: u8, address: Address) -> Self {
+        pub fn new(password: &[u8], command: u8, address: Address) -> Self {
             let mut hasher = Sha224::new();
             hasher.update(password);
             let hash: [u8; 28] = hasher.finalize().into();
             let mut key: [u8; 56] = [0; 56];
             key.copy_from_slice(hex::encode(&hash).as_bytes());
-            Self { key, command, address, status: CodecStatus::Header }
+            Self { key, command, address, status: CodecState::Header }
         }
     }
 
@@ -164,13 +171,13 @@ pub(crate) mod udp {
         type Error = anyhow::Error;
 
         fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<(), Self::Error> {
-            if matches!(self.status, CodecStatus::Header) {
+            if matches!(self.status, CodecState::Header) {
                 dst.put_slice(&self.key);
                 dst.put_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
                 AddressCodec::encode(&self.address, dst)?;
                 dst.put_slice(&trojan::CR_LF);
-                self.status = CodecStatus::Body;
+                self.status = CodecState::Body;
             }
             let buffer = &mut BytesMut::new();
             AddressCodec::encode(&item.1.into(), buffer)?;

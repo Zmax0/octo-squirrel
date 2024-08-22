@@ -18,7 +18,7 @@ const SERVER_STREAM_TIMESTAMP_MAX_DIFF: u64 = 30;
 const MIN_PADDING_LENGTH: u16 = 0;
 const MAX_PADDING_LENGTH: u16 = 900;
 
-pub(super) fn generate_key<const N: usize>(password: &[u8]) -> Result<[u8; N]> {
+pub fn generate_key<const N: usize>(password: &[u8]) -> Result<[u8; N]> {
     let mut key = [0; N];
     match Base64::decode(password, &mut key) {
         Ok(_) => Ok(key),
