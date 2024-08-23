@@ -45,7 +45,6 @@ use tokio_util::codec::Framed;
 use tokio_util::udp::UdpFramed;
 use tokio_websockets::ClientBuilder;
 use tokio_websockets::Message;
-use tokio_websockets::WebSocketStream;
 
 mod handshake;
 
@@ -65,8 +64,12 @@ where
                 for (k, v) in websocket_config.header.iter() {
                     builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?);
                 }
-                let (outbound, _) = builder.connect_on(outbound).await?;
-                tokio::spawn(relay_websocket(inbound, outbound, new_codec(request, config)));
+                match builder.connect_on(outbound).await {
+                    Ok((outbound, _)) => {
+                        tokio::spawn(relay_websocket(inbound, outbound, new_codec(request, config)));
+                    }
+                    Err(e) => error!("[tcp] websocket handshake failed: {}", e),
+                };
             } else if let Some(ssl_config) = &config.ssl {
                 let pem = fs::read(ssl_config.certificate_file.as_str())?;
                 let cert = Certificate::from_pem(&pem)?;
@@ -81,7 +84,7 @@ where
                 tokio::spawn(relay_tcp(inbound, outbound, new_codec(request, config)));
             }
         } else {
-            error!("[tcp] failed to handshake; error={}", handshake.unwrap_err());
+            error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
         }
     }
     Ok(())
@@ -112,9 +115,10 @@ where
     Ok(())
 }
 
-async fn relay_websocket<I, C>(inbound: I, outbound: WebSocketStream<TcpStream>, mut codec: C) -> Result<(), anyhow::Error>
+async fn relay_websocket<I, O, C>(inbound: I, outbound: O, mut codec: C) -> Result<(), anyhow::Error>
 where
     I: AsyncRead + AsyncWrite,
+    O: Sink<Message, Error = tokio_websockets::Error> + Stream<Item = Result<Message, tokio_websockets::Error>>,
     C: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error>,
 {
     use octo_squirrel::common::codec::BytesCodec;
