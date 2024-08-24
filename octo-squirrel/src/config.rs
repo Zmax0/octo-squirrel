@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env::args;
 use std::fs::File;
 use std::io;
@@ -27,6 +28,8 @@ pub struct ServerConfig {
     pub packet_encoding: PacketEncoding,
     #[serde(default)]
     pub ssl: Option<SslConfig>,
+    #[serde(default)]
+    pub ws: Option<WebSocketConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,6 +56,14 @@ pub struct SslConfig {
     pub key_file: String,
     #[serde(rename = "serverName")]
     pub server_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSocketConfig {
+    #[serde(default)]
+    pub header: HashMap<String, String>,
+    #[serde(default)]
+    pub path: String,
 }
 
 pub fn init() -> Result<ClientConfig, io::Error> {

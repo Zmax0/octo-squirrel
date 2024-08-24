@@ -281,7 +281,7 @@ impl<const N: usize> Session<N> {
     }
 }
 
-pub struct Identity<const N: usize> {
+pub(crate) struct Identity<const N: usize> {
     pub salt: [u8; N],
     pub request_salt: Option<[u8; N]>,
     pub user: Option<ServerUser<N>>,

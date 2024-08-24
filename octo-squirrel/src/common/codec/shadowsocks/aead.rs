@@ -12,7 +12,7 @@ use crate::common::codec::aead::CipherMethod;
 use crate::common::codec::aead::IncreasingNonceGenerator;
 use crate::common::codec::aead::KeyInit;
 
-pub(super) fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
+pub fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
     let mut encoded: [u8; N] = [0; N];
     let size = encoded.len();
     let mut hasher = Md5::new();
@@ -34,13 +34,13 @@ pub(super) fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
     encoded
 }
 
-pub(super) fn new_encoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> ChunkEncoder<CM> {
+pub fn new_encoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> ChunkEncoder<CM> {
     let key = hkdfsha1(key, salt);
     let auth = new_auth(&key);
     ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth)
 }
 
-pub(super) fn new_decoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> ChunkDecoder<CM> {
+pub fn new_decoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> ChunkDecoder<CM> {
     let key = hkdfsha1(key, salt);
     let auth = new_auth(&key);
     ChunkDecoder::new(auth, ChunkSizeParser::Auth)

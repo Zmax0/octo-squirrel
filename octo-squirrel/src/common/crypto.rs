@@ -8,7 +8,7 @@ use aes::Aes256;
 use ecb::Decryptor;
 use ecb::Encryptor;
 
-macro_rules! define_aes_impl {
+macro_rules! aes_impl {
     ($name:ident, $aes:ident) => {
         pub struct $name;
         impl $name {
@@ -31,8 +31,8 @@ macro_rules! define_aes_impl {
     };
 }
 
-define_aes_impl!(Aes128EcbNoPadding, Aes128);
-define_aes_impl!(Aes256EcbNoPadding, Aes256);
+aes_impl!(Aes128EcbNoPadding, Aes128);
+aes_impl!(Aes256EcbNoPadding, Aes256);
 
 #[cfg(test)]
 mod test {
