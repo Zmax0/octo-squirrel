@@ -1,7 +1,6 @@
 use std::mem::size_of;
 
 use aead::Buffer;
-use anyhow::Result;
 use base64ct::Base64;
 use base64ct::Encoding;
 use bytes::Buf;
@@ -9,6 +8,7 @@ use bytes::BufMut;
 use bytes::BytesMut;
 use digest::core_api::XofReaderCoreWrapper;
 use digest::ExtendableOutput;
+use digest::InvalidLength;
 use digest::Update;
 use digest::XofReader;
 use log::log_enabled;
@@ -45,7 +45,7 @@ pub struct AEADBodyCodec {
 
 macro_rules! new_aead_body_codec {
     ($name:ident, $key:ident, $nonce:ident) => {
-        pub fn $name(header: &RequestHeader, session: &mut dyn Session) -> Self {
+        pub fn $name(header: &RequestHeader, session: &mut dyn Session) -> Result<Self, InvalidLength> {
             let mut chunk = ChunkSizeParser::Plain(PlainSizeParser);
             let mut padding = PaddingLengthGenerator::Empty;
             if header.option.contains(&RequestOption::ChunkMasking) {
@@ -59,16 +59,16 @@ macro_rules! new_aead_body_codec {
                 shake = Some(ShakeSizeParser::new(session.$nonce()));
             }
             if header.option.contains(&RequestOption::AuthenticatedLength) {
-                chunk = ChunkSizeParser::Auth(Self::new_aead_chunk_size_cipher(header.security, session.chunk_key()));
+                chunk = ChunkSizeParser::Auth(Self::new_aead_chunk_size_cipher(header.security, session.chunk_key())?);
             }
             let cipher;
             match header.security {
                 SecurityType::Chacha20Poly1305 => {
-                    cipher = Self::new_aead_cipher(header.security, &Auth::generate_chacha20_poly1305_key(session.$key()))
+                    cipher = Self::new_aead_cipher(header.security, &Auth::generate_chacha20_poly1305_key(session.$key()))?
                 }
-                _ => cipher = Self::new_aead_cipher(header.security, session.$key()),
+                _ => cipher = Self::new_aead_cipher(header.security, session.$key())?,
             }
-            Self { auth: Authenticator::new(cipher), chunk, padding, shake, payload_limit: 2048, payload_length: None, padding_length: None }
+            Ok(Self { auth: Authenticator::new(cipher), chunk, padding, shake, payload_limit: 2048, payload_length: None, padding_length: None })
         }
     };
 }
@@ -77,35 +77,36 @@ impl AEADBodyCodec {
     new_aead_body_codec!(encoder, encoder_key, encoder_nonce);
     new_aead_body_codec!(decoder, decoder_key, decoder_nonce);
 
-    fn new_aead_chunk_size_cipher(security: SecurityType, key: &[u8]) -> Authenticator {
+    fn new_aead_chunk_size_cipher(security: SecurityType, key: &[u8]) -> Result<Authenticator, InvalidLength> {
         let key = &KDF::kdf16(key, vec![AUTH_LEN]);
         match security {
-            SecurityType::Chacha20Poly1305 => Authenticator::new(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key))),
-            _ => Authenticator::new(Self::new_aead_cipher(security, key)),
+            SecurityType::Chacha20Poly1305 => Ok(Authenticator::new(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key))?)),
+            _ => Ok(Authenticator::new(Self::new_aead_cipher(security, key)?)),
         }
     }
 
-    fn new_aead_cipher(security: SecurityType, key: &[u8]) -> Box<dyn CipherMethod> {
+    fn new_aead_cipher(security: SecurityType, key: &[u8]) -> Result<Box<dyn CipherMethod>, InvalidLength> {
         match security {
-            SecurityType::Chacha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(key)),
-            _ => Box::new(Aes128GcmCipher::new(key)),
+            SecurityType::Chacha20Poly1305 => Ok(Box::new(ChaCha20Poly1305Cipher::new_from_slice(key)?)),
+            _ => Ok(Box::new(Aes128GcmCipher::new_from_slice(key)?)),
         }
     }
 
-    fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut, session: &mut dyn Session) {
+    fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), ::aead::Error> {
         let padding_length = self.next_padding_length();
         trace!("Encode payload; padding length={}", padding_length);
         let tag_size = self.auth.cipher.tag_size();
         let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.size_bytes() - padding_length);
         // trace!("Encode payload; payload length={}", encrypted_size - tag_size);
-        let encrypted_size_bytes = self.encode_size(encrypted_size + padding_length + tag_size, session.chunk_nonce());
+        let encrypted_size_bytes = self.encode_size(encrypted_size + padding_length + tag_size, session.chunk_nonce())?;
         dst.put_slice(&encrypted_size_bytes);
         let mut payload_bytes = src.split_to(encrypted_size);
-        self.auth.seal(&mut payload_bytes, session.encoder_nonce());
+        self.auth.seal(&mut payload_bytes, session.encoder_nonce())?;
         dst.put(payload_bytes);
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
         rand::thread_rng().fill(&mut padding_bytes[..]);
         dst.put(&padding_bytes[..]);
+        Ok(())
     }
 
     fn next_padding_length(&mut self) -> usize {
@@ -115,11 +116,11 @@ impl AEADBodyCodec {
         }
     }
 
-    fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Vec<u8> {
+    fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Result<Vec<u8>, ::aead::Error> {
         match self.chunk {
-            ChunkSizeParser::Plain(ref mut parser) => parser.encode_size(size),
+            ChunkSizeParser::Plain(ref mut parser) => Ok(parser.encode_size(size)),
             ChunkSizeParser::Auth(ref mut parser) => parser.encode_size(size, nonce),
-            ChunkSizeParser::Shake => self.shake.as_mut().unwrap().encode_size(size),
+            ChunkSizeParser::Shake => Ok(self.shake.as_mut().unwrap().encode_size(size)),
         }
     }
 
@@ -131,26 +132,27 @@ impl AEADBodyCodec {
         }
     }
 
-    pub fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) {
+    pub fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), ::aead::Error> {
         while src.has_remaining() {
-            self.encode_chunk(&mut src, dst, session);
+            self.encode_chunk(&mut src, dst, session)?;
         }
+        Ok(())
     }
 
-    pub fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) {
-        self.encode_chunk(&mut src, dst, session);
+    pub fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), ::aead::Error> {
+        self.encode_chunk(&mut src, dst, session)
     }
 
-    pub fn decode_packet(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>> {
+    pub fn decode_packet(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, ::aead::Error> {
         let padding_length = self.next_padding_length();
-        let packet_length = self.decode_size(&mut src.split_to(self.size_bytes()), session.chunk_nonce()) - padding_length;
+        let packet_length = self.decode_size(&mut src.split_to(self.size_bytes()), session.chunk_nonce())? - padding_length;
         let mut packet_bytes = src.split_to(packet_length);
-        self.auth.open(&mut packet_bytes, session.decoder_nonce());
+        self.auth.open(&mut packet_bytes, session.decoder_nonce())?;
         src.advance(padding_length);
         Ok(Some(packet_bytes))
     }
 
-    pub fn decode_payload(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>> {
+    pub fn decode_payload(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, ::aead::Error> {
         let size_bytes = self.size_bytes();
         let mut dst = Vec::new();
         while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
@@ -162,13 +164,13 @@ impl AEADBodyCodec {
             let padding_length = self.padding_length.unwrap();
             if let Some(payload_length) = self.payload_length {
                 let mut payload_btyes = src.split_to(payload_length - padding_length);
-                self.auth.open(&mut payload_btyes, session.decoder_nonce());
+                self.auth.open(&mut payload_btyes, session.decoder_nonce())?;
                 dst.put(payload_btyes);
                 src.advance(padding_length);
                 self.payload_length = None;
                 self.padding_length = None;
             } else {
-                let payload_length = self.decode_size(&mut src.split_to(size_bytes), session.chunk_nonce());
+                let payload_length = self.decode_size(&mut src.split_to(size_bytes), session.chunk_nonce())?;
                 trace!("Decode payload; payload length={:?}", payload_length);
                 self.payload_length = Some(payload_length);
             }
@@ -180,11 +182,11 @@ impl AEADBodyCodec {
         }
     }
 
-    fn decode_size(&mut self, data: &mut BytesMut, nonce: &mut [u8]) -> usize {
+    fn decode_size(&mut self, data: &mut BytesMut, nonce: &mut [u8]) -> Result<usize, ::aead::Error> {
         match self.chunk {
-            ChunkSizeParser::Plain(ref mut parser) => parser.decode_size(data),
+            ChunkSizeParser::Plain(ref mut parser) => Ok(parser.decode_size(data)),
             ChunkSizeParser::Auth(ref mut parser) => parser.decode_size(data, nonce),
-            ChunkSizeParser::Shake => self.shake.as_mut().unwrap().decode_size(data),
+            ChunkSizeParser::Shake => Ok(self.shake.as_mut().unwrap().decode_size(data)),
         }
     }
 }
@@ -210,22 +212,22 @@ impl Authenticator {
         size_of::<u16>() + self.cipher.tag_size()
     }
 
-    fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Vec<u8> {
+    fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Result<Vec<u8>, ::aead::Error> {
         let mut buffer = ((size - self.cipher.tag_size()) as u16).to_be_bytes().to_vec();
-        self.seal(&mut buffer, nonce);
-        buffer
+        self.seal(&mut buffer, nonce)?;
+        Ok(buffer)
     }
 
-    fn decode_size(&mut self, buffer: &mut BytesMut, nonce: &mut [u8]) -> usize {
-        self.open(buffer, nonce);
-        buffer.get_u16() as usize + self.cipher.tag_size()
+    fn decode_size(&mut self, buffer: &mut BytesMut, nonce: &mut [u8]) -> Result<usize, ::aead::Error> {
+        self.open(buffer, nonce)?;
+        Ok(buffer.get_u16() as usize + self.cipher.tag_size())
     }
 
-    fn seal(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) {
+    fn seal(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), ::aead::Error> {
         self.cipher.encrypt_in_place(&self.counting.generate(nonce), b"", buffer)
     }
 
-    fn open(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) {
+    fn open(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), ::aead::Error> {
         self.cipher.decrypt_in_place(&self.counting.generate(nonce), b"", buffer)
     }
 }
@@ -274,6 +276,8 @@ impl ShakeSizeParser {
 
 #[cfg(test)]
 mod test {
+    use anyhow::anyhow;
+    use anyhow::Result;
     use bytes::BufMut;
     use bytes::BytesMut;
     use rand::random;
@@ -310,37 +314,38 @@ mod test {
     }
 
     #[test]
-    fn test_aead_codec() {
+    fn test_aead_codec() -> Result<()> {
         fn new_address() -> Address {
             Address::Domain("localhost".to_owned(), random())
         }
 
-        fn test_by_security(security: SecurityType) {
+        fn test_by_security(security: SecurityType) -> Result<()> {
             let header = RequestHeader::default(RequestCommand::TCP, security, new_address(), uuid::Uuid::new_v4().to_string());
-            test_by_header(header);
+            test_by_header(header)
         }
 
-        fn test_by_command(command: RequestCommand) {
+        fn test_by_command(command: RequestCommand) -> Result<()> {
             let header = RequestHeader::default(command, SecurityType::Chacha20Poly1305, new_address(), uuid::Uuid::new_v4().to_string());
-            test_by_header(header);
+            test_by_header(header)
         }
 
-        fn test_by_option_masks() {
-            test_by_option_mask(RequestOption::ChunkStream as u8);
-            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::ChunkMasking as u8);
-            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::GlobalPadding as u8);
-            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::ChunkMasking as u8 | RequestOption::GlobalPadding as u8);
-            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::AuthenticatedLength as u8);
-            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::GlobalPadding as u8 | RequestOption::AuthenticatedLength as u8);
+        fn test_by_option_masks() -> Result<()> {
+            test_by_option_mask(RequestOption::ChunkStream as u8)?;
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::ChunkMasking as u8)?;
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::GlobalPadding as u8)?;
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::ChunkMasking as u8 | RequestOption::GlobalPadding as u8)?;
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::AuthenticatedLength as u8)?;
+            test_by_option_mask(RequestOption::ChunkStream as u8 | RequestOption::GlobalPadding as u8 | RequestOption::AuthenticatedLength as u8)?;
             test_by_option_mask(
                 RequestOption::ChunkStream as u8
                     | RequestOption::ChunkMasking as u8
                     | RequestOption::GlobalPadding as u8
                     | RequestOption::AuthenticatedLength as u8,
-            );
+            )?;
+            Ok(())
         }
 
-        fn test_by_option_mask(mask: u8) {
+        fn test_by_option_mask(mask: u8) -> Result<()> {
             let header = RequestHeader {
                 version: VERSION,
                 command: RequestCommand::TCP,
@@ -349,7 +354,7 @@ mod test {
                 address: new_address(),
                 id: ID::new_id(uuid::Uuid::new_v4().to_string()),
             };
-            test_by_header(header);
+            test_by_header(header)?;
             let header = RequestHeader {
                 version: VERSION,
                 command: RequestCommand::UDP,
@@ -358,37 +363,40 @@ mod test {
                 address: new_address(),
                 id: ID::new_id(uuid::Uuid::new_v4().to_string()),
             };
-            test_by_header(header);
+            test_by_header(header)?;
+            Ok(())
         }
 
-        fn test_by_header(header: RequestHeader) {
+        fn test_by_header(header: RequestHeader) -> Result<()> {
             let mut client_session = ClientSession::new();
             let mut server_session: ServerSession = client_session.clone().into();
-            let mut client_encoder = AEADBodyCodec::encoder(&header, &mut client_session);
-            let mut client_decoder = AEADBodyCodec::decoder(&header, &mut client_session);
-            let mut server_encoder = AEADBodyCodec::encoder(&header, &mut server_session);
-            let mut server_decoder = AEADBodyCodec::decoder(&header, &mut server_session);
+            let mut client_encoder = AEADBodyCodec::encoder(&header, &mut client_session)?;
+            let mut client_decoder = AEADBodyCodec::decoder(&header, &mut client_session)?;
+            let mut server_encoder = AEADBodyCodec::encoder(&header, &mut server_session)?;
+            let mut server_decoder = AEADBodyCodec::decoder(&header, &mut server_session)?;
             let msg = "Hello World!";
             let mut src = BytesMut::new();
             src.put(msg.as_bytes());
             let mut dst = BytesMut::new();
-            client_encoder.encode_payload(src, &mut dst, &mut client_session);
-            let dst = server_decoder.decode_payload(&mut dst, &mut server_session).unwrap().unwrap();
+            client_encoder.encode_payload(src, &mut dst, &mut client_session).map_err(|e| anyhow!(e))?;
+            let dst = server_decoder.decode_payload(&mut dst, &mut server_session).map_err(|e| anyhow!(e))?.unwrap();
             let mut temp = BytesMut::new();
-            server_encoder.encode_payload(dst, &mut temp, &mut server_session);
-            let dst = client_decoder.decode_payload(&mut temp, &mut client_session).unwrap().unwrap();
-            assert_eq!(msg, String::from_utf8(dst.freeze().to_vec()).unwrap())
+            server_encoder.encode_payload(dst, &mut temp, &mut server_session).map_err(|e| anyhow!(e))?;
+            let dst = client_decoder.decode_payload(&mut temp, &mut client_session).map_err(|e| anyhow!(e))?.unwrap();
+            assert_eq!(msg, String::from_utf8(dst.freeze().to_vec())?);
+            Ok(())
         }
 
-        test_by_security(SecurityType::Aes128Gcm);
-        test_by_security(SecurityType::Chacha20Poly1305);
-        test_by_security(SecurityType::Legacy);
-        test_by_security(SecurityType::Auto);
-        test_by_security(SecurityType::Unknown);
-        test_by_security(SecurityType::None);
-        test_by_security(SecurityType::Zero);
-        test_by_command(RequestCommand::TCP);
-        test_by_command(RequestCommand::UDP);
-        test_by_option_masks();
+        test_by_security(SecurityType::Aes128Gcm)?;
+        test_by_security(SecurityType::Chacha20Poly1305)?;
+        test_by_security(SecurityType::Legacy)?;
+        test_by_security(SecurityType::Auto)?;
+        test_by_security(SecurityType::Unknown)?;
+        test_by_security(SecurityType::None)?;
+        test_by_security(SecurityType::Zero)?;
+        test_by_command(RequestCommand::TCP)?;
+        test_by_command(RequestCommand::UDP)?;
+        test_by_option_masks()?;
+        Ok(())
     }
 }

@@ -10,7 +10,7 @@ mod client;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = octo_squirrel::config::init()?;
+    let config = octo_squirrel::config::init_client()?;
     octo_squirrel::log::init(&config.logger)?;
     let current = config.get_current().expect("Empty proxy server.");
     if current.transport.contains(&Transport::UDP) {
@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
         let listener = TcpListener::bind(listen_addr).await?;
         info!("Listening TCP on: {}", listener.local_addr().unwrap());
-        client::transfer_tcp(listener, current).await?;
+        client::transfer_tcp(listener, current).await;
     }
     Ok(())
 }

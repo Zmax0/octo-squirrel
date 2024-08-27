@@ -3,7 +3,7 @@ enum CodecState {
     Body,
 }
 
-pub(super) mod tcp {
+pub mod tcp {
     use bytes::BufMut;
     use bytes::BytesMut;
     use octo_squirrel::common::protocol::address::Address;
@@ -31,7 +31,7 @@ pub(super) mod tcp {
     }
 
     impl ClientCodec {
-        pub(super) fn new(password: &[u8], command: u8, address: Address) -> Self {
+        pub fn new(password: &[u8], command: u8, address: Address) -> Self {
             let mut hasher = Sha224::new();
             hasher.update(password);
             let hash: [u8; 28] = hasher.finalize().into();
@@ -74,7 +74,7 @@ pub(super) mod tcp {
     }
 }
 
-pub(super) mod udp {
+pub mod udp {
     use std::fs;
     use std::net::SocketAddr;
     use std::net::ToSocketAddrs;
@@ -200,7 +200,7 @@ pub(super) mod udp {
                 let len = src.get_u16();
                 src.advance(trojan::CR_LF.len());
                 let content = src.split_to(len as usize);
-                Ok(Some((content, addr.into())))
+                Ok(Some((content, addr.to_socket_addr()?)))
             } else {
                 Ok(None)
             }

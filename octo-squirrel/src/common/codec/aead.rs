@@ -10,21 +10,22 @@ use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::Aes256Gcm;
 use chacha20poly1305::ChaCha20Poly1305;
+use digest::InvalidLength;
 use serde::Deserialize;
 use serde::Serialize;
 
 pub trait CipherMethod: Send {
-    fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
-    fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Vec<u8>;
-    fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer);
-    fn decrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer);
+    fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, aead::Error>;
+    fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, aead::Error>;
+    fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) -> Result<(), aead::Error>;
+    fn decrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) -> Result<(), aead::Error>;
     fn nonce_size(&self) -> usize;
     fn tag_size(&self) -> usize;
     fn ciphertext_overhead(&self) -> usize;
 }
 
 pub trait KeyInit: Sized {
-    fn init(key: &[u8]) -> Self;
+    fn init(key: &[u8]) -> Result<Self, InvalidLength>;
 }
 
 macro_rules! aead_impl {
@@ -38,27 +39,27 @@ macro_rules! aead_impl {
             pub const TAG_SIZE: usize = <$cipher as AeadCore>::TagSize::USIZE;
             pub const CIPHERTEXT_OVERHEAD: usize = <$cipher as AeadCore>::CiphertextOverhead::USIZE;
 
-            pub fn new(key: &[u8]) -> Self {
+            pub fn new_from_slice(key: &[u8]) -> Result<Self, InvalidLength> {
                 use aes_gcm::KeyInit;
-                Self { cipher: <$cipher>::new_from_slice(key).unwrap() }
+                Ok(Self { cipher: <$cipher>::new_from_slice(key)? })
             }
         }
 
         impl CipherMethod for $name {
-            fn encrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Vec<u8> {
-                self.cipher.encrypt(nonce.into(), Payload { msg, aad }).unwrap()
+            fn encrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Result<Vec<u8>, aead::Error> {
+                self.cipher.encrypt(nonce.into(), Payload { msg, aad })
             }
 
-            fn decrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Vec<u8> {
-                self.cipher.decrypt(nonce.into(), Payload { msg, aad }).expect("Invalid cipher text")
+            fn decrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Result<Vec<u8>, aead::Error> {
+                self.cipher.decrypt(nonce.into(), Payload { msg, aad })
             }
 
-            fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) {
-                self.cipher.encrypt_in_place(nonce.into(), aad, buffer).unwrap()
+            fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) -> Result<(), aead::Error> {
+                self.cipher.encrypt_in_place(nonce.into(), aad, buffer)
             }
 
-            fn decrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) {
-                self.cipher.decrypt_in_place(nonce.into(), aad, buffer).expect("Invalid cipher text")
+            fn decrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) -> Result<(), aead::Error> {
+                self.cipher.decrypt_in_place(nonce.into(), aad, buffer)
             }
 
             fn nonce_size(&self) -> usize {
@@ -75,8 +76,8 @@ macro_rules! aead_impl {
         }
 
         impl KeyInit for $name {
-            fn init(key: &[u8]) -> Self {
-                $name::new(key)
+            fn init(key: &[u8]) -> Result<Self, InvalidLength> {
+                $name::new_from_slice(key)
             }
         }
     };
@@ -86,7 +87,7 @@ aead_impl!(Aes128GcmCipher, Aes128Gcm);
 aead_impl!(Aes256GcmCipher, Aes256Gcm);
 aead_impl!(ChaCha20Poly1305Cipher, ChaCha20Poly1305);
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum CipherKind {
     #[serde(rename = "aes-128-gcm")]
     Aes128Gcm,
@@ -98,6 +99,8 @@ pub enum CipherKind {
     Aead2022Blake3Aes128Gcm,
     #[serde(rename = "2022-blake3-aes-256-gcm")]
     Aead2022Blake3Aes256Gcm,
+    #[default]
+    Unknown,
 }
 
 macro_rules! match_method_const {
@@ -106,16 +109,18 @@ macro_rules! match_method_const {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Aes128GcmCipher::$const,
             CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Aes256GcmCipher::$const,
             CipherKind::ChaCha20Poly1305 => ChaCha20Poly1305Cipher::$const,
+            _ => unreachable!(),
         }
     };
 }
 
 impl CipherKind {
-    pub fn to_cipher_method(&self, key: &[u8]) -> Box<dyn CipherMethod> {
+    pub fn to_cipher_method(&self, key: &[u8]) -> Result<Box<dyn CipherMethod>, InvalidLength> {
         match self {
-            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Box::new(Aes128GcmCipher::new(key)),
-            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Box::new(Aes256GcmCipher::new(key)),
-            CipherKind::ChaCha20Poly1305 => Box::new(ChaCha20Poly1305Cipher::new(key)),
+            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Ok(Box::new(Aes128GcmCipher::new_from_slice(key)?)),
+            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Ok(Box::new(Aes256GcmCipher::new_from_slice(key)?)),
+            CipherKind::ChaCha20Poly1305 => Ok(Box::new(ChaCha20Poly1305Cipher::new_from_slice(key)?)),
+            _ => unreachable!(),
         }
     }
 

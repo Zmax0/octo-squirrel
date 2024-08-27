@@ -6,10 +6,13 @@ use std::sync::Arc;
 
 use base64ct::Base64;
 use base64ct::Encoding;
+use byte_string::ByteStr;
+
+use crate::config::User;
 
 #[derive(Clone, Debug)]
 pub struct ServerUserManager<const N: usize> {
-    users: HashMap<[u8; N], Arc<ServerUser<N>>>,
+    users: HashMap<[u8; 16], Arc<ServerUser<N>>>,
 }
 
 impl<const N: usize> ServerUserManager<N> {
@@ -54,12 +57,21 @@ impl Default for ServerUserManager<32> {
 pub struct ServerUser<const N: usize> {
     pub name: String,
     pub key: [u8; N],
-    pub identity_hash: [u8; N],
+    pub identity_hash: [u8; 16],
 }
 
 impl<const N: usize> ServerUser<N> {
-    pub fn identity_hash(&self) -> [u8; N] {
+    pub fn identity_hash(&self) -> [u8; 16] {
         self.identity_hash
+    }
+
+    pub fn from_user(value: &User) -> Result<Self, base64ct::Error> {
+        let mut key = [0; N];
+        let mut identity_hash = [0; 16];
+        Base64::decode(&value.password, &mut key)?;
+        let hash = blake3::hash(&key);
+        identity_hash.copy_from_slice(&hash.as_bytes()[..16]);
+        Ok(Self { name: value.name.clone(), key, identity_hash })
     }
 }
 
@@ -77,6 +89,6 @@ impl<const N: usize> Hash for ServerUser<N> {
 
 impl<const N: usize> Display for ServerUser<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "N:{}, K:{}, IH:{:?}", self.name, Base64::encode_string(&self.key), &self.identity_hash)
+        write!(f, "N:{}, K:{:?}, IH:{:?}", self.name, ByteStr::new(&self.key), ByteStr::new(&self.identity_hash))
     }
 }

@@ -1,1 +1,1 @@
-pub(crate) mod shadowsocks;
+pub mod shadowsocks;

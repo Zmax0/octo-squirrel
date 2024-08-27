@@ -78,6 +78,14 @@ impl AddressCodec {
             },
         }
     }
+
+    pub fn try_decode_at(src: &BytesMut, at: usize) -> Result<usize> {
+        match Socks5AddressType::new(src[at])? {
+            Socks5AddressType::Ipv4 => Ok(1 + 4 + 2),
+            Socks5AddressType::Domain => Ok(1 + 1 + src[at + 1] as usize + 2),
+            Socks5AddressType::Ipv6 => Ok(1 + 8 * 2 + 2),
+        }
+    }
 }
 
 #[test]

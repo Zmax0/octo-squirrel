@@ -1,11 +1,12 @@
 use std::marker::PhantomData;
 
+use anyhow::anyhow;
 use anyhow::bail;
-use anyhow::Result;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use digest::InvalidLength;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
@@ -28,7 +29,7 @@ pub struct AEADCipherCodec<const N: usize> {
 }
 
 impl<const N: usize> AEADCipherCodec<N> {
-    pub fn new(cipher: CipherKind, password: &[u8]) -> Result<Self> {
+    pub fn new(cipher: CipherKind, password: &[u8]) -> Result<Self, base64ct::Error> {
         match cipher {
             CipherKind::Aes128Gcm | CipherKind::Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
                 let key: [u8; N] = super::aead::openssl_bytes_to_key(password);
@@ -38,13 +39,14 @@ impl<const N: usize> AEADCipherCodec<N> {
                 let key = super::aead_2022::generate_key(password)?;
                 Ok(Self { kind: cipher, key })
             }
+            _ => unreachable!(),
         }
     }
 
-    fn encode<CM: CipherMethod + KeyInit>(&mut self, context: &mut Context, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
+    fn encode<CM: CipherMethod + KeyInit>(&mut self, context: &mut Context, item: BytesMut, dst: &mut BytesMut) -> anyhow::Result<()> {
         if self.kind.is_aead_2022() {
             let padding_length = super::aead_2022::next_padding_length(&item);
-            let nonce_length = udp::nonce_length(self.kind)?;
+            let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
             let tag_size = self.kind.tag_size();
             let mut temp = BytesMut::with_capacity(
                 nonce_length
@@ -79,7 +81,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             header.copy_from_slice(&temp.split_to(16));
             udp::encrypt_packet_header(self.kind, &self.key, &mut header)?;
             dst.put(&header[..]);
-            udp::new_encoder::<CM>(&self.key, 0, nonce).encode_packet(temp, dst);
+            udp::new_encoder::<CM>(&self.key, 0, nonce)?.encode_packet(temp, dst).map_err(|e| anyhow!(e))?;
         } else {
             let salt = Dice::roll_bytes(self.key.len());
             dst.put(&salt[..]);
@@ -87,13 +89,13 @@ impl<const N: usize> AEADCipherCodec<N> {
             let mut temp = BytesMut::with_capacity(AddressCodec::length(address) + item.remaining());
             AddressCodec::encode(address, &mut temp)?;
             temp.put(item);
-            let mut encoder: ChunkEncoder<CM> = self.new_encoder(&salt);
-            encoder.encode_packet(temp, dst);
+            let mut encoder: ChunkEncoder<CM> = self.new_encoder(&salt)?;
+            encoder.encode_packet(temp, dst).map_err(|e| anyhow!(e))?;
         }
         Ok(())
     }
 
-    fn new_encoder<CM: CipherMethod + KeyInit>(&self, salt: &[u8]) -> ChunkEncoder<CM> {
+    fn new_encoder<CM: CipherMethod + KeyInit>(&self, salt: &[u8]) -> Result<ChunkEncoder<CM>, InvalidLength> {
         if self.kind.is_aead_2022() {
             super::aead_2022::tcp::new_encoder::<N, CM>(&self.key, salt)
         } else {
@@ -101,16 +103,16 @@ impl<const N: usize> AEADCipherCodec<N> {
         }
     }
 
-    fn decode<CM: CipherMethod + KeyInit>(&mut self, context: &mut Context, src: &mut BytesMut) -> Result<Option<BytesMut>> {
+    fn decode<CM: CipherMethod + KeyInit>(&mut self, context: &mut Context, src: &mut BytesMut) -> anyhow::Result<Option<BytesMut>> {
         if src.is_empty() {
             return Ok(None);
         }
         Ok(Some(self.decode0::<CM>(context, src)?))
     }
 
-    fn decode0<CM: CipherMethod + KeyInit>(&self, context: &mut Context, src: &mut BytesMut) -> Result<BytesMut> {
+    fn decode0<CM: CipherMethod + KeyInit>(&self, context: &mut Context, src: &mut BytesMut) -> anyhow::Result<BytesMut> {
         if self.kind.is_aead_2022() {
-            let nonce_length = udp::nonce_length(self.kind)?;
+            let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
             let tag_size = self.kind.tag_size();
             let header_length = nonce_length + tag_size + 8 + 8 + 1 + 8 + 2;
             if src.remaining() < header_length {
@@ -124,9 +126,9 @@ impl<const N: usize> AEADCipherCodec<N> {
             let mut header = Bytes::from(header.to_vec());
             let server_session_id = header.get_u64();
             header.get_u64(); // pack id
-            let mut packet = udp::new_decoder::<CM>(&self.key, server_session_id, nonce).decode_packet(src)?.unwrap();
+            let mut packet = udp::new_decoder::<CM>(&self.key, server_session_id, nonce)?.decode_packet(src).map_err(|e| anyhow!(e))?.unwrap();
             packet.get_u8(); // stream type
-            super::aead_2022::validate_timestamp(packet.get_u64())?;
+            super::aead_2022::validate_timestamp(packet.get_u64()).map_err(anyhow::Error::msg)?;
             let padding_length = packet.get_u16();
             if padding_length > 0 {
                 packet.advance(padding_length as usize);
@@ -141,14 +143,14 @@ impl<const N: usize> AEADCipherCodec<N> {
                 bail!("Invalid packet length");
             }
             let salt = src.split_to(self.key.len());
-            let mut decoder: ChunkDecoder<CM> = self.new_payload_decoder(&salt);
-            let mut packet = decoder.decode_packet(src)?.unwrap();
+            let mut decoder: ChunkDecoder<CM> = self.new_payload_decoder(&salt)?;
+            let mut packet = decoder.decode_packet(src).map_err(|e| anyhow!(e))?.unwrap();
             context.address = Some(AddressCodec::decode(&mut packet)?);
             Ok(packet)
         }
     }
 
-    fn new_payload_decoder<CM: CipherMethod + KeyInit>(&self, salt: &BytesMut) -> ChunkDecoder<CM> {
+    fn new_payload_decoder<CM: CipherMethod + KeyInit>(&self, salt: &BytesMut) -> Result<ChunkDecoder<CM>, InvalidLength> {
         if self.kind.is_aead_2022() {
             super::aead_2022::tcp::new_decoder::<N, CM>(&self.key, salt)
         } else {
@@ -172,7 +174,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> DatagramPacketCodec<N, CM> {
 impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<DatagramPacket> for DatagramPacketCodec<N, CM> {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<()> {
+    fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> anyhow::Result<()> {
         self.context.address = Some(Address::from(item.1));
         self.cipher.encode::<CM>(&mut self.context, item.0, dst)
     }
@@ -183,9 +185,9 @@ impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for DatagramPacketCodec
 
     type Error = anyhow::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
+    fn decode(&mut self, src: &mut BytesMut) -> anyhow::Result<Option<Self::Item>> {
         if let Some(content) = self.cipher.decode::<CM>(&mut self.context, src)? {
-            Ok(Some((content, self.context.address.take().unwrap().into())))
+            Ok(Some((content, self.context.address.take().unwrap().to_socket_addr()?)))
         } else {
             Ok(None)
         }
@@ -236,6 +238,7 @@ mod test {
             match cipher {
                 CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_udp::<16, Aes128GcmCipher>(cipher),
                 CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_udp::<32, Aes256GcmCipher>(cipher),
+                _ => unreachable!(),
             }
         }
 

@@ -133,7 +133,7 @@ impl Decoder for Socks5UdpCodec {
         }
         src.advance(3);
         let recipient = AddressCodec::decode(src)?;
-        Ok(Some((src.split_off(0), recipient.into())))
+        Ok(Some((src.split_off(0), recipient.to_socket_addr()?)))
     }
 }
 

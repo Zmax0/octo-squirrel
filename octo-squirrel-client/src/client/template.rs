@@ -47,34 +47,56 @@ use tokio_websockets::Message;
 
 mod handshake;
 
-pub async fn transfer_tcp<NewCodec, Codec>(listener: TcpListener, config: &ServerConfig, new_codec: NewCodec) -> Result<()>
+pub async fn transfer_tcp<NewCodec, Codec>(listener: TcpListener, config: &ServerConfig, new_codec: NewCodec)
+where
+    NewCodec: FnOnce(Address, &ServerConfig) -> Codec + Copy + Send + 'static,
+    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static,
+{
+    while let Ok((mut inbound, src)) = listener.accept().await {
+        let config = config.clone();
+        tokio::spawn(async move {
+            let handshake = handshake::get_request_addr(&mut inbound).await;
+            if let Ok(request) = handshake {
+                if let Err(e) = try_transfer_tcp(inbound, src, request, &config, new_codec).await {
+                    error!("[tcp] transfer failed; error={}", e);
+                }
+            } else {
+                error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+    }
+}
+
+#[inline]
+async fn try_transfer_tcp<NewCodec, Codec>(
+    inbound: TcpStream,
+    src: SocketAddr,
+    request: Address,
+    config: &ServerConfig,
+    new_codec: NewCodec,
+) -> Result<()>
 where
     NewCodec: FnOnce(Address, &ServerConfig) -> Codec + Copy,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static,
 {
-    while let Ok((mut inbound, src)) = listener.accept().await {
-        let handshake = handshake::get_request_addr(&mut inbound).await;
-        if let Ok(request) = handshake {
-            let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-            info!("[tcp] accept {}, target={}; {}={}", &config.protocol, &request, &src, outbound.peer_addr()?);
-            if let Some(ssl_config) = &config.ssl {
-                let pem = fs::read(ssl_config.certificate_file.as_str())?;
-                let cert = Certificate::from_pem(&pem)?;
-                let tls_connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-                match tls_connector.connect(ssl_config.server_name.as_str(), outbound).await {
-                    Ok(outbound) => relay_tcp(inbound, outbound, config, request, new_codec).await?,
-                    Err(e) => error!("[tcp] tls handshake failed: {}", e),
-                }
-            } else {
-                relay_tcp(inbound, outbound, config, request, new_codec).await?
-            }
-        } else {
-            error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
+    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
+    info!("[tcp] connect {}, target={}; {}={}", &config.protocol, &request, &src, outbound.peer_addr()?);
+    if let Some(ssl_config) = &config.ssl {
+        let pem = fs::read(ssl_config.certificate_file.as_str())?;
+        let cert = Certificate::from_pem(&pem)?;
+        let tls_connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
+        match tls_connector.connect(ssl_config.server_name.as_str(), outbound).await {
+            Ok(outbound) => relay_tcp(inbound, outbound, config, request, new_codec).await?,
+            Err(e) => error!("[tcp] tls handshake failed: {}", e),
         }
+    } else {
+        relay_tcp(inbound, outbound, config, request, new_codec).await?
     }
     Ok(())
 }
 
+#[inline]
 async fn relay_tcp<Outbound, NewCodec, Codec>(
     inbound: TcpStream,
     outbound: Outbound,
@@ -95,12 +117,12 @@ where
         }
         match builder.connect_on(outbound).await {
             Ok((outbound, _)) => {
-                tokio::spawn(relay_websocket(inbound, outbound, new_codec(request, config)));
+                relay_websocket(inbound, outbound, new_codec(request, config)).await?;
             }
             Err(e) => error!("[tcp] websocket handshake failed: {}", e),
         };
     } else {
-        tokio::spawn(relay0(inbound, outbound, new_codec(request, config)));
+        relay0(inbound, outbound, new_codec(request, config)).await?;
     }
     Ok(())
 }
@@ -121,18 +143,20 @@ where
                 inbound_sink.send(msg).await?;
             }
         }
-        Err::<(), _>(anyhow!("server-client is interrupted"))
+        Err::<(), _>(anyhow!("server-client closed"))
     };
 
-    let client_to_server = async {
+    let local_to_client = async {
         while let Some(Ok(mut item)) = inbound_stream.next().await {
             let mut dst = item.split_off(item.len());
             codec1.lock().await.encode(item, &mut dst)?;
             outbound_sink.send(Message::binary::<BytesMut>(dst)).await?;
         }
-        Err::<(), _>(anyhow!("client-server is interrupted"))
+        Err::<(), _>(anyhow!("local-client closed"))
     };
-    let _ = tokio::try_join!(client_to_server, server_to_client);
+    if let Err(e) = tokio::try_join!(local_to_client, server_to_client) {
+        info!("[tcp] relay completed: {}", e)
+    }
     Ok(())
 }
 
@@ -202,6 +226,7 @@ where
     let (mut inbound_sink, mut inbound_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
     let outbound_map: Arc<DashMap<Key, SplitSink<OutboundSink, Item>>> = Arc::new(DashMap::new());
     let (inbound_tx, mut inbound_rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
+    // server-client-mpsc
     tokio::spawn(async move {
         while let Some(item) = inbound_rx.recv().await {
             inbound_sink.send(item).await.unwrap_or_else(|e| error!("[udp] failed to send inbound msg; {}", e));
@@ -211,31 +236,35 @@ where
         let key = new_key(sender, inbound_recv.1);
         if let Vacant(entry) = outbound_map.entry(key) {
             debug!("[udp] new binding; key={:?}", key);
+            // client-server
             let (outbound_sink, mut outbound_stream) = new_outbound(inbound_recv.1.into(), config).await?;
             entry.insert(outbound_sink);
             let _inbound_tx = inbound_tx.clone();
             let _outbound_map = outbound_map.clone();
             let task = tokio::spawn(async move {
+                // server-client-mpsc
                 while let Some(Ok(outbound_recv)) = outbound_stream.next().await {
                     _inbound_tx
                         .send(to_inbound_recv(outbound_recv, inbound_recv.1, sender))
                         .await
                         .unwrap_or_else(|e| error!("[udp] failed to send inbound mpsc msg; {}", e));
                 }
+                // close and remove binding
                 if _outbound_map.remove(&key).is_some() {
                     debug!("[udp] remove binding; key={:?}", key);
                 };
             });
             let _outbound_map = outbound_map.clone();
             tokio::spawn(async move {
-                time::sleep(Duration::from_secs(20)).await;
+                time::sleep(Duration::from_secs(600)).await;
                 task.abort();
                 if _outbound_map.remove(&key).is_some() {
                     debug!("[udp] remove binding; key={:?}", key);
                 };
             });
         }
-        let proxy = format!("{}:{}", config.host, config.port).parse()?;
+        let proxy = Address::Domain(config.host.clone(), config.port).to_socket_addr()?;
+        // client-server
         outbound_map.get_mut(&key).unwrap().send(to_outbound_send((inbound_recv, sender), proxy)).await?;
     }
     Ok(())
