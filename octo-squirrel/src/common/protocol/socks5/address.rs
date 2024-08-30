@@ -60,7 +60,7 @@ impl AddressCodec {
                 let len = src.get_u8();
                 let host_bytes = src.copy_to_bytes(len as usize);
                 let port = src.get_u16();
-                Ok(Address::Domain(String::from_utf8(host_bytes.to_vec()).unwrap().parse().unwrap(), port))
+                Ok(Address::Domain(String::from_utf8(host_bytes.to_vec())?.parse()?, port))
             }
             Socks5AddressType::Ipv6 => {
                 let ip_v6 = Ipv6Addr::from(src.get_u128());

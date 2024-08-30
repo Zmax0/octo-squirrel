@@ -16,7 +16,7 @@ use crate::common::protocol::vmess::timestamp;
 
 impl Encrypt {
     pub fn seal_header(key: &[u8], header: Bytes) -> Result<Vec<u8>> {
-        let auth_id = AuthID::create(key, timestamp(30));
+        let auth_id = AuthID::create(key, timestamp(30)?);
         let connection_nonce: [u8; 8] = random();
         let length = (header.len() as u16).to_be_bytes();
         let length_key = KDF::kdf16(key, vec![KDF::SALT_LENGTH_KEY, &auth_id, &connection_nonce]);

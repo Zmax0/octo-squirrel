@@ -30,7 +30,7 @@ pub fn new_header<CM>(
     msg: &mut BytesMut,
     stream_type: &Mode,
     request_salt: Option<&[u8]>,
-) -> Result<(Bytes, Bytes), ::aead::Error>
+) -> anyhow::Result<(Bytes, Bytes)>
 where
     CM: CipherMethod + KeyInit,
 {
@@ -40,15 +40,15 @@ where
     }
     let mut fixed = BytesMut::with_capacity(1 + 8 + salt_len + 2);
     fixed.put_u8(stream_type.to_u8());
-    fixed.put_u64(now());
+    fixed.put_u64(now()?);
     if let Some(request_salt) = request_salt {
         fixed.put_slice(request_salt);
     }
     let len = msg.remaining().min(0xffff);
     let mut via = msg.split_to(len);
     fixed.put_u16(len as u16);
-    auth.seal(&mut fixed)?;
-    auth.seal(&mut via)?;
+    auth.seal(&mut fixed).map_err(|e| anyhow!(e))?;
+    auth.seal(&mut via).map_err(|e| anyhow!(e))?;
     Ok((fixed.freeze(), via.freeze()))
 }
 

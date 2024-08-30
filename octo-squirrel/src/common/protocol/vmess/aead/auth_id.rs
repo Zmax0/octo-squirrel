@@ -1,3 +1,5 @@
+use std::time::SystemTimeError;
+
 use bytes::BufMut;
 use bytes::BytesMut;
 use rand::random;
@@ -20,7 +22,7 @@ impl AuthID {
         auth_id
     }
 
-    pub fn matching(authid: &[u8], keys: &Vec<[u8; 16]>) -> bool {
+    pub fn matching(authid: &[u8], keys: &Vec<[u8; 16]>) -> Result<Option<[u8; 16]>, SystemTimeError> {
         for key in keys {
             let mut cur = [0; 16];
             cur.copy_from_slice(authid);
@@ -28,11 +30,11 @@ impl AuthID {
             let crc32 = vmess::crc32(&cur[..12]);
             let (l, r) = cur.split_at(12);
             let now = i64::from_be_bytes(l[..8].try_into().unwrap());
-            if i32::from_be_bytes(r.try_into().unwrap()) == crc32 as i32 && (now - vmess::now()).abs() <= 120 {
-                return true;
+            if i32::from_be_bytes(r.try_into().unwrap()) == crc32 as i32 && (now - vmess::now()?).abs() <= 120 {
+                return Ok(Some(*key));
             }
         }
-        false
+        Ok(None)
     }
 }
 

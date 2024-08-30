@@ -320,12 +320,12 @@ mod test {
         }
 
         fn test_by_security(security: SecurityType) -> Result<()> {
-            let header = RequestHeader::default(RequestCommand::TCP, security, new_address(), uuid::Uuid::new_v4().to_string());
+            let header = RequestHeader::default(RequestCommand::TCP, security, new_address(), &uuid::Uuid::new_v4().to_string())?;
             test_by_header(header)
         }
 
         fn test_by_command(command: RequestCommand) -> Result<()> {
-            let header = RequestHeader::default(command, SecurityType::Chacha20Poly1305, new_address(), uuid::Uuid::new_v4().to_string());
+            let header = RequestHeader::default(command, SecurityType::Chacha20Poly1305, new_address(), &uuid::Uuid::new_v4().to_string())?;
             test_by_header(header)
         }
 
@@ -352,7 +352,7 @@ mod test {
                 option: RequestOption::from_mask(mask),
                 security: SecurityType::Chacha20Poly1305,
                 address: new_address(),
-                id: ID::new_id(uuid::Uuid::new_v4().to_string()),
+                id: ID::from_uuid(uuid::Uuid::new_v4()),
             };
             test_by_header(header)?;
             let header = RequestHeader {
@@ -361,7 +361,7 @@ mod test {
                 option: RequestOption::from_mask(mask),
                 security: SecurityType::Aes128Gcm,
                 address: new_address(),
-                id: ID::new_id(uuid::Uuid::new_v4().to_string()),
+                id: ID::from_uuid(uuid::Uuid::new_v4()),
             };
             test_by_header(header)?;
             Ok(())

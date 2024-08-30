@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-
 use anyhow::bail;
 use anyhow::Result;
 use bytes::Buf;
@@ -18,6 +16,7 @@ use super::Socks5AuthMethod;
 use super::Socks5CommandStatus;
 use super::Socks5CommandType;
 use super::VERSION;
+use crate::common::protocol::address::Address;
 
 pub struct Socks5ClientEncoder;
 
@@ -117,7 +116,7 @@ impl Decoder for Socks5CommandResponseDecoder {
 pub struct Socks5UdpCodec;
 
 impl Decoder for Socks5UdpCodec {
-    type Item = (BytesMut, SocketAddr);
+    type Item = (BytesMut, Address);
 
     type Error = anyhow::Error;
 
@@ -133,16 +132,16 @@ impl Decoder for Socks5UdpCodec {
         }
         src.advance(3);
         let recipient = AddressCodec::decode(src)?;
-        Ok(Some((src.split_off(0), recipient.to_socket_addr()?)))
+        Ok(Some((src.split_off(0), recipient)))
     }
 }
 
-impl Encoder<(BytesMut, SocketAddr)> for Socks5UdpCodec {
+impl Encoder<(BytesMut, Address)> for Socks5UdpCodec {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, item: (BytesMut, SocketAddr), dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: (BytesMut, Address), dst: &mut BytesMut) -> Result<(), Self::Error> {
         dst.put_slice(&[0, 0, 0]); // Fragment
-        AddressCodec::encode(&item.1.into(), dst)?;
+        AddressCodec::encode(&item.1, dst)?;
         dst.put_slice(&item.0);
         Ok(())
     }

@@ -42,7 +42,7 @@ where {
         let listener = TcpListener::bind(listen_addr).await?;
         let user_manager = Arc::new(user_manager);
         while let Ok((inbound, _)) = listener.accept().await {
-            tokio::spawn(template::relay_tcp(inbound, new_codec::<N, CM>(config, user_manager.clone())));
+            tokio::spawn(template::relay_tcp(inbound, new_codec::<N, CM>(config, user_manager.clone())?));
         }
         Ok(())
     }
@@ -56,7 +56,10 @@ where {
     }
 }
 
-fn new_codec<const N: usize, CM: CipherMethod + KeyInit>(config: &ServerConfig, user_manager: Arc<ServerUserManager<N>>) -> PayloadCodec<N, CM> {
+fn new_codec<const N: usize, CM: CipherMethod + KeyInit>(
+    config: &ServerConfig,
+    user_manager: Arc<ServerUserManager<N>>,
+) -> Result<PayloadCodec<N, CM>> {
     PayloadCodec::new(Arc::new(Context::default()), config, Mode::Server, None, Some(user_manager))
 }
 
@@ -78,9 +81,9 @@ impl<const N: usize, CM: CipherMethod + KeyInit> PayloadCodec<N, CM> {
         mode: Mode,
         address: Option<Address>,
         user_manager: Option<Arc<ServerUserManager<N>>>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let session = Session::new(mode, Identity::default(), context, address, user_manager);
-        Self { session, cipher: AEADCipherCodec::new(config.cipher, config.password.as_str()).unwrap(), state: State::Header }
+        Ok(Self { session, cipher: AEADCipherCodec::new(config.cipher, config.password.as_str()).map_err(|e| anyhow!(e))?, state: State::Header })
     }
 }
 
@@ -109,7 +112,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for PayloadCodec<N, CM>
             }
             State::Body => {
                 if let Some(dst) = self.cipher.decode(&mut self.session, src)? {
-                    Ok(Some(Message::Relay(dst)))
+                    Ok(Some(Message::RelayTcp(dst)))
                 } else {
                     Ok(None)
                 }

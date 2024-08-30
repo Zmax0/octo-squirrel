@@ -1,4 +1,3 @@
-use digest::InvalidLength;
 use hkdf::Hkdf;
 use md5::Digest;
 use md5::Md5;
@@ -35,26 +34,26 @@ pub fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
     encoded
 }
 
-pub fn new_encoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> Result<ChunkEncoder<CM>, InvalidLength> {
-    let key = hkdfsha1(key, salt);
-    let auth = new_auth(&key)?;
+pub fn new_encoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> Result<ChunkEncoder<CM>, String> {
+    let key = hkdfsha1(key, salt)?;
+    let auth = new_auth(&key).map_err(|e| e.to_string())?;
     Ok(ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth))
 }
 
-pub fn new_decoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> Result<ChunkDecoder<CM>, InvalidLength> {
-    let key = hkdfsha1(key, salt);
-    let auth = new_auth(&key)?;
+pub fn new_decoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> Result<ChunkDecoder<CM>, String> {
+    let key = hkdfsha1(key, salt)?;
+    let auth = new_auth(&key).map_err(|e| e.to_string())?;
     Ok(ChunkDecoder::new(auth, ChunkSizeParser::Auth))
 }
 
-fn hkdfsha1(ikm: &[u8], salt: &[u8]) -> Vec<u8> {
+fn hkdfsha1(ikm: &[u8], salt: &[u8]) -> Result<Vec<u8>, String> {
     let hk = Hkdf::<Sha1>::new(Some(salt), ikm);
     let okm = &mut vec![0; salt.len()];
-    hk.expand(b"ss-subkey", okm).unwrap();
-    okm.to_vec()
+    hk.expand(b"ss-subkey", okm).map_err(|e| e.to_string())?;
+    Ok(okm.to_vec())
 }
 
-fn new_auth<CM: CipherMethod + KeyInit>(key: &[u8]) -> Result<Authenticator<CM>, InvalidLength> {
+fn new_auth<CM: CipherMethod + KeyInit>(key: &[u8]) -> Result<Authenticator<CM>, digest::InvalidLength> {
     let method = CM::init(key)?;
     Ok(Authenticator::new(method, NonceGenerator::Increasing(IncreasingNonceGenerator::init())))
 }

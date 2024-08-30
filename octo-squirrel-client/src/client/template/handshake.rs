@@ -26,7 +26,7 @@ pub async fn get_request_addr(stream: &mut TcpStream) -> anyhow::Result<Address>
             Ok(address)
         }
         Proxy::Socks5 => {
-            let local_addr = stream.local_addr().unwrap();
+            let local_addr = stream.local_addr()?;
             let response = Socks5CommandResponse::new(Socks5CommandStatus::Success, local_addr.into());
             let handshake = ServerHandShake::no_auth(stream, response).await;
             handshake.map(Address::from)
@@ -81,7 +81,7 @@ fn recognize_http(method: &str, mut path: &str) -> Result<Proxy, anyhow::Error> 
             let h_end = h_end.unwrap();
             let p_start = h_end + 1;
             let host = path[..h_end].to_owned();
-            let port = path[p_start..].parse().unwrap();
+            let port = path[p_start..].parse()?;
             Ok(Proxy::Http(Address::Domain(host, port)))
         }
     }

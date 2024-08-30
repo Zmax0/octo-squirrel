@@ -34,18 +34,19 @@ mod test {
     }
 
     #[test]
-    fn test_matching() {
+    fn test_matching() -> anyhow::Result<()> {
         let key = KDF::kdf16(b"Demo Key for Auth ID Test", vec![b"Demo Path for Auth ID Test"]);
-        let auth_id = AuthID::create(&key, now());
+        let auth_id = AuthID::create(&key, now()?);
         let mut keys = Vec::new();
         for i in 0..10000u32 {
             let key_i = KDF::kdf16(b"Demo Key for Auth ID Test2", vec![b"Demo Path for Auth ID Test", &i.to_be_bytes()]);
             keys.push(key_i);
         }
-        assert!(!AuthID::matching(&auth_id, &keys));
+        assert!(!AuthID::matching(&auth_id, &keys)?.is_some());
         keys.push(key);
-        assert!(AuthID::matching(&auth_id, &keys));
-        let auth_id = AuthID::create(&key, now() + 1200);
-        assert!(!AuthID::matching(&auth_id, &keys));
+        assert!(AuthID::matching(&auth_id, &keys)?.is_some());
+        let auth_id = AuthID::create(&key, now()? + 1200);
+        assert!(!AuthID::matching(&auth_id, &keys)?.is_some());
+        Ok(())
     }
 }

@@ -11,7 +11,6 @@ use byte_string::ByteStr;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
-use digest::InvalidLength;
 use log::trace;
 use lru_time_cache::LruCache;
 use rand::Rng;
@@ -78,7 +77,7 @@ where
         self.encoder.as_mut().unwrap().encode_payload(item, dst).map_err(|e| anyhow!(e))
     }
 
-    fn init_payload_encoder(&mut self, session: &mut Session<N>, is_aead_2022: bool, dst: &mut BytesMut) -> Result<(), InvalidLength> {
+    fn init_payload_encoder(&mut self, session: &mut Session<N>, is_aead_2022: bool, dst: &mut BytesMut) -> anyhow::Result<()> {
         Self::with_identity(session, &self.kind, &self.keys, dst);
         let salt = session.identity.salt;
         trace!("[tcp] new request salt: {:?}", &ByteStr::new(&salt));
@@ -88,7 +87,7 @@ where
                 None => self.encoder = Some(aead_2022::tcp::new_encoder::<N, CM>(&self.keys.enc_key, &salt)?),
             };
         } else {
-            self.encoder = Some(super::aead::new_encoder(&self.keys.enc_key, &salt)?);
+            self.encoder = Some(super::aead::new_encoder(&self.keys.enc_key, &salt).map_err(anyhow::Error::msg)?);
         }
         Ok(())
     }
@@ -164,7 +163,7 @@ where
         } else {
             let salt = cursor.copy_to_bytes(session.identity.salt.len());
             trace!("[tcp] get request salt {}", Base64::encode_string(&salt));
-            self.decoder = Some(super::aead::new_decoder(&self.keys.enc_key, &salt)?);
+            self.decoder = Some(super::aead::new_decoder(&self.keys.enc_key, &salt).map_err(anyhow::Error::msg)?);
         }
         let pos = cursor.position();
         cursor.into_inner().advance(pos as usize);
@@ -293,6 +292,9 @@ impl<const N: usize> Default for Identity<N> {
 mod test {
     use std::sync::Arc;
 
+    use anyhow::anyhow;
+    use base64ct::Base64;
+    use base64ct::Encoding;
     use bytes::BytesMut;
     use rand::distributions::Alphanumeric;
     use rand::Rng;
@@ -312,22 +314,23 @@ mod test {
     const KINDS: [CipherKind; 3] = [CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
 
     #[test]
-    fn test_tcp() {
-        fn test_tcp(cipher: CipherKind) {
-            fn test_tcp<const N: usize, CM: CipherMethod + KeyInit>(cipher: CipherKind) {
+    fn test_tcp() -> anyhow::Result<()> {
+        fn test_tcp(cipher: CipherKind) -> anyhow::Result<()> {
+            fn test_tcp<const N: usize, CM: CipherMethod + KeyInit>(cipher: CipherKind) -> anyhow::Result<()> {
                 let context = Arc::new(Context::default());
                 let mut context: Session<N> =
                     Session::new(Mode::Server, Identity::default(), context, Some(Address::Domain("localhost".to_owned(), 0)), None);
-                let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
+                let mut password: [u8; N] = [0; N];
                 rand::thread_rng().fill(&mut password[..]);
-                let mut codec: AEADCipherCodec<N, CM> = AEADCipherCodec::new(cipher, &String::from_utf8(password).unwrap()).unwrap();
+                let mut codec: AEADCipherCodec<N, CM> = AEADCipherCodec::new(cipher, &Base64::encode_string(&password)).map_err(|e| anyhow!(e))?;
                 let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(1).map(char::from).collect();
                 let src = BytesMut::from(expect.as_str());
                 let mut dst = BytesMut::new();
-                codec.encode(&mut context, src, &mut dst).unwrap();
-                let actual = codec.decode(&mut context, &mut dst).unwrap().unwrap();
-                let actual = String::from_utf8(actual.freeze().to_vec()).unwrap();
+                codec.encode(&mut context, src, &mut dst)?;
+                let actual = codec.decode(&mut context, &mut dst)?.unwrap();
+                let actual = String::from_utf8(actual.freeze().to_vec())?;
                 assert_eq!(expect, actual);
+                Ok(())
             }
 
             match cipher {
@@ -337,6 +340,9 @@ mod test {
             }
         }
 
-        KINDS.into_iter().for_each(test_tcp);
+        for kind in KINDS {
+            test_tcp(kind)?
+        }
+        Ok(())
     }
 }

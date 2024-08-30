@@ -6,7 +6,6 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use digest::InvalidLength;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
@@ -16,8 +15,7 @@ use crate::common::codec::aead::CipherKind;
 use crate::common::codec::aead::CipherMethod;
 use crate::common::codec::aead::KeyInit;
 use crate::common::codec::shadowsocks::aead_2022::udp;
-use crate::common::network::DatagramPacket;
-use crate::common::protocol::address::Address;
+use crate::common::codec::DatagramPacket;
 use crate::common::protocol::shadowsocks::udp::Context;
 use crate::common::protocol::shadowsocks::Mode;
 use crate::common::protocol::socks5::address::AddressCodec;
@@ -67,7 +65,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             context.session.packet_id += 1;
             temp.put_u64(context.session.packet_id);
             temp.put_u8(context.stream_type.to_u8());
-            temp.put_u64(super::aead_2022::now());
+            temp.put_u64(super::aead_2022::now()?);
             temp.put_u16(padding_length);
             temp.put(&Dice::roll_bytes(padding_length as usize)[..]);
             if matches!(context.stream_type, Mode::Server) {
@@ -89,15 +87,15 @@ impl<const N: usize> AEADCipherCodec<N> {
             let mut temp = BytesMut::with_capacity(AddressCodec::length(address) + item.remaining());
             AddressCodec::encode(address, &mut temp)?;
             temp.put(item);
-            let mut encoder: ChunkEncoder<CM> = self.new_encoder(&salt)?;
+            let mut encoder: ChunkEncoder<CM> = self.new_encoder(&salt).map_err(anyhow::Error::msg)?;
             encoder.encode_packet(temp, dst).map_err(|e| anyhow!(e))?;
         }
         Ok(())
     }
 
-    fn new_encoder<CM: CipherMethod + KeyInit>(&self, salt: &[u8]) -> Result<ChunkEncoder<CM>, InvalidLength> {
+    fn new_encoder<CM: CipherMethod + KeyInit>(&self, salt: &[u8]) -> Result<ChunkEncoder<CM>, String> {
         if self.kind.is_aead_2022() {
-            super::aead_2022::tcp::new_encoder::<N, CM>(&self.key, salt)
+            super::aead_2022::tcp::new_encoder::<N, CM>(&self.key, salt).map_err(|e| e.to_string())
         } else {
             super::aead::new_encoder(&self.key, salt)
         }
@@ -143,16 +141,16 @@ impl<const N: usize> AEADCipherCodec<N> {
                 bail!("Invalid packet length");
             }
             let salt = src.split_to(self.key.len());
-            let mut decoder: ChunkDecoder<CM> = self.new_payload_decoder(&salt)?;
+            let mut decoder: ChunkDecoder<CM> = self.new_payload_decoder(&salt).map_err(anyhow::Error::msg)?;
             let mut packet = decoder.decode_packet(src).map_err(|e| anyhow!(e))?.unwrap();
             context.address = Some(AddressCodec::decode(&mut packet)?);
             Ok(packet)
         }
     }
 
-    fn new_payload_decoder<CM: CipherMethod + KeyInit>(&self, salt: &BytesMut) -> Result<ChunkDecoder<CM>, InvalidLength> {
+    fn new_payload_decoder<CM: CipherMethod + KeyInit>(&self, salt: &BytesMut) -> Result<ChunkDecoder<CM>, String> {
         if self.kind.is_aead_2022() {
-            super::aead_2022::tcp::new_decoder::<N, CM>(&self.key, salt)
+            super::aead_2022::tcp::new_decoder::<N, CM>(&self.key, salt).map_err(|e| e.to_string())
         } else {
             super::aead::new_decoder(&self.key, salt)
         }
@@ -175,7 +173,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<DatagramPacket> for Dat
     type Error = anyhow::Error;
 
     fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> anyhow::Result<()> {
-        self.context.address = Some(Address::from(item.1));
+        self.context.address = Some(item.1);
         self.cipher.encode::<CM>(&mut self.context, item.0, dst)
     }
 }
@@ -187,7 +185,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for DatagramPacketCodec
 
     fn decode(&mut self, src: &mut BytesMut) -> anyhow::Result<Option<Self::Item>> {
         if let Some(content) = self.cipher.decode::<CM>(&mut self.context, src)? {
-            Ok(Some((content, self.context.address.take().unwrap().to_socket_addr()?)))
+            Ok(Some((content, self.context.address.take().unwrap())))
         } else {
             Ok(None)
         }
@@ -200,6 +198,7 @@ mod test {
     use std::net::SocketAddr;
     use std::net::SocketAddrV4;
 
+    use anyhow::anyhow;
     use bytes::BytesMut;
     use rand::distributions::Alphanumeric;
     use rand::random;
@@ -214,25 +213,27 @@ mod test {
     use crate::common::codec::aead::KeyInit;
     use crate::common::codec::shadowsocks::udp::AEADCipherCodec;
     use crate::common::codec::shadowsocks::udp::DatagramPacketCodec;
+    use crate::common::protocol::address::Address;
     use crate::common::protocol::shadowsocks::udp::Context;
     use crate::common::protocol::shadowsocks::Mode;
 
     const KINDS: [CipherKind; 3] = [CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
     #[test]
-    fn test_udp() {
-        fn test_udp(cipher: CipherKind) {
-            fn test_udp<const N: usize, CM: CipherMethod + KeyInit>(cipher: CipherKind) {
+    fn test_udp() -> anyhow::Result<()> {
+        fn test_udp(cipher: CipherKind) -> anyhow::Result<()> {
+            fn test_udp<const N: usize, CM: CipherMethod + KeyInit>(cipher: CipherKind) -> anyhow::Result<()> {
                 let mut password: Vec<u8> = vec![0; rand::thread_rng().gen_range(10..=100)];
                 rand::thread_rng().fill(&mut password[..]);
-                let codec: AEADCipherCodec<N> = AEADCipherCodec::new(cipher, &password[..]).unwrap();
+                let codec: AEADCipherCodec<N> = AEADCipherCodec::new(cipher, &password[..]).map_err(|e| anyhow!(e))?;
                 let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
                 let mut codec: DatagramPacketCodec<N, CM> = DatagramPacketCodec::new(Context::udp(Mode::Server, None), codec);
                 let mut dst = BytesMut::new();
-                let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random()));
-                codec.encode((expect.as_bytes().into(), addr), &mut dst).unwrap();
-                let actual = codec.decode(&mut dst).unwrap().unwrap();
-                assert_eq!(String::from_utf8(actual.0.freeze().to_vec()).unwrap(), expect);
+                let addr = Address::Socket(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random())));
+                codec.encode((expect.as_bytes().into(), addr.clone()), &mut dst)?;
+                let actual = codec.decode(&mut dst)?.unwrap();
+                assert_eq!(String::from_utf8(actual.0.freeze().to_vec())?, expect);
                 assert_eq!(actual.1, addr);
+                Ok(())
             }
 
             match cipher {
@@ -242,6 +243,9 @@ mod test {
             }
         }
 
-        KINDS.into_iter().for_each(test_udp);
+        for k in KINDS {
+            test_udp(k)?
+        }
+        Ok(())
     }
 }

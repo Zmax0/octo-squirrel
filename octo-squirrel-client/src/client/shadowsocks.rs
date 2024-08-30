@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use anyhow::Result;
 use bytes::BytesMut;
 use octo_squirrel::common::codec::aead::CipherMethod;
@@ -27,7 +28,10 @@ pub(super) mod tcp {
 
     use super::PayloadCodec;
 
-    pub fn new_payload_codec<const N: usize, CM: CipherMethod + KeyInit>(addr: Address, config: &ServerConfig) -> PayloadCodec<N, CM> {
+    pub fn new_payload_codec<const N: usize, CM: CipherMethod + KeyInit>(
+        addr: Address,
+        config: &ServerConfig,
+    ) -> anyhow::Result<PayloadCodec<N, CM>> {
         PayloadCodec::new(Arc::new(Context::default()), config, Mode::Client, Some(addr), None)
     }
 }
@@ -38,6 +42,7 @@ pub(super) mod udp {
     use std::net::SocketAddrV4;
 
     use anyhow::anyhow;
+    use bytes::BytesMut;
     use futures::stream::SplitSink;
     use futures::stream::SplitStream;
     use futures::StreamExt;
@@ -45,7 +50,7 @@ pub(super) mod udp {
     use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
     use octo_squirrel::common::codec::shadowsocks::udp::DatagramPacketCodec;
-    use octo_squirrel::common::network::DatagramPacket;
+    use octo_squirrel::common::codec::DatagramPacket;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::shadowsocks::udp::Context;
     use octo_squirrel::common::protocol::shadowsocks::Mode;
@@ -53,12 +58,13 @@ pub(super) mod udp {
     use tokio::net::UdpSocket;
     use tokio_util::udp::UdpFramed;
 
-    pub fn new_key(from: SocketAddr, _: SocketAddr) -> SocketAddr {
+    pub fn new_key(from: SocketAddr, _: &Address) -> SocketAddr {
         from
     }
 
     pub async fn new_outbound<const N: usize, CM: CipherMethod + KeyInit>(
-        _: Address,
+        _: SocketAddr,
+        _: &Address,
         config: &ServerConfig,
     ) -> Result<
         (SplitSink<UdpFramed<DatagramPacketCodec<N, CM>>, (DatagramPacket, SocketAddr)>, SplitStream<UdpFramed<DatagramPacketCodec<N, CM>>>),
@@ -75,12 +81,14 @@ pub(super) mod udp {
         Ok(outbound_framed.split())
     }
 
-    pub fn to_outbound_send(item: (DatagramPacket, SocketAddr), proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        (item.0, proxy)
+    pub fn to_outbound_send(item: (BytesMut, &Address), proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
+        let (content, target) = item;
+        ((content, target.clone()), proxy)
     }
 
-    pub fn to_inbound_recv(item: (DatagramPacket, SocketAddr), _: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        (item.0, sender)
+    pub fn to_inbound_recv(item: (DatagramPacket, SocketAddr), _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+        let (item, _) = item;
+        (item, sender)
     }
 }
 
@@ -96,9 +104,9 @@ impl<const N: usize, CM: CipherMethod + KeyInit> PayloadCodec<N, CM> {
         mode: Mode,
         address: Option<Address>,
         user_manager: Option<Arc<ServerUserManager<N>>>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let session = Session::new(mode, Identity::default(), context, address, user_manager);
-        Self { session, cipher: AEADCipherCodec::new(config.cipher, config.password.as_str()).unwrap() }
+        Ok(Self { session, cipher: AEADCipherCodec::new(config.cipher, config.password.as_str()).map_err(|e| anyhow!(e))? })
     }
 }
 

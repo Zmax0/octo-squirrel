@@ -132,16 +132,15 @@ pub mod tcp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_codec(addr: Address, config: &ServerConfig) -> ClientAEADCodec {
+    pub fn new_codec(addr: Address, config: &ServerConfig) -> anyhow::Result<ClientAEADCodec> {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::TCP, security, addr, config.password.clone());
-        ClientAEADCodec::new(header)
+        let header = RequestHeader::default(RequestCommand::TCP, security, addr, &config.password)?;
+        Ok(ClientAEADCodec::new(header))
     }
 }
 
 pub mod udp {
     use std::net::SocketAddr;
-    use std::net::ToSocketAddrs;
 
     use anyhow::Result;
     use bytes::BytesMut;
@@ -149,7 +148,7 @@ pub mod udp {
     use futures::stream::SplitStream;
     use futures::StreamExt;
     use octo_squirrel::common::codec::aead::CipherKind;
-    use octo_squirrel::common::network::DatagramPacket;
+    use octo_squirrel::common::codec::DatagramPacket;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::vmess::header::RequestCommand;
     use octo_squirrel::common::protocol::vmess::header::RequestHeader;
@@ -160,27 +159,27 @@ pub mod udp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
-        (sender, recipient)
+    pub fn new_key(sender: SocketAddr, target: &Address) -> (SocketAddr, String) {
+        (sender, target.to_string())
     }
 
     pub async fn new_outbound(
-        recipient: Address,
+        server_addr: SocketAddr,
+        target: &Address,
         config: &ServerConfig,
     ) -> Result<(SplitSink<Framed<TcpStream, ClientAEADCodec>, BytesMut>, SplitStream<Framed<TcpStream, ClientAEADCodec>>)> {
-        let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
-        let outbound = TcpStream::connect(proxy).await?;
+        let outbound = TcpStream::connect(server_addr).await?;
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::UDP, security, recipient, config.password.clone());
+        let header = RequestHeader::default(RequestCommand::UDP, security, target.clone(), &config.password)?;
         let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
         Ok(outbound.split())
     }
 
-    pub fn to_outbound_send(item: ((BytesMut, SocketAddr), SocketAddr), _: SocketAddr) -> BytesMut {
-        item.0 .0
+    pub fn to_outbound_send(item: (BytesMut, &Address), _: SocketAddr) -> BytesMut {
+        item.0
     }
 
-    pub fn to_inbound_recv(item: BytesMut, recipient: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        ((item, recipient), sender)
+    pub fn to_inbound_recv(item: BytesMut, recipient: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+        ((item, recipient.clone()), sender)
     }
 }

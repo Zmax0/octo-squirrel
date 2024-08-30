@@ -74,6 +74,20 @@ impl From<CipherKind> for SecurityType {
     }
 }
 
+impl From<u8> for SecurityType {
+    fn from(value: u8) -> Self {
+        match value {
+            1 => SecurityType::Legacy,
+            2 => SecurityType::Auto,
+            3 => SecurityType::Aes128Gcm,
+            4 => SecurityType::Chacha20Poly1305,
+            5 => SecurityType::None,
+            6 => SecurityType::Zero,
+            _ => SecurityType::Unknown,
+        }
+    }
+}
+
 pub struct RequestHeader {
     pub version: u8,
     pub command: RequestCommand,
@@ -84,14 +98,18 @@ pub struct RequestHeader {
 }
 
 impl RequestHeader {
-    pub fn default(command: RequestCommand, security: SecurityType, address: Address, uuid: String) -> Self {
-        Self {
+    pub fn new(version: u8, command: RequestCommand, option: Vec<RequestOption>, security: SecurityType, address: Address, id: [u8; 16]) -> Self {
+        Self { version, command, option, security, address, id }
+    }
+
+    pub fn default(command: RequestCommand, security: SecurityType, address: Address, uuid: &str) -> Result<Self, uuid::Error> {
+        Ok(Self {
             version: VERSION,
             command,
             option: vec![RequestOption::ChunkStream, RequestOption::ChunkMasking, RequestOption::GlobalPadding, RequestOption::AuthenticatedLength],
             security,
             address,
-            id: ID::new_id(uuid),
-        }
+            id: ID::from_password(uuid)?,
+        })
     }
 }

@@ -2,6 +2,7 @@ pub(super) mod tcp;
 pub(super) mod udp;
 
 use std::time::SystemTime;
+use std::time::SystemTimeError;
 use std::time::UNIX_EPOCH;
 
 use base64ct::Base64;
@@ -27,12 +28,12 @@ fn session_sub_key(key: &[u8], salt: &[u8]) -> [u8; blake3::OUT_LEN] {
     blake3::derive_key("shadowsocks 2022 session subkey", &key_material)
 }
 
-pub fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+pub fn now() -> Result<u64, SystemTimeError> {
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
 
 pub fn validate_timestamp(timestamp: u64) -> Result<(), String> {
-    let now = now();
+    let now = now().map_err(|e| e.to_string())?;
     let diff = now.abs_diff(timestamp);
     if diff > SERVER_STREAM_TIMESTAMP_MAX_DIFF {
         Err(format!("invalid abs_diff(timestamp: {}, now: {}) = {}", timestamp, now, diff))
@@ -74,17 +75,17 @@ mod test {
     use crate::common::codec::shadowsocks::aead_2022::validate_timestamp;
 
     #[test]
-    fn test_session_sub_key() {
-        let key = Base64::decode_vec("Lc3tTx0BY6ZJ/fCwOx3JvF0I/anhwJBO5p2+FA5Vce4=").unwrap();
-        let salt = Base64::decode_vec("3oFO0VyLyGI4nFN0M9P+62vPND/L6v8IingaPJWTbJA=").unwrap();
+    fn test_session_sub_key() -> Result<(), base64ct::Error> {
+        let key = Base64::decode_vec("Lc3tTx0BY6ZJ/fCwOx3JvF0I/anhwJBO5p2+FA5Vce4=")?;
+        let salt = Base64::decode_vec("3oFO0VyLyGI4nFN0M9P+62vPND/L6v8IingaPJWTbJA=")?;
         let session_sub_key = session_sub_key(&key, &salt);
-        assert_eq!("EdNE+4U8dVnHT0+poAFDK2bdlwfrHT61sUNr9WYPh+E=", Base64::encode_string(&session_sub_key))
+        Ok(assert_eq!("EdNE+4U8dVnHT0+poAFDK2bdlwfrHT61sUNr9WYPh+E=", Base64::encode_string(&session_sub_key)))
     }
 
     #[test]
-    fn test_validate_timestamp() {
-        let timestamp = now() + 2 * SERVER_STREAM_TIMESTAMP_MAX_DIFF;
-        assert!(validate_timestamp(timestamp).is_err())
+    fn test_validate_timestamp() -> anyhow::Result<()> {
+        let timestamp = now()? + 2 * SERVER_STREAM_TIMESTAMP_MAX_DIFF;
+        Ok(assert!(validate_timestamp(timestamp).is_err()))
     }
 
     #[test]

@@ -22,11 +22,11 @@ enum CodecState {
     // Udp(Address),
 }
 
-pub fn new_codec(config: &ServerConfig) -> ServerCodec {
+pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerCodec> {
     let mut hasher = Sha224::new();
     hasher.update(config.password.as_bytes());
     let key = hasher.finalize().into();
-    ServerCodec { key, state: CodecState::Header }
+    Ok(ServerCodec { key, state: CodecState::Header })
 }
 
 pub struct ServerCodec {
@@ -70,7 +70,7 @@ impl Decoder for ServerCodec {
                     Ok(None)
                 } else {
                     let len = src.len();
-                    Ok(Some(Message::Relay(src.split_to(len))))
+                    Ok(Some(Message::RelayTcp(src.split_to(len))))
                 }
             } // _ => unreachable!(),
         }

@@ -19,8 +19,8 @@ pub mod tcp {
 
     use super::CodecState;
 
-    pub fn new_codec(addr: Address, config: &ServerConfig) -> ClientCodec {
-        ClientCodec::new(config.password.as_bytes(), Socks5CommandType::Connect as u8, addr)
+    pub fn new_codec(addr: Address, config: &ServerConfig) -> anyhow::Result<ClientCodec> {
+        Ok(ClientCodec::new(config.password.as_bytes(), Socks5CommandType::Connect as u8, addr))
     }
 
     pub struct ClientCodec {
@@ -77,7 +77,6 @@ pub mod tcp {
 pub mod udp {
     use std::fs;
     use std::net::SocketAddr;
-    use std::net::ToSocketAddrs;
 
     use anyhow::bail;
     use anyhow::Result;
@@ -87,7 +86,7 @@ pub mod udp {
     use futures::stream::SplitSink;
     use futures::stream::SplitStream;
     use futures::StreamExt;
-    use octo_squirrel::common::network::DatagramPacket;
+    use octo_squirrel::common::codec::DatagramPacket;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::socks5::address::AddressCodec;
     use octo_squirrel::common::protocol::socks5::Socks5CommandType;
@@ -107,17 +106,17 @@ pub mod udp {
 
     use super::CodecState;
 
-    pub fn new_key(sender: SocketAddr, _: SocketAddr) -> SocketAddr {
+    pub fn new_key(sender: SocketAddr, _: &Address) -> SocketAddr {
         sender
     }
 
     pub async fn new_tls_outbound(
-        recipient: Address,
+        server_addr: SocketAddr,
+        target: &Address,
         config: &ServerConfig,
     ) -> Result<(SplitSink<Framed<TlsStream<TcpStream>, ClientCodec>, DatagramPacket>, SplitStream<Framed<TlsStream<TcpStream>, ClientCodec>>)> {
-        let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
-        let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, recipient);
-        let outbound = TcpStream::connect(proxy).await?;
+        let outbound = TcpStream::connect(server_addr).await?;
+        let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
         if let Some(ssl_config) = &config.ssl {
             let pem = fs::read(ssl_config.certificate_file.as_str())?;
             let cert = Certificate::from_pem(&pem)?;
@@ -132,20 +131,21 @@ pub mod udp {
     }
 
     pub async fn new_outbound(
-        recipient: Address,
+        server_addr: SocketAddr,
+        target: &Address,
         config: &ServerConfig,
     ) -> Result<(SplitSink<Framed<TcpStream, ClientCodec>, DatagramPacket>, SplitStream<Framed<TcpStream, ClientCodec>>)> {
-        let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
-        let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, recipient);
-        let outbound = TcpStream::connect(proxy).await?;
+        let outbound = TcpStream::connect(server_addr).await?;
+        let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
         Ok(Framed::new(outbound, codec).split())
     }
 
-    pub fn to_outbound_send(item: (DatagramPacket, SocketAddr), _: SocketAddr) -> DatagramPacket {
-        item.0
+    pub fn to_outbound_send(item: (BytesMut, &Address), _: SocketAddr) -> DatagramPacket {
+        let (content, target) = item;
+        (content, target.clone())
     }
 
-    pub fn to_inbound_recv(item: DatagramPacket, _: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub fn to_inbound_recv(item: DatagramPacket, _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         (item, sender)
     }
 
@@ -180,7 +180,7 @@ pub mod udp {
                 self.status = CodecState::Body;
             }
             let buffer = &mut BytesMut::new();
-            AddressCodec::encode(&item.1.into(), buffer)?;
+            AddressCodec::encode(&item.1, buffer)?;
             buffer.put_u16(item.0.len() as u16);
             buffer.put_slice(&trojan::CR_LF);
             buffer.put(item.0);
@@ -200,7 +200,7 @@ pub mod udp {
                 let len = src.get_u16();
                 src.advance(trojan::CR_LF.len());
                 let content = src.split_to(len as usize);
-                Ok(Some((content, addr.to_socket_addr()?)))
+                Ok(Some((content, addr)))
             } else {
                 Ok(None)
             }
