@@ -26,7 +26,7 @@ use tokio_util::codec::Encoder;
 use super::template;
 use super::template::Message;
 
-pub async fn startup_tcp(config: &ServerConfig) -> anyhow::Result<()>
+pub async fn startup(config: &ServerConfig) -> anyhow::Result<()>
 where
 {
     #[inline]

@@ -19,11 +19,11 @@ mod vmess;
 pub async fn startup(config: ServerConfig) {
     info!("Startup tcp server => {}|{:?}|{}:{}", config.protocol, config.cipher, config.host, config.port);
     match config.protocol {
-        Protocols::Shadowsocks => shadowsocks::startup_tcp(&config).await,
+        Protocols::Shadowsocks => shadowsocks::startup(&config).await,
         Protocols::VMess => startup_tcp(&config, vmess::new_codec).await,
         Protocols::Trojan => startup_tcp(&config, trojan::new_codec).await,
     }
-    .unwrap_or_else(|e| error!("Startup failed; error={}", e))
+    .unwrap_or_else(|e| error!("Startup {} failed; error={}", config.protocol, e))
 }
 
 async fn startup_tcp<NewCodec, Codec>(config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>

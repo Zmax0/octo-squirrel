@@ -3,6 +3,7 @@ use anyhow::bail;
 use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
+use log::debug;
 use octo_squirrel::common::codec::aead::Aes128GcmCipher;
 use octo_squirrel::common::codec::aead::CipherMethod;
 use octo_squirrel::common::codec::vmess::aead::AEADBodyCodec;
@@ -152,6 +153,7 @@ impl Decoder for ServerAeadCodec {
                                 }
                                 let mut header = RequestHeader::new(version, command, RequestOption::from_mask(option), security, address, key);
                                 let mut session = ServerSession::new(request_body_iv, request_body_key, response_header);
+                                debug!("New session; {}", session);
                                 let mut decoder = AEADBodyCodec::decoder(&header, &mut session)?;
                                 let res = Self::decode_header(src, &mut header, &mut session, &mut decoder);
                                 self.decode_state = DecodeState::Ready(header, session, Box::new(decoder));

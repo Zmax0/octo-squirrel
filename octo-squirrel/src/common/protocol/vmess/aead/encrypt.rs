@@ -38,7 +38,6 @@ impl Encrypt {
         if cursor.remaining() < Aes128GcmCipher::TAG_SIZE + 2 + Aes128GcmCipher::TAG_SIZE + 8 + Aes128GcmCipher::TAG_SIZE {
             return Ok(None);
         }
-        let position = cursor.position();
         let mut auth_id = [0; Aes128GcmCipher::TAG_SIZE];
         let mut length_encrypted = [0; 2 + Aes128GcmCipher::TAG_SIZE];
         let mut nonce = [0; 8];
@@ -52,13 +51,14 @@ impl Encrypt {
         length.copy_from_slice(&length_bytes);
         let length = u16::from_be_bytes(length) as usize;
         if cursor.remaining() < length {
-            cursor.set_position(position);
             return Ok(None);
         }
         let header_key = KDF::kdf16(key, vec![KDF::SALT_PAYLOAD_KEY, &auth_id, &nonce]);
         let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(key, vec![KDF::SALT_PAYLOAD_IV, &auth_id, &nonce]);
         let header_encrypted = cursor.copy_to_bytes(length + Aes128GcmCipher::TAG_SIZE);
         let header_bytes = Aes128GcmCipher::new_from_slice(&header_key)?.decrypt(&header_iv, &header_encrypted, &auth_id).map_err(|e| anyhow!(e))?;
+        let pos = cursor.position();
+        cursor.into_inner().advance(pos as usize);
         Ok(Some(header_bytes))
     }
 }
@@ -69,7 +69,8 @@ fn test_header() -> Result<()> {
     let header = Bytes::from_static(b"Test Header");
     let key = KDF::kdf16(b"Demo Key for Auth ID Test", vec![b"Demo Path for Auth ID Test"]);
     let mut sealed = BytesMut::from(&Encrypt::seal_header(&key, header.clone())?[..]);
-    let opened = Encrypt::open_header(&key, &mut sealed);
-    assert_eq!(header, &opened?.unwrap()[..]);
+    let opened = Encrypt::open_header(&key, &mut sealed)?.unwrap();
+    assert_eq!(header, &opened);
+    assert!(!sealed.has_remaining());
     Ok(())
 }
