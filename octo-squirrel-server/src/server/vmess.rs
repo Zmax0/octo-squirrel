@@ -66,7 +66,11 @@ impl ServerAeadCodec {
     ) -> anyhow::Result<Option<Message>> {
         match header.command {
             RequestCommand::TCP => {
-                Ok(Some(Message::Connect(decoder.decode_payload(src, session).map_err(|e| anyhow!(e))?.unwrap_or_default(), header.address.clone())))
+                if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
+                    Ok(Some(Message::Connect(msg, header.address.clone())))
+                } else {
+                    Ok(None)
+                }
             }
             RequestCommand::UDP => todo!(),
         }
@@ -79,7 +83,13 @@ impl ServerAeadCodec {
         decoder: &mut AEADBodyCodec,
     ) -> anyhow::Result<Option<Message>> {
         match header.command {
-            RequestCommand::TCP => Ok(Some(Message::RelayTcp(decoder.decode_payload(src, session).map_err(|e| anyhow!(e))?.unwrap_or_default()))),
+            RequestCommand::TCP => {
+                if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
+                    Ok(Some(Message::RelayTcp(msg)))
+                } else {
+                    Ok(None)
+                }
+            }
             RequestCommand::UDP => todo!(),
         }
     }
@@ -126,46 +136,45 @@ impl Decoder for ServerAeadCodec {
         match self.decode_state {
             DecodeState::Init => {
                 let auth_id = &src[0..16];
-                match AuthID::matching(auth_id, &self.keys)? {
-                    Some(key) => {
-                        if let Some(header) = Encrypt::open_header(&key, src)? {
-                            let data = header[..header.len() - 4].to_vec();
-                            let mut header = Bytes::from(header);
-                            let version = header.get_u8();
-                            let mut request_body_iv = [0; 16];
-                            header.copy_to_slice(&mut request_body_iv);
-                            let mut request_body_key = [0; 16];
-                            header.copy_to_slice(&mut request_body_key);
-                            let response_header = header.get_u8();
-                            let option = header.get_u8();
-                            let b35 = header.get_u8();
-                            let padding_len = b35 >> 4;
-                            let security = SecurityType::from(b35);
-                            header.advance(1); // fixed 0
-                            let command = header.get_u8();
-                            if command == RequestCommand::TCP as u8 || command == RequestCommand::UDP as u8 {
-                                let command = if command == RequestCommand::TCP as u8 { RequestCommand::TCP } else { RequestCommand::UDP };
-                                let address = AddressCodec::read_address_port(&mut header)?;
-                                header.advance(padding_len as usize);
-                                let actual = header.get_u32();
-                                if FNV::fnv1a32(&data) != actual {
-                                    bail!("invalid auth, but this is a AEAD request")
-                                }
-                                let mut header = RequestHeader::new(version, command, RequestOption::from_mask(option), security, address, key);
-                                let mut session = ServerSession::new(request_body_iv, request_body_key, response_header);
-                                debug!("New session; {}", session);
-                                let mut decoder = AEADBodyCodec::decoder(&header, &mut session)?;
-                                let res = Self::decode_header(src, &mut header, &mut session, &mut decoder);
-                                self.decode_state = DecodeState::Ready(header, session, Box::new(decoder));
-                                return res;
-                            } else {
-                                bail!("unknown request command: {command}")
-                            }
+                if let Some(key) = AuthID::matching(auth_id, &self.keys)? {
+                    if let Some(header) = Encrypt::open_header(&key, src)? {
+                        let data = header[..header.len() - 4].to_vec();
+                        let mut header = Bytes::from(header);
+                        let version = header.get_u8();
+                        let mut request_body_iv = [0; 16];
+                        header.copy_to_slice(&mut request_body_iv);
+                        let mut request_body_key = [0; 16];
+                        header.copy_to_slice(&mut request_body_key);
+                        let response_header = header.get_u8();
+                        let option = header.get_u8();
+                        let security = header.get_u8();
+                        let padding_len = security >> 4;
+                        let security = SecurityType::from(security & 0xF);
+                        header.advance(1); // fixed 0
+                        let command = header.get_u8();
+                        if command != RequestCommand::TCP as u8 && command != RequestCommand::UDP as u8 {
+                            bail!("unknown request command: {command}")
                         }
+                        let command = if command == RequestCommand::TCP as u8 { RequestCommand::TCP } else { RequestCommand::UDP };
+                        let address = AddressCodec::read_address_port(&mut header)?;
+                        header.advance(padding_len as usize);
+                        let actual = header.get_u32();
+                        if FNV::fnv1a32(&data) != actual {
+                            bail!("invalid auth, but this is a AEAD request")
+                        }
+                        let mut header = RequestHeader::new(version, command, RequestOption::from_mask(option), security, address, key);
+                        let mut session = ServerSession::new(request_body_iv, request_body_key, response_header);
+                        debug!("New session; {}", session);
+                        let mut decoder = AEADBodyCodec::decoder(&header, &mut session)?;
+                        let res = Self::decode_header(src, &mut header, &mut session, &mut decoder);
+                        self.decode_state = DecodeState::Ready(header, session, Box::new(decoder));
+                        res
+                    } else {
+                        Ok(None)
                     }
-                    None => bail!("no matched authID"),
+                } else {
+                    bail!("no matched authID")
                 }
-                Ok(None)
             }
             DecodeState::Ready(ref mut header, ref mut session, ref mut decoder) => Self::decode_body(src, header, session, decoder),
         }

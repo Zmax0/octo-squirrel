@@ -5,11 +5,14 @@ use log::error;
 use log::info;
 use octo_squirrel::common::protocol::Protocols;
 use octo_squirrel::config::ServerConfig;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio_native_tls::native_tls;
 use tokio_native_tls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
+use tokio_websockets::ServerBuilder;
 
 mod shadowsocks;
 mod template;
@@ -32,6 +35,7 @@ where
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = template::Message, Error = anyhow::Error> + Send + 'static,
 {
     let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
+    let enable_websocket = config.ws.is_some();
     if let Some(ssl_config) = &config.ssl {
         let pem = fs::read(ssl_config.certificate_file.as_str())?;
         let key = fs::read(ssl_config.key_file.as_str())?;
@@ -43,7 +47,11 @@ where
             tokio::spawn(async move {
                 match tls.accept(inbound).await {
                     Ok(inbound) => {
-                        template::relay_tcp(inbound, codec).await;
+                        if enable_websocket {
+                            startup_websocket(inbound, codec).await
+                        } else {
+                            template::relay_tcp(inbound, codec).await;
+                        }
                     }
                     Err(e) => {
                         error!("[tcp] tls handshake failed: {}", e);
@@ -53,8 +61,23 @@ where
         }
     } else {
         while let Ok((inbound, _)) = listener.accept().await {
-            tokio::spawn(template::relay_tcp(inbound, new_codec(config)?));
+            if enable_websocket {
+                tokio::spawn(startup_websocket(inbound, new_codec(config)?));
+            } else {
+                tokio::spawn(template::relay_tcp(inbound, new_codec(config)?));
+            }
         }
     }
     Ok(())
+}
+
+async fn startup_websocket<I, C>(inbound: I, codec: C)
+where
+    I: AsyncRead + AsyncWrite + Unpin,
+    C: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = template::Message, Error = anyhow::Error>,
+{
+    match ServerBuilder::new().accept(inbound).await {
+        Ok(inbound) => template::relay_websocket(inbound, codec).await,
+        Err(e) => error!("[tcp] websocket handshake failed; error={}", e),
+    }
 }
