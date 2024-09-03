@@ -67,12 +67,18 @@ impl ServerAeadCodec {
         match header.command {
             RequestCommand::TCP => {
                 if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::Connect(msg, header.address.clone())))
+                    Ok(Some(Message::ConnectTcp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
             }
-            RequestCommand::UDP => todo!(),
+            RequestCommand::UDP => {
+                if let Some(msg) = decoder.decode_packet(src, session).map_err(|e| anyhow!(e))? {
+                    Ok(Some(Message::RelayUdp(msg, header.address.clone())))
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 
@@ -90,7 +96,13 @@ impl ServerAeadCodec {
                     Ok(None)
                 }
             }
-            RequestCommand::UDP => todo!(),
+            RequestCommand::UDP => {
+                if let Some(msg) = decoder.decode_packet(src, session).map_err(|e| anyhow!(e))? {
+                    Ok(Some(Message::RelayUdp(msg, header.address.clone())))
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 }
@@ -176,7 +188,13 @@ impl Decoder for ServerAeadCodec {
                     bail!("no matched authID")
                 }
             }
-            DecodeState::Ready(ref mut header, ref mut session, ref mut decoder) => Self::decode_body(src, header, session, decoder),
+            DecodeState::Ready(ref mut header, ref mut session, ref mut decoder) => {
+                if src.is_empty() {
+                    Ok(None)
+                } else {
+                    Self::decode_body(src, header, session, decoder)
+                }
+            }
         }
     }
 }

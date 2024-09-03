@@ -7,6 +7,7 @@ use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
 
+mod handshake;
 mod shadowsocks;
 mod template;
 mod trojan;

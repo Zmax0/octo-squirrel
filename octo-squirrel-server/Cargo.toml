@@ -20,4 +20,5 @@ tokio-native-tls = "0.3.1"
 tokio-stream = "0.1.15"
 tokio-util = { version = "0.7.11", features = ["codec", "net"] }
 tokio-websockets = { version = "0.9.0", features = ["server", "native-tls", "sha1_smol"] }
+#tokio-tungstenite = "*"
 uuid = { version = "1.10.0", features = ["v4"] }

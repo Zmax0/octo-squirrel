@@ -60,7 +60,7 @@ impl Decoder for ServerCodec {
                 if matches!(command, Socks5CommandType::Connect) {
                     self.state = CodecState::Tcp;
                     let remaining = src.remaining();
-                    Ok(Some(Message::Connect(src.split_off(remaining), peer_addr)))
+                    Ok(Some(Message::ConnectTcp(src.split_to(remaining), peer_addr)))
                 } else {
                     bail!("unsupported command type: {:?}", command)
                 }

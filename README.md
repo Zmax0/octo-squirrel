@@ -3,29 +3,42 @@
 A network tool for improved privacy and security.
 
 ## Feature
+
 ### Local
+
 - socks5
 - http
 - https
 
 ### Transport
-|               | Shadowsocks | VMess | Trojan |
-|:--------------|:-----------:|:-----:|:------:|
-| tcp           |      ✔      |   ✔   |   ✔    |
-| udp           |      ✔      |   ✔   |   ✔    |
+
+| local-peer | client-server | Shadowsocks | VMess | Trojan |
+|:----------:|:-------------:|:-----------:|:-----:|:------:|
+|   `tcp`    |     `tcp`     |      ✔      |   ✔   |   ✔    |
+|   `tcp`    |     `tls`     |      ✔      |   ✔   |   ✔    |
+|   `tcp`    |     `ws`      |      ✔      |   ✔   |   ✔    |
+|   `tcp`    |     `wss`     |      ✔      |   ✔   |   ✔    |
+|   `udp`    |     `udp`     |      ✔      |       |        |
+|   `udp`    |     `tcp`     |             |   ✔   |   ✔    |
+|   `udp`    |     `tls`     |             |   ✔   |   ✔    |
+|   `udp`    |     `ws`      |             |       |        |
+|   `udp`    |     `wss`     |             |       |        |
 
 ### Ciphers
+
 |                         | Shadowsocks |  VMess  |
 |:------------------------|:-----------:|:-------:|
-| aes-128-gcm             |     `C`     |   `C`   |
-| aes-256-gcm             |     `C`     |         |
-| chacha20-poly1305       |     `C`     |   `C`   |
-| 2022-blake3-aes-128-gcm |     `C`     |         |
-| 2022-blake3-aes-256-gcm |     `C`     |         |
+| aes-128-gcm             |   `C` `S`   | `C` `S` |
+| aes-256-gcm             |   `C` `S`   |         |
+| chacha20-poly1305       |   `C` `S`   | `C` `S` |
+| 2022-blake3-aes-128-gcm |   `C` `S`   |         |
+| 2022-blake3-aes-256-gcm |   `C` `S`   |         |
 
 `C` for client
+`S` for server
 
 ## How to run
+
 1. put config.json file before running
 
     ```json
@@ -50,21 +63,21 @@ A network tool for improved privacy and security.
     }
     ```
 
-    > port: which port client will be listening on
+   > port: which port client will be listening on
 
-    > index: `servers[index]` will be the client config
+   > index: `servers[index]` will be the client config
 
-    > protocol: "shadowsocks" | "vmess" | "trojan"
+   > protocol: "shadowsocks" | "vmess" | "trojan"
 
-    > cipher: see Ciphers
+   > cipher: see Ciphers
 
-    > networks: see Transmission
+   > networks: see Transmission
 
-    > ssl: (OPTIONAL) SSL specific configurations
+   > ssl: (OPTIONAL) SSL specific configurations
 
-    > > certificateFile: certificate file
+   > > certificateFile: certificate file
 
-    > > serverName: the Server Name Indication field in the SSL handshake.
+   > > serverName: the Server Name Indication field in the SSL handshake.
 
 2. running command
 

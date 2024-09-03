@@ -6,6 +6,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use anyhow::bail;
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::lock::BiLock;
@@ -41,7 +42,7 @@ use tokio_util::udp::UdpFramed;
 use tokio_websockets::ClientBuilder;
 use tokio_websockets::Message;
 
-mod handshake;
+use super::handshake;
 
 pub async fn transfer_tcp<NewCodec, Codec>(listener: TcpListener, config: &ServerConfig, new_codec: NewCodec)
 where
@@ -77,50 +78,44 @@ where
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static,
 {
     let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-    info!("[tcp] connect {}, target={}; {}={}", &config.protocol, &request, &src, outbound.peer_addr()?);
-    if let Some(ssl_config) = &config.ssl {
-        let pem = fs::read(ssl_config.certificate_file.as_str())?;
-        let cert = Certificate::from_pem(&pem)?;
-        let tls_connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-        match tls_connector.connect(ssl_config.server_name.as_str(), outbound).await {
-            Ok(outbound) => relay_tcp(inbound, outbound, config, request, new_codec).await?,
-            Err(e) => error!("[tcp] tls handshake failed: {}", e),
-        }
-    } else {
-        relay_tcp(inbound, outbound, config, request, new_codec).await?
-    }
-    Ok(())
-}
-
-#[inline]
-async fn relay_tcp<Outbound, NewCodec, Codec>(
-    inbound: TcpStream,
-    outbound: Outbound,
-    config: &ServerConfig,
-    request: Address,
-    new_codec: NewCodec,
-) -> Result<(), anyhow::Error>
-where
-    NewCodec: FnOnce(Address, &ServerConfig) -> Result<Codec> + Copy,
-    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static,
-    Outbound: AsyncWrite + AsyncRead + Unpin + Send + 'static,
-{
-    if let Some(websocket_config) = &config.ws {
-        let mut builder = ClientBuilder::new();
-        builder = builder.uri(&format!("ws://{}:{}{}", config.host, config.port, &websocket_config.path))?;
-        for (k, v) in websocket_config.header.iter() {
-            builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?);
-        }
-        match builder.connect_on(outbound).await {
-            Ok((outbound, _)) => {
-                relay_websocket(inbound, outbound, new_codec(request, config)?).await?;
+    info!("[tcp] connect {}, peer={}, local={}", &config.protocol, &request, &src);
+    match (&config.ssl, &config.ws) {
+        (None, None) => relay_plain(inbound, outbound, new_codec(request, config)?).await,
+        (None, Some(ws_config)) => {
+            let mut builder = ClientBuilder::new().uri(&format!("ws://{}:{}{}", config.host, config.port, &ws_config.path))?;
+            for (k, v) in ws_config.header.iter() {
+                builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?);
             }
-            Err(e) => error!("[tcp] websocket handshake failed: {}", e),
-        };
-    } else {
-        relay0(inbound, outbound, new_codec(request, config)?).await?;
+            match builder.connect_on(outbound).await {
+                Ok((outbound, _)) => relay_websocket(inbound, outbound, new_codec(request, config)?).await,
+                Err(e) => bail!("[tcp] websocket handshake failed: {}", e),
+            }
+        }
+        (Some(ssl_config), ws_config) => {
+            let pem = fs::read(ssl_config.certificate_file.as_str())?;
+            let cert = Certificate::from_pem(&pem)?;
+            let connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
+            match ws_config {
+                None => match connector.connect(ssl_config.server_name.as_str(), outbound).await {
+                    Ok(outbound) => relay_plain(inbound, outbound, new_codec(request, config)?).await,
+                    Err(e) => bail!("[tcp] tls handshake failed: {}", e),
+                },
+                Some(ws_config) => {
+                    let mut builder = ClientBuilder::new().uri(&format!("ws://{}:{}{}", config.host, config.port, &ws_config.path))?;
+                    for (k, v) in ws_config.header.iter() {
+                        builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?);
+                    }
+                    match tokio_websockets::Connector::NativeTls(connector).wrap(ssl_config.server_name.as_str(), outbound).await {
+                        Ok(outbound) => match builder.connect_on(outbound).await {
+                            Ok((outbound, _)) => relay_websocket(inbound, outbound, new_codec(request, config)?).await,
+                            Err(e) => bail!("[tcp] websocket handshake failed: {}", e),
+                        },
+                        Err(e) => bail!("[tcp] tls handshake failed: {}", e),
+                    }
+                }
+            }
+        }
     }
-    Ok(())
 }
 
 async fn relay_websocket<I, O, C>(inbound: I, outbound: O, mut codec: C) -> Result<(), anyhow::Error>
@@ -139,7 +134,7 @@ where
                 inbound_sink.send(msg).await?;
             }
         }
-        Err::<(), _>(anyhow!("server-client closed"))
+        Err::<(), _>(anyhow!("server is closed"))
     };
 
     let local_to_client = async {
@@ -148,7 +143,7 @@ where
             codec1.lock().await.encode(item, &mut dst)?;
             outbound_sink.send(Message::binary::<BytesMut>(dst)).await?;
         }
-        Err::<(), _>(anyhow!("local-client closed"))
+        Err::<(), _>(anyhow!("local is closed"))
     };
     if let Err(e) = tokio::try_join!(local_to_client, server_to_client) {
         info!("[tcp] relay completed: {}", e)
@@ -156,7 +151,7 @@ where
     Ok(())
 }
 
-async fn relay0<I, O, C>(inbound: I, outbound: O, codec: C) -> Result<(), anyhow::Error>
+async fn relay_plain<I, O, C>(inbound: I, outbound: O, codec: C) -> Result<(), anyhow::Error>
 where
     I: AsyncRead + AsyncWrite,
     O: AsyncRead + AsyncWrite,

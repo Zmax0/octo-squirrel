@@ -105,7 +105,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for PayloadCodec<N, CM>
             State::Header => {
                 if let (Some(dst), Some(addr)) = (self.cipher.decode(&mut self.session, src)?, self.session.address.as_ref()) {
                     self.state = State::Body;
-                    Ok(Some(Message::Connect(dst, addr.clone())))
+                    Ok(Some(Message::ConnectTcp(dst, addr.clone())))
                 } else {
                     Ok(None)
                 }

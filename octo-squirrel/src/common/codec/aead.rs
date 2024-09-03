@@ -141,6 +141,19 @@ impl CipherKind {
     }
 }
 
+impl Display for CipherKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CipherKind::Aes128Gcm => write!(f, "aes-128-gcm"),
+            CipherKind::Aes256Gcm => write!(f, "aes-256-gcm"),
+            CipherKind::ChaCha20Poly1305 => write!(f, "chacha20-poly1305"),
+            CipherKind::Aead2022Blake3Aes128Gcm => write!(f, "2022-blake3-aes-128-gcm"),
+            CipherKind::Aead2022Blake3Aes256Gcm => write!(f, "2022-blake3-aes-256-gcm"),
+            CipherKind::Unknown => write!(f, "?"),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub enum PaddingLengthGenerator {
     Empty,
