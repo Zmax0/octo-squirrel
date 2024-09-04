@@ -1,9 +1,11 @@
+use anyhow::anyhow;
 use anyhow::bail;
 use byte_string::ByteStr;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use digest::InvalidLength;
 use log::trace;
 
 use super::now;
@@ -23,7 +25,12 @@ use crate::common::crypto::Aes256EcbNoPadding;
 use crate::common::manager::shadowsocks::ServerUserManager;
 use crate::common::protocol::shadowsocks::Mode;
 
-pub(crate) fn new_header<CM>(auth: &mut Authenticator<CM>, msg: &mut BytesMut, stream_type: &Mode, request_salt: Option<&[u8]>) -> (Bytes, Bytes)
+pub fn new_header<CM>(
+    auth: &mut Authenticator<CM>,
+    msg: &mut BytesMut,
+    stream_type: &Mode,
+    request_salt: Option<&[u8]>,
+) -> anyhow::Result<(Bytes, Bytes)>
 where
     CM: CipherMethod + KeyInit,
 {
@@ -33,64 +40,69 @@ where
     }
     let mut fixed = BytesMut::with_capacity(1 + 8 + salt_len + 2);
     fixed.put_u8(stream_type.to_u8());
-    fixed.put_u64(now());
+    fixed.put_u64(now()?);
     if let Some(request_salt) = request_salt {
         fixed.put_slice(request_salt);
     }
     let len = msg.remaining().min(0xffff);
     let mut via = msg.split_to(len);
     fixed.put_u16(len as u16);
-    auth.seal(&mut fixed);
-    auth.seal(&mut via);
-    (fixed.freeze(), via.freeze())
+    auth.seal(&mut fixed).map_err(|e| anyhow!(e))?;
+    auth.seal(&mut via).map_err(|e| anyhow!(e))?;
+    Ok((fixed.freeze(), via.freeze()))
 }
 
-pub(crate) fn session_sub_key(key: &[u8], salt: &[u8]) -> [u8; 32] {
+pub fn session_sub_key(key: &[u8], salt: &[u8]) -> [u8; 32] {
     super::session_sub_key(key, salt)
 }
 
-pub(crate) fn new_encoder<const N: usize, CM>(key: &[u8], salt: &[u8]) -> ChunkEncoder<CM>
+pub fn new_encoder<const N: usize, CM>(key: &[u8], salt: &[u8]) -> Result<ChunkEncoder<CM>, InvalidLength>
 where
     CM: CipherMethod + KeyInit,
 {
     let key = session_sub_key(key, salt);
-    let auth = Authenticator::new(CM::init(&key[..N]), NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
-    ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth)
+    let auth = Authenticator::new(CM::init(&key[..N])?, NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
+    Ok(ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth))
 }
 
-pub(crate) fn new_decoder<const N: usize, CM>(key: &[u8], salt: &[u8]) -> ChunkDecoder<CM>
+pub fn new_decoder<const N: usize, CM>(key: &[u8], salt: &[u8]) -> Result<ChunkDecoder<CM>, InvalidLength>
 where
     CM: CipherMethod + KeyInit,
 {
     let key = session_sub_key(key, salt);
-    let auth = Authenticator::new(CM::init(&key[..N]), NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
-    ChunkDecoder::new(auth, ChunkSizeParser::Auth)
+    let auth = Authenticator::new(CM::init(&key[..N])?, NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
+    Ok(ChunkDecoder::new(auth, ChunkSizeParser::Auth))
 }
 
-pub(crate) fn new_decoder_with_eih<const N: usize, CM>(
+pub fn new_decoder_with_eih<const N: usize, CM>(
+    kind: &CipherKind,
     key: &[u8],
     salt: &[u8],
     mut user_hash: [u8; 16],
     identity: &mut Identity<N>,
     user_manager: &ServerUserManager<N>,
-) -> anyhow::Result<ChunkDecoder<CM>>
+) -> Result<ChunkDecoder<CM>, anyhow::Error>
 where
     CM: CipherMethod + KeyInit,
 {
     let identity_sub_key = blake3::derive_key("shadowsocks 2022 identity subkey", &[key, salt].concat());
     let eih = user_hash;
-    Aes128EcbNoPadding::decrypt(&identity_sub_key, &mut user_hash);
-    trace!("server EIH {:?}, hash: {:?}", eih, user_hash);
+    match kind {
+        CipherKind::Aead2022Blake3Aes128Gcm => Aes128EcbNoPadding::decrypt(&identity_sub_key, &mut user_hash),
+        CipherKind::Aead2022Blake3Aes256Gcm => Aes256EcbNoPadding::decrypt(&identity_sub_key, &mut user_hash),
+        _ => unreachable!("{:?} doesn't support EIH", kind),
+    }
+    trace!("server EIH {:?}, hash: {:?}", ByteStr::new(&eih), ByteStr::new(&user_hash));
     if let Some(user) = user_manager.get_user_by_hash(&user_hash) {
         trace!("{} chosen by EIH", user);
         identity.user = Some(user.clone());
-        Ok(new_decoder::<N, CM>(&user.key, salt))
+        new_decoder::<N, CM>(&user.key, salt).map_err(|e| anyhow!(e))
     } else {
-        bail!("invalid client user identity {:?}", user_hash)
+        bail!("invalid client user identity {:?}", ByteStr::new(&user_hash))
     }
 }
 
-pub(crate) fn with_eih<const N: usize>(kind: &CipherKind, keys: &Keys<N>, salt: &[u8], dst: &mut BytesMut) {
+pub fn with_eih<const N: usize>(kind: &CipherKind, keys: &Keys<N>, salt: &[u8], dst: &mut BytesMut) {
     let mut sub_key: Option<[u8; blake3::OUT_LEN]> = None;
     for ipsk in keys.identity_keys.iter() {
         if let Some(sub_key) = sub_key {

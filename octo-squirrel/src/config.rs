@@ -18,6 +18,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub password: String,
+    #[serde(default)]
     pub cipher: CipherKind,
     pub protocol: Protocols,
     pub remark: String,
@@ -30,6 +31,9 @@ pub struct ServerConfig {
     pub ssl: Option<SslConfig>,
     #[serde(default)]
     pub ws: Option<WebSocketConfig>,
+    #[cfg(feature = "server")]
+    #[serde(default)]
+    pub user: Vec<User>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,10 +70,25 @@ pub struct WebSocketConfig {
     pub path: String,
 }
 
-pub fn init() -> Result<ClientConfig, io::Error> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub name: String,
+    pub password: String,
+}
+
+#[cfg(feature = "client")]
+pub fn init_client() -> Result<ClientConfig, io::Error> {
     let path = args().nth(1).unwrap_or("config.json".to_owned());
-    let file = File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg or put the file (named 'config.json') into the same folder", &path));
+    let file = File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path));
     let config: ClientConfig = serde_json::from_reader(BufReader::new(file))?;
+    Ok(config)
+}
+
+#[cfg(feature = "server")]
+pub fn init_server() -> Result<Vec<ServerConfig>, io::Error> {
+    let path = args().nth(1).unwrap_or("config.json".to_owned());
+    let file = File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path));
+    let config: Vec<ServerConfig> = serde_json::from_reader(BufReader::new(file))?;
     Ok(config)
 }
 

@@ -1,10 +1,24 @@
 use std::fmt::Display;
+use std::io;
 use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
+use std::vec;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Address {
     Domain(String, u16),
     Socket(SocketAddr),
+}
+
+impl Address {
+    pub fn to_socket_addr(&self) -> io::Result<SocketAddr> {
+        match self {
+            Address::Domain(host, port) => {
+                format!("{host}:{port}").to_socket_addrs()?.next().ok_or(io::Error::new(io::ErrorKind::AddrNotAvailable, ""))
+            }
+            Address::Socket(addr) => Ok(*addr),
+        }
+    }
 }
 
 impl From<SocketAddr> for Address {
@@ -13,11 +27,13 @@ impl From<SocketAddr> for Address {
     }
 }
 
-impl From<Address> for SocketAddr {
-    fn from(value: Address) -> Self {
-        match value {
-            Address::Domain(host, port) => format!("{}:{}", host, port).parse().unwrap(),
-            Address::Socket(addr) => addr,
+impl ToSocketAddrs for Address {
+    type Iter = vec::IntoIter<SocketAddr>;
+
+    fn to_socket_addrs(&self) -> io::Result<Self::Iter> {
+        match self {
+            Address::Domain(host, port) => format!("{host}:{port}").to_socket_addrs(),
+            Address::Socket(addr) => Ok(vec![*addr].into_iter()),
         }
     }
 }

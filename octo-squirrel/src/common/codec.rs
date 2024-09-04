@@ -10,6 +10,8 @@ use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use super::protocol::address::Address;
+
 pub struct BytesCodec;
 
 impl Decoder for BytesCodec {
@@ -45,3 +47,5 @@ impl Encoder<BytesMut> for BytesCodec {
         Ok(())
     }
 }
+
+pub type DatagramPacket = (BytesMut, Address);

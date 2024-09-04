@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::mem::size_of;
 
+use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Result;
 use bytes::Buf;
@@ -24,7 +25,7 @@ use rand::Rng;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-pub(super) struct ClientAEADCodec {
+pub struct ClientAEADCodec {
     header: RequestHeader,
     session: ClientSession,
     body_encoder: Option<AEADBodyCodec>,
@@ -58,13 +59,13 @@ impl Encoder<BytesMut> for ClientAEADCodec {
             AddressCodec::write_address_port(&self.header.address, &mut header)?; // address
             header.put_slice(&Dice::roll_bytes(padding_len as usize)); // padding
             header.put_u32(FNV::fnv1a32(&header));
-            dst.put(&Encrypt::seal_header(&self.header.id, header.freeze())[..]);
-            self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &mut self.session));
+            dst.put(&Encrypt::seal_header(&self.header.id, header.freeze())?[..]);
+            self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &mut self.session)?);
         }
         if self.header.command == RequestCommand::UDP {
-            self.body_encoder.as_mut().unwrap().encode_packet(item, dst, &mut self.session);
+            self.body_encoder.as_mut().unwrap().encode_packet(item, dst, &mut self.session).map_err(|e| anyhow!(e))?;
         } else {
-            self.body_encoder.as_mut().unwrap().encode_payload(item, dst, &mut self.session);
+            self.body_encoder.as_mut().unwrap().encode_payload(item, dst, &mut self.session).map_err(|e| anyhow!(e))?;
         }
         Ok(())
     }
@@ -80,7 +81,8 @@ impl Decoder for ClientAEADCodec {
             return Ok(None);
         }
         if self.body_decoder.is_none() {
-            let header_length_cipher = Aes128GcmCipher::new(&KDF::kdf16(&self.session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_LEN_KEY]));
+            let header_length_cipher =
+                Aes128GcmCipher::new_from_slice(&KDF::kdf16(&self.session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_LEN_KEY]))?;
             if src.remaining() < size_of::<u16>() + header_length_cipher.tag_size() {
                 return Ok(None);
             }
@@ -89,7 +91,7 @@ impl Decoder for ClientAEADCodec {
             let mut cursor = Cursor::new(src);
             let header_length_bytes = cursor.copy_to_bytes(size_of::<u16>() + header_length_cipher.tag_size());
             let mut header_length_bytes = BytesMut::from(&header_length_bytes[..]);
-            header_length_cipher.decrypt_in_place(&header_length_iv, b"", &mut header_length_bytes);
+            header_length_cipher.decrypt_in_place(&header_length_iv, b"", &mut header_length_bytes).map_err(|e| anyhow!(e))?;
             let header_length = header_length_bytes.get_u16() as usize;
             if cursor.remaining() < header_length + header_length_cipher.tag_size() {
                 info!(
@@ -102,24 +104,25 @@ impl Decoder for ClientAEADCodec {
             let position = cursor.position();
             src = cursor.into_inner();
             src.advance(position as usize);
-            let header_cipher = Aes128GcmCipher::new(&KDF::kdf16(&self.session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]));
+            let header_cipher =
+                Aes128GcmCipher::new_from_slice(&KDF::kdf16(&self.session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]))?;
             let header_iv: [u8; Aes128GcmCipher::NONCE_SIZE] = KDF::kdfn(&self.session.response_body_iv, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
             let mut header_bytes = src.split_to(header_length + header_length_cipher.tag_size());
-            header_cipher.decrypt_in_place(&header_iv, b"", &mut header_bytes);
+            header_cipher.decrypt_in_place(&header_iv, b"", &mut header_bytes).map_err(|e| anyhow!(e))?;
             if self.session.response_header != header_bytes[0] {
                 bail!("Unexpected response header: expecting {} but actually {}", self.session.response_header, header_bytes[0]);
             }
-            self.body_decoder = Some(AEADBodyCodec::decoder(&self.header, &mut self.session));
+            self.body_decoder = Some(AEADBodyCodec::decoder(&self.header, &mut self.session)?);
         }
         return if self.header.command == RequestCommand::UDP {
-            self.body_decoder.as_mut().unwrap().decode_packet(src, &mut self.session)
+            self.body_decoder.as_mut().unwrap().decode_packet(src, &mut self.session).map_err(|e| anyhow!(e))
         } else {
-            self.body_decoder.as_mut().unwrap().decode_payload(src, &mut self.session)
+            self.body_decoder.as_mut().unwrap().decode_payload(src, &mut self.session).map_err(|e| anyhow!(e))
         };
     }
 }
 
-pub(super) mod tcp {
+pub mod tcp {
     use octo_squirrel::common::codec::aead::CipherKind;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::vmess::header::RequestCommand;
@@ -129,16 +132,15 @@ pub(super) mod tcp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_codec(addr: Address, config: &ServerConfig) -> ClientAEADCodec {
+    pub fn new_codec(addr: Address, config: &ServerConfig) -> anyhow::Result<ClientAEADCodec> {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::TCP, security, addr, config.password.clone());
-        ClientAEADCodec::new(header)
+        let header = RequestHeader::default(RequestCommand::TCP, security, addr, &config.password)?;
+        Ok(ClientAEADCodec::new(header))
     }
 }
 
-pub(super) mod udp {
+pub mod udp {
     use std::net::SocketAddr;
-    use std::net::ToSocketAddrs;
 
     use anyhow::Result;
     use bytes::BytesMut;
@@ -146,7 +148,7 @@ pub(super) mod udp {
     use futures::stream::SplitStream;
     use futures::StreamExt;
     use octo_squirrel::common::codec::aead::CipherKind;
-    use octo_squirrel::common::network::DatagramPacket;
+    use octo_squirrel::common::codec::DatagramPacket;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::vmess::header::RequestCommand;
     use octo_squirrel::common::protocol::vmess::header::RequestHeader;
@@ -157,27 +159,27 @@ pub(super) mod udp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_key(sender: SocketAddr, recipient: SocketAddr) -> (SocketAddr, SocketAddr) {
-        (sender, recipient)
+    pub fn new_key(sender: SocketAddr, target: &Address) -> (SocketAddr, String) {
+        (sender, target.to_string())
     }
 
     pub async fn new_outbound(
-        recipient: Address,
+        server_addr: SocketAddr,
+        target: &Address,
         config: &ServerConfig,
     ) -> Result<(SplitSink<Framed<TcpStream, ClientAEADCodec>, BytesMut>, SplitStream<Framed<TcpStream, ClientAEADCodec>>)> {
-        let proxy = format!("{}:{}", config.host, config.port).to_socket_addrs().unwrap().last().unwrap();
-        let outbound = TcpStream::connect(proxy).await?;
+        let outbound = TcpStream::connect(server_addr).await?;
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::UDP, security, recipient, config.password.clone());
+        let header = RequestHeader::default(RequestCommand::UDP, security, target.clone(), &config.password)?;
         let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
         Ok(outbound.split())
     }
 
-    pub fn to_outbound_send(item: ((BytesMut, SocketAddr), SocketAddr), _: SocketAddr) -> BytesMut {
-        item.0 .0
+    pub fn to_outbound_send(item: (BytesMut, &Address), _: SocketAddr) -> BytesMut {
+        item.0
     }
 
-    pub fn to_inbound_recv(item: BytesMut, recipient: SocketAddr, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        ((item, recipient), sender)
+    pub fn to_inbound_recv(item: BytesMut, recipient: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+        ((item, recipient.clone()), sender)
     }
 }

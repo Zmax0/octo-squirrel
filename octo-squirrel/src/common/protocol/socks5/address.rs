@@ -60,7 +60,7 @@ impl AddressCodec {
                 let len = src.get_u8();
                 let host_bytes = src.copy_to_bytes(len as usize);
                 let port = src.get_u16();
-                Ok(Address::Domain(String::from_utf8(host_bytes.to_vec()).unwrap().parse().unwrap(), port))
+                Ok(Address::Domain(String::from_utf8(host_bytes.to_vec())?.parse()?, port))
             }
             Socks5AddressType::Ipv6 => {
                 let ip_v6 = Ipv6Addr::from(src.get_u128());
@@ -76,6 +76,14 @@ impl AddressCodec {
                 SocketAddr::V4(_) => 1 + 4 + 2,
                 SocketAddr::V6(_) => 1 + 8 * 2 + 2,
             },
+        }
+    }
+
+    pub fn try_decode_at(src: &BytesMut, at: usize) -> Result<usize> {
+        match Socks5AddressType::new(src[at])? {
+            Socks5AddressType::Ipv4 => Ok(1 + 4 + 2),
+            Socks5AddressType::Domain => Ok(1 + 1 + src[at + 1] as usize + 2),
+            Socks5AddressType::Ipv6 => Ok(1 + 8 * 2 + 2),
         }
     }
 }

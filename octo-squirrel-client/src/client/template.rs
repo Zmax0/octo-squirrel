@@ -1,17 +1,14 @@
 use std::fmt::Debug;
 use std::fs;
 use std::future::Future;
-use std::hash::Hash;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use anyhow::bail;
 use anyhow::Result;
 use bytes::BytesMut;
-use dashmap::mapref::entry::Entry::Vacant;
-use dashmap::DashMap;
 use futures::lock::BiLock;
 use futures::stream::SplitSink;
 use futures::stream::SplitStream;
@@ -24,7 +21,8 @@ use http::HeaderValue;
 use log::debug;
 use log::error;
 use log::info;
-use octo_squirrel::common::network::DatagramPacket;
+use lru_time_cache::Entry;
+use lru_time_cache::LruCache;
 use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::config::ServerConfig;
@@ -34,7 +32,6 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tokio::time;
 use tokio_native_tls::native_tls;
 use tokio_native_tls::native_tls::Certificate;
 use tokio_native_tls::TlsConnector;
@@ -45,64 +42,80 @@ use tokio_util::udp::UdpFramed;
 use tokio_websockets::ClientBuilder;
 use tokio_websockets::Message;
 
-mod handshake;
+use super::handshake;
 
-pub async fn transfer_tcp<NewCodec, Codec>(listener: TcpListener, config: &ServerConfig, new_codec: NewCodec) -> Result<()>
+pub async fn transfer_tcp<NewCodec, Codec>(listener: TcpListener, config: &ServerConfig, new_codec: NewCodec)
 where
-    NewCodec: FnOnce(Address, &ServerConfig) -> Codec + Copy,
+    NewCodec: FnOnce(Address, &ServerConfig) -> Result<Codec> + Copy + Send + 'static,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static,
 {
     while let Ok((mut inbound, src)) = listener.accept().await {
-        let handshake = handshake::get_request_addr(&mut inbound).await;
-        if let Ok(request) = handshake {
-            let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
-            info!("[tcp] accept {}, target={}; {}={}", &config.protocol, &request, &src, outbound.peer_addr()?);
-            if let Some(ssl_config) = &config.ssl {
-                let pem = fs::read(ssl_config.certificate_file.as_str())?;
-                let cert = Certificate::from_pem(&pem)?;
-                let tls_connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-                match tls_connector.connect(ssl_config.server_name.as_str(), outbound).await {
-                    Ok(outbound) => relay_tcp(inbound, outbound, config, request, new_codec).await?,
-                    Err(e) => error!("[tcp] tls handshake failed: {}", e),
+        let config = config.clone();
+        tokio::spawn(async move {
+            let handshake = handshake::get_request_addr(&mut inbound).await;
+            if let Ok(request) = handshake {
+                if let Err(e) = try_transfer_tcp(inbound, src, request, &config, new_codec).await {
+                    error!("[tcp] transfer failed; error={}", e);
                 }
             } else {
-                relay_tcp(inbound, outbound, config, request, new_codec).await?
+                error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
             }
-        } else {
-            error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
-        }
+            Ok::<(), anyhow::Error>(())
+        });
     }
-    Ok(())
 }
 
-async fn relay_tcp<Outbound, NewCodec, Codec>(
+#[inline]
+async fn try_transfer_tcp<NewCodec, Codec>(
     inbound: TcpStream,
-    outbound: Outbound,
-    config: &ServerConfig,
+    src: SocketAddr,
     request: Address,
+    config: &ServerConfig,
     new_codec: NewCodec,
-) -> Result<(), anyhow::Error>
+) -> Result<()>
 where
-    NewCodec: FnOnce(Address, &ServerConfig) -> Codec + Copy,
+    NewCodec: FnOnce(Address, &ServerConfig) -> Result<Codec> + Copy,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static,
-    Outbound: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
-    if let Some(websocket_config) = &config.ws {
-        let mut builder = ClientBuilder::new();
-        builder = builder.uri(&format!("ws://{}:{}{}", config.host, config.port, &websocket_config.path))?;
-        for (k, v) in websocket_config.header.iter() {
-            builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?);
-        }
-        match builder.connect_on(outbound).await {
-            Ok((outbound, _)) => {
-                tokio::spawn(relay_websocket(inbound, outbound, new_codec(request, config)));
+    let outbound = TcpStream::connect(format!("{}:{}", config.host, config.port)).await?;
+    info!("[tcp] connect {}, peer={}, local={}", &config.protocol, &request, &src);
+    match (&config.ssl, &config.ws) {
+        (None, None) => relay_plain(inbound, outbound, new_codec(request, config)?).await,
+        (None, Some(ws_config)) => {
+            let mut builder = ClientBuilder::new().uri(&format!("ws://{}:{}{}", config.host, config.port, &ws_config.path))?;
+            for (k, v) in ws_config.header.iter() {
+                builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?);
             }
-            Err(e) => error!("[tcp] websocket handshake failed: {}", e),
-        };
-    } else {
-        tokio::spawn(relay0(inbound, outbound, new_codec(request, config)));
+            match builder.connect_on(outbound).await {
+                Ok((outbound, _)) => relay_websocket(inbound, outbound, new_codec(request, config)?).await,
+                Err(e) => bail!("[tcp] websocket handshake failed: {}", e),
+            }
+        }
+        (Some(ssl_config), ws_config) => {
+            let pem = fs::read(ssl_config.certificate_file.as_str())?;
+            let cert = Certificate::from_pem(&pem)?;
+            let connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
+            match ws_config {
+                None => match connector.connect(ssl_config.server_name.as_str(), outbound).await {
+                    Ok(outbound) => relay_plain(inbound, outbound, new_codec(request, config)?).await,
+                    Err(e) => bail!("[tcp] tls handshake failed: {}", e),
+                },
+                Some(ws_config) => {
+                    let mut builder = ClientBuilder::new().uri(&format!("ws://{}:{}{}", config.host, config.port, &ws_config.path))?;
+                    for (k, v) in ws_config.header.iter() {
+                        builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?);
+                    }
+                    match tokio_websockets::Connector::NativeTls(connector).wrap(ssl_config.server_name.as_str(), outbound).await {
+                        Ok(outbound) => match builder.connect_on(outbound).await {
+                            Ok((outbound, _)) => relay_websocket(inbound, outbound, new_codec(request, config)?).await,
+                            Err(e) => bail!("[tcp] websocket handshake failed: {}", e),
+                        },
+                        Err(e) => bail!("[tcp] tls handshake failed: {}", e),
+                    }
+                }
+            }
+        }
     }
-    Ok(())
 }
 
 async fn relay_websocket<I, O, C>(inbound: I, outbound: O, mut codec: C) -> Result<(), anyhow::Error>
@@ -121,22 +134,24 @@ where
                 inbound_sink.send(msg).await?;
             }
         }
-        Err::<(), _>(anyhow!("server-client is interrupted"))
+        Err::<(), _>(anyhow!("server is closed"))
     };
 
-    let client_to_server = async {
+    let local_to_client = async {
         while let Some(Ok(mut item)) = inbound_stream.next().await {
             let mut dst = item.split_off(item.len());
             codec1.lock().await.encode(item, &mut dst)?;
             outbound_sink.send(Message::binary::<BytesMut>(dst)).await?;
         }
-        Err::<(), _>(anyhow!("client-server is interrupted"))
+        Err::<(), _>(anyhow!("local is closed"))
     };
-    let _ = tokio::try_join!(client_to_server, server_to_client);
+    if let Err(e) = tokio::try_join!(local_to_client, server_to_client) {
+        info!("[tcp] relay completed: {}", e)
+    }
     Ok(())
 }
 
-async fn relay0<I, O, C>(inbound: I, outbound: O, codec: C) -> Result<(), anyhow::Error>
+async fn relay_plain<I, O, C>(inbound: I, outbound: O, codec: C) -> Result<(), anyhow::Error>
 where
     I: AsyncRead + AsyncWrite,
     O: AsyncRead + AsyncWrite,
@@ -161,14 +176,14 @@ where
     Ok(())
 }
 
-pub trait AsyncOutbound<Config, Sink, Stream, Item>: FnOnce(Address, Config) -> <Self as AsyncOutbound<Config, Sink, Stream, Item>>::Future {
-    type Future: Future<Output = <Self as AsyncOutbound<Config, Sink, Stream, Item>>::Output>;
+pub trait Async3<P1, P2, P3, G1, G2, G3>: FnOnce(P1, P2, P3) -> <Self as Async3<P1, P2, P3, G1, G2, G3>>::Future {
+    type Future: Future<Output = <Self as Async3<P1, P2, P3, G1, G2, G3>>::Output>;
     type Output;
 }
 
-impl<Config, Sink, Stream, Item, Fn, Res> AsyncOutbound<Config, Sink, Stream, Item> for Fn
+impl<P1, P2, P3, G1, G2, G3, Fn, Res> Async3<P1, P2, P3, G1, G2, G3> for Fn
 where
-    Fn: FnOnce(Address, Config) -> Res,
+    Fn: FnOnce(P1, P2, P3) -> Res,
     Res: Future,
 {
     type Future = Res;
@@ -187,56 +202,55 @@ where
     Item: Send + Sync + 'static,
     OutboundSink: Sink<Item, Error = anyhow::Error> + Send + 'static,
     OutboundStream: Stream<Item = Result<Item, anyhow::Error>> + Unpin + Send + 'static,
-    NewKey: FnOnce(SocketAddr, SocketAddr) -> Key + Copy,
-    Key: Hash + Eq + Debug + Copy + Send + Sync + 'static,
-    NewOutbound: for<'a> AsyncOutbound<
-            &'a ServerConfig,
+    NewKey: FnOnce(SocketAddr, &Address) -> Key + Copy,
+    Key: Ord + Debug + Clone + Send + Sync + 'static,
+    NewOutbound: for<'a, 'b> Async3<
+            SocketAddr,
+            &'a Address,
+            &'b ServerConfig,
             OutboundSink,
             OutboundStream,
             Item,
             Output = Result<(SplitSink<OutboundSink, Item>, SplitStream<OutboundStream>), anyhow::Error>,
         > + Copy,
-    ToOutboundSend: FnOnce((DatagramPacket, SocketAddr), SocketAddr) -> Item + Copy,
-    ToInboundRecv: FnOnce(Item, SocketAddr, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
+    ToOutboundSend: FnOnce((BytesMut, &Address), SocketAddr) -> Item + Copy,
+    ToInboundRecv: FnOnce(Item, &Address, SocketAddr) -> ((BytesMut, Address), SocketAddr) + Send + Copy + 'static,
 {
-    let (mut inbound_sink, mut inbound_stream) = UdpFramed::new(inbound, Socks5UdpCodec).split();
-    let outbound_map: Arc<DashMap<Key, SplitSink<OutboundSink, Item>>> = Arc::new(DashMap::new());
-    let (inbound_tx, mut inbound_rx) = mpsc::channel::<(DatagramPacket, SocketAddr)>(32);
+    let server_addr = Address::Domain(config.host.clone(), config.port).to_socket_addr()?;
+    // client->local|inbound, local->client|inbound
+    let (mut client_local, mut local_client) = UdpFramed::new(inbound, Socks5UdpCodec).split();
+    let mut client_server_cache = LruCache::with_expiry_duration_and_capacity(Duration::from_secs(600), 64);
+    let (client_local_tx, mut client_local_rx) = mpsc::channel::<((BytesMut, Address), SocketAddr)>(32);
+    // client->local|mpsc
     tokio::spawn(async move {
-        while let Some(item) = inbound_rx.recv().await {
-            inbound_sink.send(item).await.unwrap_or_else(|e| error!("[udp] failed to send inbound msg; {}", e));
+        while let Some(item) = client_local_rx.recv().await {
+            client_local.send(item).await.unwrap_or_else(|e| error!("[udp] failed to send inbound msg; error={}", e));
         }
     });
-    while let Some(Ok((inbound_recv, sender))) = inbound_stream.next().await {
-        let key = new_key(sender, inbound_recv.1);
-        if let Vacant(entry) = outbound_map.entry(key) {
+    // local->client|inbound
+    while let Some(Ok(((content, target), sender))) = local_client.next().await {
+        let key = new_key(sender, &target);
+        if let Entry::Vacant(entry) = client_server_cache.entry(key.clone()) {
+            let target = target.clone();
             debug!("[udp] new binding; key={:?}", key);
-            let (outbound_sink, mut outbound_stream) = new_outbound(inbound_recv.1.into(), config).await?;
-            entry.insert(outbound_sink);
-            let _inbound_tx = inbound_tx.clone();
-            let _outbound_map = outbound_map.clone();
-            let task = tokio::spawn(async move {
-                while let Some(Ok(outbound_recv)) = outbound_stream.next().await {
-                    _inbound_tx
-                        .send(to_inbound_recv(outbound_recv, inbound_recv.1, sender))
+            // client->server|outbound, server->client|outbound
+            let (client_server, mut server_client) = new_outbound(server_addr, &target, config).await?;
+            entry.insert(client_server);
+            let _client_local_tx = client_local_tx.clone();
+            let _key = key.clone();
+            tokio::spawn(async move {
+                // server->client|outbound
+                while let Some(Ok(outbound_recv)) = server_client.next().await {
+                    // client->local|mpsc
+                    _client_local_tx
+                        .send(to_inbound_recv(outbound_recv, &target, sender))
                         .await
                         .unwrap_or_else(|e| error!("[udp] failed to send inbound mpsc msg; {}", e));
                 }
-                if _outbound_map.remove(&key).is_some() {
-                    debug!("[udp] remove binding; key={:?}", key);
-                };
-            });
-            let _outbound_map = outbound_map.clone();
-            tokio::spawn(async move {
-                time::sleep(Duration::from_secs(20)).await;
-                task.abort();
-                if _outbound_map.remove(&key).is_some() {
-                    debug!("[udp] remove binding; key={:?}", key);
-                };
             });
         }
-        let proxy = format!("{}:{}", config.host, config.port).parse()?;
-        outbound_map.get_mut(&key).unwrap().send(to_outbound_send((inbound_recv, sender), proxy)).await?;
+        // client->server|outbound
+        client_server_cache.get_mut(&key).unwrap().send(to_outbound_send((content, &target), server_addr)).await?;
     }
     Ok(())
 }
