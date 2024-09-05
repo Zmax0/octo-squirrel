@@ -1,10 +1,10 @@
-use std::net::Ipv4Addr;
-use std::net::SocketAddrV4;
+use std::fs;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::BytesMut;
+use log::error;
 use octo_squirrel::common::codec::aead::Aes128GcmCipher;
 use octo_squirrel::common::codec::aead::Aes256GcmCipher;
 use octo_squirrel::common::codec::aead::CipherKind;
@@ -20,6 +20,8 @@ use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::shadowsocks::Mode;
 use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpListener;
+use tokio_native_tls::native_tls;
+use tokio_native_tls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
@@ -30,7 +32,7 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()>
 where
 {
     #[inline]
-    async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + 'static>(
+    async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'static>(
         config: &ServerConfig,
         mut user_manager: ServerUserManager<N>,
     ) -> anyhow::Result<()>
@@ -38,11 +40,38 @@ where {
         for user in config.user.iter() {
             user_manager.add_user(ServerUser::from_user(user).map_err(|e| anyhow!(e))?);
         }
-        let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
-        let listener = TcpListener::bind(listen_addr).await?;
+        let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
         let user_manager = Arc::new(user_manager);
-        while let Ok((inbound, _)) = listener.accept().await {
-            tokio::spawn(template::relay_tcp(inbound, new_codec::<N, CM>(config, user_manager.clone())?));
+        match (&config.ssl, &config.ws) {
+            (None, ws_config) => {
+                while let Ok((inbound, _)) = listener.accept().await {
+                    if ws_config.is_some() {
+                        tokio::spawn(template::accept_websocket(inbound, new_codec::<N, CM>(config, user_manager.clone())?));
+                    } else {
+                        tokio::spawn(template::relay_tcp(inbound, new_codec::<N, CM>(config, user_manager.clone())?));
+                    }
+                }
+            }
+            (Some(ssl_config), ws_config) => {
+                let pem = fs::read(ssl_config.certificate_file.as_str())?;
+                let key = fs::read(ssl_config.key_file.as_str())?;
+                let identity = native_tls::Identity::from_pkcs8(&pem, &key)?;
+                let tls_acceptor = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
+                while let Ok((inbound, _)) = listener.accept().await {
+                    let tls = tls_acceptor.clone();
+                    let codec = new_codec::<N, CM>(config, user_manager.clone())?;
+                    match tls.accept(inbound).await {
+                        Ok(inbound) => {
+                            if ws_config.is_some() {
+                                tokio::spawn(template::accept_websocket(inbound, new_codec::<N, CM>(config, user_manager.clone())?));
+                            } else {
+                                tokio::spawn(template::relay_tcp(inbound, codec));
+                            }
+                        }
+                        Err(e) => error!("[tcp] tls handshake failed: {}", e),
+                    }
+                }
+            }
         }
         Ok(())
     }

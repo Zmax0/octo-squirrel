@@ -5,14 +5,11 @@ use log::error;
 use log::info;
 use octo_squirrel::common::protocol::Protocols;
 use octo_squirrel::config::ServerConfig;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio_native_tls::native_tls;
 use tokio_native_tls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
-use tokio_websockets::ServerBuilder;
 
 mod shadowsocks;
 mod template;
@@ -32,14 +29,14 @@ pub async fn startup(config: ServerConfig) {
 async fn startup_tcp<NewCodec, Codec>(config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
 where
     NewCodec: FnOnce(&ServerConfig) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
-    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = template::Message, Error = anyhow::Error> + Send + 'static,
+    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = template::Message, Error = anyhow::Error> + Unpin + Send + 'static,
 {
     let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
     match (&config.ssl, &config.ws) {
         (None, ws_config) => {
             while let Ok((inbound, _)) = listener.accept().await {
                 if ws_config.is_some() {
-                    tokio::spawn(accept_websocket(inbound, new_codec(config)?));
+                    tokio::spawn(template::accept_websocket(inbound, new_codec(config)?));
                 } else {
                     tokio::spawn(template::relay_tcp(inbound, new_codec(config)?));
                 }
@@ -56,7 +53,7 @@ where
                 match tls.accept(inbound).await {
                     Ok(inbound) => {
                         if ws_config.is_some() {
-                            tokio::spawn(accept_websocket(inbound, new_codec(config)?));
+                            tokio::spawn(template::accept_websocket(inbound, new_codec(config)?));
                         } else {
                             tokio::spawn(template::relay_tcp(inbound, codec));
                         }
@@ -67,15 +64,4 @@ where
         }
     }
     Ok(())
-}
-
-async fn accept_websocket<I, C>(inbound: I, codec: C)
-where
-    I: AsyncRead + AsyncWrite + Unpin,
-    C: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = template::Message, Error = anyhow::Error> + Send + 'static,
-{
-    match ServerBuilder::new().accept(inbound).await {
-        Ok(inbound) => template::relay_websocket(inbound, codec).await,
-        Err(e) => error!("[tcp] websocket handshake failed; error={}", e),
-    }
 }

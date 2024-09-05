@@ -18,9 +18,10 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub password: String,
+    pub protocol: Protocols,
     #[serde(default)]
     pub cipher: CipherKind,
-    pub protocol: Protocols,
+    #[serde(default)]
     pub remark: String,
     #[serde(default)]
     pub transport: Vec<Transport>,

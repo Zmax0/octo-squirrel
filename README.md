@@ -19,10 +19,10 @@ A network tool for improved privacy and security.
 |   `tcp`    |     `ws`      |      ✔      |   ✔   |   ✔    |
 |   `tcp`    |     `wss`     |      ✔      |   ✔   |   ✔    |
 |   `udp`    |     `udp`     |      ✔      |       |        |
-|   `udp`    |     `tcp`     |             |   ✔   |   ✔    |
+|   `udp`    |     `tcp`     |             |   ✔   |        |
 |   `udp`    |     `tls`     |             |   ✔   |   ✔    |
-|   `udp`    |     `ws`      |             |       |        |
-|   `udp`    |     `wss`     |             |       |        |
+|   `udp`    |     `ws`      |             |   ✔   |        |
+|   `udp`    |     `wss`     |             |   ✔   |   ✔    |
 
 ### Ciphers
 
@@ -39,6 +39,7 @@ A network tool for improved privacy and security.
 ## How to run
 
 ### Client
+
 1. put config.json file before running
 
     ```json
@@ -69,27 +70,27 @@ A network tool for improved privacy and security.
     }
     ```
 
-    > port: which port client will be listening on
+   > port: which port client will be listening on
 
-    > index: `servers[index]` will be the client config
+   > index: `servers[index]` will be the client config
 
-    > protocol: "shadowsocks" | "vmess" | "trojan"
+   > protocol: "shadowsocks" | "vmess" | "trojan"
 
-    > cipher: see Ciphers
+   > cipher: see Ciphers
 
-    > networks: see Transmission
+   > networks: see Transmission
 
-    > ssl: (OPTIONAL) SSL specific configurations
+   > ssl: (OPTIONAL) SSL specific configurations
 
-    > > certificateFile: certificate file
+   > > certificateFile: certificate file
 
-    > > serverName: the Server Name Indication field in the SSL handshake.
+   > > serverName: the Server Name Indication field in the SSL handshake.
 
-    > ws: (OPTIONAL) WebSocket specific configurations
+   > ws: (OPTIONAL) WebSocket specific configurations
 
-    > > header: the header to be sent in HTTP request, should be key-value pairs in clear-text string format
+   > > header: the header to be sent in HTTP request, should be key-value pairs in clear-text string format
 
-    > > path: the HTTP path for the websocket request
+   > > path: the HTTP path for the websocket request
 
 2. running command
 

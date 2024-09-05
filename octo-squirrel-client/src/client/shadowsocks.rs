@@ -29,10 +29,10 @@ pub(super) mod tcp {
     use super::PayloadCodec;
 
     pub fn new_payload_codec<const N: usize, CM: CipherMethod + KeyInit>(
-        addr: Address,
+        addr: &Address,
         config: &ServerConfig,
     ) -> anyhow::Result<PayloadCodec<N, CM>> {
-        PayloadCodec::new(Arc::new(Context::default()), config, Mode::Client, Some(addr), None)
+        PayloadCodec::new(Arc::new(Context::default()), config, Mode::Client, Some(addr.clone()), None)
     }
 }
 
@@ -42,10 +42,8 @@ pub(super) mod udp {
     use std::net::SocketAddrV4;
 
     use anyhow::anyhow;
+    use anyhow::Result;
     use bytes::BytesMut;
-    use futures::stream::SplitSink;
-    use futures::stream::SplitStream;
-    use futures::StreamExt;
     use octo_squirrel::common::codec::aead::CipherMethod;
     use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
@@ -62,14 +60,11 @@ pub(super) mod udp {
         from
     }
 
-    pub async fn new_outbound<const N: usize, CM: CipherMethod + KeyInit>(
+    pub async fn new_plain_outbound<const N: usize, CM: CipherMethod + KeyInit>(
         _: SocketAddr,
         _: &Address,
         config: &ServerConfig,
-    ) -> Result<
-        (SplitSink<UdpFramed<DatagramPacketCodec<N, CM>>, (DatagramPacket, SocketAddr)>, SplitStream<UdpFramed<DatagramPacketCodec<N, CM>>>),
-        anyhow::Error,
-    > {
+    ) -> Result<UdpFramed<DatagramPacketCodec<N, CM>>> {
         let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
         let outbound_framed = UdpFramed::new(
             outbound,
@@ -78,7 +73,7 @@ pub(super) mod udp {
                 AEADCipherCodec::new(config.cipher, config.password.as_bytes()).map_err(|e| anyhow!(e))?,
             ),
         );
-        Ok(outbound_framed.split())
+        Ok(outbound_framed)
     }
 
     pub fn to_outbound_send(item: (BytesMut, &Address), proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
