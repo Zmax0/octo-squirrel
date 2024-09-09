@@ -1,7 +1,6 @@
 use anyhow::bail;
 use anyhow::Result;
 use bytes::Buf;
-use bytes::BufMut;
 use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
@@ -140,9 +139,9 @@ impl Encoder<(BytesMut, Address)> for Socks5UdpCodec {
     type Error = anyhow::Error;
 
     fn encode(&mut self, item: (BytesMut, Address), dst: &mut BytesMut) -> Result<(), Self::Error> {
-        dst.put_slice(&[0, 0, 0]); // Fragment
+        dst.extend_from_slice(&[0, 0, 0]); // Fragment
         AddressCodec::encode(&item.1, dst)?;
-        dst.put_slice(&item.0);
+        dst.extend_from_slice(&item.0);
         Ok(())
     }
 }

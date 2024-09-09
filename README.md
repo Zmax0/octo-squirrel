@@ -14,15 +14,17 @@ A network tool for improved privacy and security.
 
 | Local-Peer | Client-Server | Shadowsocks | VMess | Trojan |
 |:----------:|:-------------:|:-----------:|:-----:|:------:|
-|   `tcp`    |     `tcp`     |      ✔      |   ✔   |   ✔    |
-|   `tcp`    |     `tls`     |      ✔      |   ✔   |   ✔    |
-|   `tcp`    |     `ws`      |      ✔      |   ✔   |   ✔    |
-|   `tcp`    |     `wss`     |      ✔      |   ✔   |   ✔    |
-|   `udp`    |     `udp`     |      ✔      |       |        |
-|   `udp`    |     `tcp`     |             |   ✔   |        |
-|   `udp`    |     `tls`     |             |   ✔   |   ✔    |
-|   `udp`    |     `ws`      |             |   ✔   |        |
-|   `udp`    |     `wss`     |             |   ✔   |   ✔    |
+|   `tcp`    |     `tcp`     |     `✔`     |  `✔`  |  `✔`   |
+|   `tcp`    |     `tls`     |     `✔`     |  `✔`  |  `✔`   |
+|   `tcp`    |     `ws`      |     `✔`     |  `✔`  |  `✔`   |
+|   `tcp`    |     `wss`     |     `✔`     |  `✔`  |  `✔`   |
+|   `udp`    |     `udp`     |     `C`     |       |        |
+|   `udp`    |     `tcp`     |             |  `✔`  |        |
+|   `udp`    |     `tls`     |             |  `✔`  |  `✔`   |
+|   `udp`    |     `ws`      |             |  `✔`  |        |
+|   `udp`    |     `wss`     |             |  `✔`  |  `✔`   |
+
+`C` for client `S` for server `✔` for both
 
 ### Ciphers
 

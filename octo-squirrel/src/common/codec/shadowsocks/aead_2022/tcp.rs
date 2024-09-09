@@ -42,7 +42,7 @@ where
     fixed.put_u8(stream_type.to_u8());
     fixed.put_u64(now()?);
     if let Some(request_salt) = request_salt {
-        fixed.put_slice(request_salt);
+        fixed.extend_from_slice(request_salt);
     }
     let len = msg.remaining().min(0xffff);
     let mut via = msg.split_to(len);
@@ -127,7 +127,7 @@ fn make_eih(kind: &CipherKind, sub_key: &[u8], ipsk: &[u8], out: &mut BytesMut) 
         _ => unreachable!("{:?} doesn't support EIH", kind),
     }
     trace!("client EIH:{:?}, hash:{:?}", ByteStr::new(&ipsk_encrypt_text), ByteStr::new(ipsk_plain_text));
-    out.put_slice(&ipsk_encrypt_text);
+    out.extend_from_slice(&ipsk_encrypt_text);
 }
 
 #[cfg(test)]

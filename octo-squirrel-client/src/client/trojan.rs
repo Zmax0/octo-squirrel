@@ -46,11 +46,11 @@ pub(super) mod tcp {
 
         fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
             if matches!(self.status, CodecState::Header) {
-                dst.put_slice(&self.key);
-                dst.put_slice(&trojan::CR_LF);
+                dst.extend_from_slice(&self.key);
+                dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
                 AddressCodec::encode(&self.address, dst)?;
-                dst.put_slice(&trojan::CR_LF);
+                dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
             dst.put(item);
@@ -167,17 +167,17 @@ pub(super) mod udp {
 
         fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<(), Self::Error> {
             if matches!(self.status, CodecState::Header) {
-                dst.put_slice(&self.key);
-                dst.put_slice(&trojan::CR_LF);
+                dst.extend_from_slice(&self.key);
+                dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
                 AddressCodec::encode(&self.address, dst)?;
-                dst.put_slice(&trojan::CR_LF);
+                dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
             let buffer = &mut BytesMut::new();
             AddressCodec::encode(&item.1, buffer)?;
             buffer.put_u16(item.0.len() as u16);
-            buffer.put_slice(&trojan::CR_LF);
+            buffer.extend_from_slice(&trojan::CR_LF);
             buffer.put(item.0);
             dst.put(buffer);
             Ok(())

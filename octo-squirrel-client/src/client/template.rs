@@ -24,6 +24,8 @@ use octo_squirrel::common::codec::BytesCodec;
 use octo_squirrel::common::codec::WebSocketFramed;
 use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
+use octo_squirrel::common::relay;
+use octo_squirrel::common::relay::End;
 use octo_squirrel::config::ServerConfig;
 use octo_squirrel::config::SslConfig;
 use octo_squirrel::config::WebSocketConfig;
@@ -80,51 +82,51 @@ where
     info!("[tcp] connect {}, peer={}, local={}", &config.protocol, request, &src);
     let local_client = Framed::new(inbound, BytesCodec);
     let codec = new_codec(&request, config)?;
-    let addr = format!("{}:{}", config.host, config.port);
-    if let Err(e) = match (&config.ssl, &config.ws) {
+    let server_addr = format!("{}:{}", config.host, config.port);
+    let res = match (&config.ssl, &config.ws) {
         (None, None) => {
-            let outbound = TcpStream::connect(addr).await?;
+            let outbound = TcpStream::connect(&server_addr).await?;
             let client_server = codec.framed(outbound);
             relay_tcp(local_client, client_server).await
         }
         (None, Some(ws_config)) => {
-            let client_server = new_ws_outbound(addr, codec, ws_config).await?;
+            let client_server = new_ws_outbound(&server_addr, codec, ws_config).await?;
             relay_tcp(local_client, client_server).await
         }
         (Some(ssl_config), None) => {
-            let client_server = new_tls_outbound(addr, codec, ssl_config).await?;
+            let client_server = new_tls_outbound(&server_addr, codec, ssl_config).await?;
             relay_tcp(local_client, client_server).await
         }
         (Some(ssl_config), Some(ws_config)) => {
-            let client_server = new_wss_outbound(addr, codec, ssl_config, ws_config).await?;
+            let client_server = new_wss_outbound(&server_addr, codec, ssl_config, ws_config).await?;
             relay_tcp(local_client, client_server).await
         }
-    } {
-        info!("relay complete, peer={}, local={}, {}", request, &src, e)
-    }
+    };
+    info!("[tcp] relay complete, local={}, server={}, peer={}, {:?}", &src, &server_addr, request, res);
     Ok(())
 }
 
-async fn relay_tcp<I, O>(local_client: I, client_server: O) -> Result<((), ()), anyhow::Error>
+async fn relay_tcp<I, O>(local_client: I, client_server: O) -> relay::Result
 where
     I: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = anyhow::Result<BytesMut>>,
     O: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = anyhow::Result<BytesMut>>,
 {
     let (mut c_l, mut l_c) = local_client.split();
     let (mut c_s, mut s_c) = client_server.split();
-    let l_c_s = async {
-        while let Some(Ok(next)) = l_c.next().await {
-            c_s.send(next).await?;
+    tokio::select! {
+        res = c_s.send_all(&mut l_c) => {
+            match res {
+                Ok(_) => relay::Result::Close(End::Local, End::Client),
+                Err(e) => relay::Result::Err(End::Local, End::Client,e),
+            }
+        },
+        res = c_l.send_all(&mut s_c) => {
+            match res {
+                Ok(_) => relay::Result::Close(End::Server, End::Client),
+                Err(e) => relay::Result::Err(End::Server, End::Client, e),
+            }
         }
-        Err::<(), _>(anyhow!("local is close"))
-    };
-    let s_c_l = async {
-        while let Some(Ok(next)) = s_c.next().await {
-            c_l.send(next).await?;
-        }
-        Err::<(), _>(anyhow!("server is close"))
-    };
-    tokio::try_join!(l_c_s, s_c_l)
+    }
 }
 
 pub trait AsyncP3G2<P1, P2, P3, G1, G2>: std::ops::FnOnce(P1, P2, P3) -> <Self as AsyncP3G2<P1, P2, P3, G1, G2>>::Future {

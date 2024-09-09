@@ -21,7 +21,7 @@ impl AddressCodec {
                 dst.put_u8(Socks5AddressType::Domain as u8);
                 dst.put_u8(host.len() as u8);
                 if host.is_ascii() {
-                    dst.put_slice(host.as_bytes());
+                    dst.extend_from_slice(host.as_bytes());
                 } else {
                     for b in host.as_bytes() {
                         if b.is_ascii() {
@@ -36,12 +36,12 @@ impl AddressCodec {
             Address::Socket(socket_addr) => match socket_addr {
                 SocketAddr::V4(v4) => {
                     dst.put_u8(Socks5AddressType::Ipv4 as u8);
-                    dst.put_slice(&v4.ip().octets());
+                    dst.extend_from_slice(&v4.ip().octets());
                     dst.put_u16(v4.port());
                 }
                 SocketAddr::V6(v6) => {
                     dst.put_u8(Socks5AddressType::Ipv6 as u8);
-                    dst.put_slice(&v6.ip().octets());
+                    dst.extend_from_slice(&v6.ip().octets());
                     dst.put_u16(v6.port())
                 }
             },

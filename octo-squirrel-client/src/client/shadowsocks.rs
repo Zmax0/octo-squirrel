@@ -47,10 +47,10 @@ pub(super) mod udp {
     use octo_squirrel::common::codec::aead::CipherMethod;
     use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
+    use octo_squirrel::common::codec::shadowsocks::udp::Context;
     use octo_squirrel::common::codec::shadowsocks::udp::DatagramPacketCodec;
     use octo_squirrel::common::codec::DatagramPacket;
     use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::shadowsocks::udp::Context;
     use octo_squirrel::common::protocol::shadowsocks::Mode;
     use octo_squirrel::config::ServerConfig;
     use tokio::net::UdpSocket;
@@ -69,8 +69,8 @@ pub(super) mod udp {
         let outbound_framed = UdpFramed::new(
             outbound,
             DatagramPacketCodec::new(
-                Context::udp(Mode::Client, None),
-                AEADCipherCodec::new(config.cipher, config.password.as_bytes()).map_err(|e| anyhow!(e))?,
+                Context::new(Mode::Client, None, None),
+                AEADCipherCodec::new(config.cipher, &config.password).map_err(|e| anyhow!(e))?,
             ),
         );
         Ok(outbound_framed)

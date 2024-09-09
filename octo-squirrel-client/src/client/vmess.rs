@@ -50,8 +50,8 @@ impl Encoder<BytesMut> for ClientAEADCodec {
         if self.body_encoder.is_none() {
             let mut header = BytesMut::new();
             header.put_u8(VERSION);
-            header.put_slice(&self.session.request_body_iv);
-            header.put_slice(&self.session.request_body_key);
+            header.extend_from_slice(&self.session.request_body_iv);
+            header.extend_from_slice(&self.session.request_body_key);
             header.put_u8(self.session.response_header);
             header.put_u8(RequestOption::get_mask(&self.header.option)); // option mask
             let padding_len = rand::thread_rng().gen_range(0..16); // dice roll 16
@@ -60,7 +60,7 @@ impl Encoder<BytesMut> for ClientAEADCodec {
             header.put_u8(0);
             header.put_u8(self.header.command as u8);
             AddressCodec::write_address_port(&self.header.address, &mut header)?; // address
-            header.put_slice(&Dice::roll_bytes(padding_len as usize)); // padding
+            header.extend_from_slice(&Dice::roll_bytes(padding_len as usize)); // padding
             header.put_u32(FNV::fnv1a32(&header));
             dst.put(&Encrypt::seal_header(&self.header.id, header.freeze())?[..]);
             self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &mut self.session)?);

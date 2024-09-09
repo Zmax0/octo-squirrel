@@ -7,9 +7,9 @@ edition = "2021"
 
 [dependencies]
 octo-squirrel = { path = "../octo-squirrel" }
-tokio = { version = "1.39.3", features = ["full"] }
-tokio-stream = "0.1.15"
-tokio-util = { version = "0.7.11", features = ["codec", "net"] }
+tokio = { version = "1.40.0", features = ["full"] }
+tokio-stream = "0.1.16"
+tokio-util = { version = "0.7.12", features = ["codec", "net"] }
 futures = "0.3.30"
 log = "0.4.22"
 log4rs = "1.3.0"

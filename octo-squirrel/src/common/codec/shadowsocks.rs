@@ -89,7 +89,7 @@ impl<CM: CipherMethod + KeyInit> ChunkEncoder<CM> {
         let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.size_bytes());
         trace!("Encode payload; payload length={}", encrypted_size);
         let encrypted_size_bytes = self.encode_size(encrypted_size + tag_size)?;
-        dst.put_slice(&encrypted_size_bytes);
+        dst.extend_from_slice(&encrypted_size_bytes);
         let mut payload_bytes = src.split_to(encrypted_size);
         self.auth.seal(&mut payload_bytes)?;
         dst.put(payload_bytes);
@@ -136,9 +136,9 @@ impl<CM: CipherMethod + KeyInit> ChunkDecoder<CM> {
     }
 
     fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, ::aead::Error> {
-        let mut opened = src.split_off(0);
-        self.auth.open(&mut opened)?;
-        Ok(Some(opened))
+        let mut opening = src.split_off(0);
+        self.auth.open(&mut opening)?;
+        Ok(Some(opening))
     }
 
     fn decode_payload(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
