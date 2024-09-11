@@ -1,16 +1,26 @@
 use std::fs;
+use std::net::Ipv4Addr;
+use std::net::SocketAddr;
+use std::net::SocketAddrV4;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use anyhow::bail;
 use bytes::BytesMut;
+use futures::lock::BiLock;
+use futures::SinkExt;
+use futures::StreamExt;
 use log::error;
 use log::info;
+use lru_time_cache::Entry;
+use lru_time_cache::LruCache;
 use octo_squirrel::common::codec::aead::Aes128GcmCipher;
 use octo_squirrel::common::codec::aead::Aes256GcmCipher;
 use octo_squirrel::common::codec::aead::CipherKind;
 use octo_squirrel::common::codec::aead::CipherMethod;
 use octo_squirrel::common::codec::aead::KeyInit;
+use octo_squirrel::common::codec::BytesCodec;
 use octo_squirrel::common::manager::shadowsocks::ServerUser;
 use octo_squirrel::common::manager::shadowsocks::ServerUserManager;
 use octo_squirrel::common::protocol::address::Address;
@@ -18,10 +28,12 @@ use octo_squirrel::common::protocol::shadowsocks::Mode;
 use octo_squirrel::config::ServerConfig;
 use template::Message;
 use tokio::net::TcpListener;
+use tokio::net::UdpSocket;
 use tokio_native_tls::native_tls;
 use tokio_native_tls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
+use tokio_util::udp::UdpFramed;
 
 use super::template;
 
@@ -51,14 +63,6 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
         (Err(e), Ok(_)) => bail!("udp={e}"),
         (Err(e1), Err(e2)) => bail!("tcp={e1}, udp={e2}"),
     }
-}
-
-async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'static>(
-    config: &ServerConfig,
-    user_manager: &Arc<ServerUserManager<N>>,
-) -> anyhow::Result<()> {
-    let codec = udp::new_codec::<N, CM>(config, user_manager.clone())?;
-    super::startup_udp(config, codec).await
 }
 
 async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'static>(
@@ -101,6 +105,40 @@ async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'stati
             }
         }
     }
+    Ok(())
+}
+
+async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'static>(
+    config: &ServerConfig,
+    user_manager: &Arc<ServerUserManager<N>>,
+) -> anyhow::Result<()> {
+    info!("Startup udp server => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
+    let codec = udp::new_codec::<N, CM>(config, user_manager.clone())?;
+    let inbound = UdpSocket::bind(format!("{}:{}", config.host, config.port)).await?;
+    let inbound = UdpFramed::new(inbound, codec);
+    let (mut inbound_sink, mut inbound_stream) = inbound.split();
+    let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
+    let (mut outbound_sink, mut outbound_stream) = UdpFramed::new(outbound, BytesCodec).split::<(BytesMut, SocketAddr)>();
+    let (net_map0, net_map1) = BiLock::new(LruCache::with_expiry_duration(Duration::from_secs(600)));
+    let c_s_p = async {
+        while let Some(Ok(((content, peer_addr), client_addr))) = inbound_stream.next().await {
+            let peer_addr = peer_addr.to_socket_addr()?;
+            if let Entry::Vacant(entry) = net_map0.lock().await.entry(peer_addr) {
+                entry.insert(client_addr);
+            }
+            outbound_sink.send((content, peer_addr)).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    let p_s_c = async {
+        while let Some(Ok((content, peer_addr))) = outbound_stream.next().await {
+            if let Some(client_addr) = net_map1.lock().await.get(&peer_addr) {
+                inbound_sink.send(((content, Address::Socket(peer_addr)), *client_addr)).await?
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    let _ = tokio::join!(p_s_c, c_s_p);
     Ok(())
 }
 

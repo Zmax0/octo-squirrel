@@ -1,5 +1,4 @@
 use std::net::Ipv4Addr;
-use std::net::SocketAddr;
 use std::net::SocketAddrV4;
 
 use anyhow::bail;
@@ -176,28 +175,5 @@ pub mod tcp {
                 }
             }
         }
-    }
-}
-
-pub(super) mod udp {
-    use tokio::sync::mpsc::Sender;
-
-    use super::*;
-
-    pub async fn relay_outbound<Stream, OtoI, In>(
-        inbound: Sender<(In, SocketAddr)>,
-        mut outbound: Stream,
-        mut o_to_i: OtoI,
-        recipient: SocketAddr,
-    ) -> Result<(), anyhow::Error>
-    where
-        Stream: futures::Stream<Item = Result<(BytesMut, SocketAddr), anyhow::Error>> + Unpin,
-        OtoI: FnMut((BytesMut, SocketAddr)) -> In,
-        In: Send + Sync + 'static,
-    {
-        while let Some(Ok(next)) = outbound.next().await {
-            inbound.send((o_to_i(next), recipient)).await?;
-        }
-        Ok(())
     }
 }
