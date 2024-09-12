@@ -8,19 +8,19 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::bail;
 use bytes::BytesMut;
-use futures::lock::BiLock;
-use futures::SinkExt;
-use futures::StreamExt;
 use log::error;
 use log::info;
-use lru_time_cache::Entry;
+use log::trace;
+use log::warn;
 use lru_time_cache::LruCache;
 use octo_squirrel::common::codec::aead::Aes128GcmCipher;
 use octo_squirrel::common::codec::aead::Aes256GcmCipher;
 use octo_squirrel::common::codec::aead::CipherKind;
 use octo_squirrel::common::codec::aead::CipherMethod;
 use octo_squirrel::common::codec::aead::KeyInit;
-use octo_squirrel::common::codec::BytesCodec;
+use octo_squirrel::common::codec::shadowsocks::udp::Session;
+use octo_squirrel::common::codec::shadowsocks::udp::SessionPacketCodec;
+use octo_squirrel::common::manager::packet_window::PacketWindowFilter;
 use octo_squirrel::common::manager::shadowsocks::ServerUser;
 use octo_squirrel::common::manager::shadowsocks::ServerUserManager;
 use octo_squirrel::common::protocol::address::Address;
@@ -29,11 +29,15 @@ use octo_squirrel::config::ServerConfig;
 use template::Message;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::Sender;
+use tokio::task::JoinHandle;
+use tokio::time;
 use tokio_native_tls::native_tls;
 use tokio_native_tls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
-use tokio_util::udp::UdpFramed;
 
 use super::template;
 
@@ -69,7 +73,7 @@ async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'stati
     config: &ServerConfig,
     user_manager: &Arc<ServerUserManager<N>>,
 ) -> anyhow::Result<()> {
-    info!("Startup tcp server => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
+    info!("Tcp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
     let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
     match (&config.ssl, &config.ws) {
         (None, ws_config) => {
@@ -108,53 +112,173 @@ async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'stati
     Ok(())
 }
 
-async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'static>(
+async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send + Sync + 'static>(
     config: &ServerConfig,
     user_manager: &Arc<ServerUserManager<N>>,
 ) -> anyhow::Result<()> {
-    info!("Startup udp server => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
     let codec = udp::new_codec::<N, CM>(config, user_manager.clone())?;
     let inbound = UdpSocket::bind(format!("{}:{}", config.host, config.port)).await?;
-    let inbound = UdpFramed::new(inbound, codec);
-    let (mut inbound_sink, mut inbound_stream) = inbound.split();
-    let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
-    let (mut outbound_sink, mut outbound_stream) = UdpFramed::new(outbound, BytesCodec).split::<(BytesMut, SocketAddr)>();
-    let (net_map0, net_map1) = BiLock::new(LruCache::with_expiry_duration(Duration::from_secs(600)));
-    let c_s_p = async {
-        while let Some(Ok(((content, peer_addr), client_addr))) = inbound_stream.next().await {
-            let peer_addr = peer_addr.to_socket_addr()?;
-            if let Entry::Vacant(entry) = net_map0.lock().await.entry(peer_addr) {
-                entry.insert(client_addr);
+    let (tx, mut rx) = mpsc::channel::<(BytesMut, Address, SocketAddr, Session<N>)>(1024);
+    let ttl = Duration::from_secs(10);
+    let mut net_map: LruCache<u64, UdpAssociate<N>> = LruCache::with_expiry_duration_and_capacity(ttl, 10240);
+    let mut cleanup_timer = time::interval(ttl);
+    info!("Udp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
+    let mut buf = [0; 0x10000];
+    loop {
+        tokio::select! {
+            _ = cleanup_timer.tick() => {
+                net_map.iter();
             }
-            outbound_sink.send((content, peer_addr)).await?;
-        }
-        Ok::<_, anyhow::Error>(())
-    };
-    let p_s_c = async {
-        while let Some(Ok((content, peer_addr))) = outbound_stream.next().await {
-            if let Some(client_addr) = net_map1.lock().await.get(&peer_addr) {
-                inbound_sink.send(((content, Address::Socket(peer_addr)), *client_addr)).await?
+            // p_s_c
+            peer_msg = rx.recv() => {
+                if let Some((content, peer_addr, client_addr, session)) = peer_msg {
+                    net_map.get(&session.client_session_id); // keep alive
+                    let mut dst = BytesMut::new();
+                    if let Err(e) = SessionPacketCodec::encode(&codec, (content, peer_addr, session), &mut dst) {
+                        error!("[udp] encode failed; error={e}")
+                    } else {
+                        inbound.send_to(&dst, client_addr).await?;
+                    }
+                } else {
+                    trace!("[udp] p_s_c channel closed");
+                    break;
+                }
+            }
+            // c_s_p
+            client_msg = inbound.recv_from(&mut buf) => {
+                match client_msg {
+                    Ok((len, client_addr)) => {
+                        let mut src = BytesMut::from(&buf[..len]);
+                        match SessionPacketCodec::<N, CM>::decode(&codec, &mut src) {
+                            Ok(Some((content, peer_addr, session))) => {
+                                let key = session.client_session_id;
+                                if let Some(assoc) = net_map.get_mut(&key) {
+                                    assoc.try_send(content).await?
+                                } else {
+                                    let assoc = UdpAssociateContext::create(session, client_addr, peer_addr, tx.clone()).await?;
+                                    assoc.try_send(content).await?;
+                                    net_map.insert(key, assoc);
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => error!("[udp] decode failed; error={e}"),
+                        }
+                    }
+                    Err(e) => {
+                        error!("[udp] client closed; error={e}");
+                        break;
+                    }
+                }
             }
         }
-        Ok::<_, anyhow::Error>(())
-    };
-    let _ = tokio::join!(p_s_c, c_s_p);
+    }
+    info!("Udp server shutdown");
     Ok(())
+}
+
+struct UdpAssociate<const N: usize> {
+    task: JoinHandle<()>,
+    sender: Sender<BytesMut>,
+}
+
+impl<const N: usize> UdpAssociate<N> {
+    async fn try_send(&self, msg: BytesMut) -> Result<(), mpsc::error::SendError<BytesMut>> {
+        self.sender.send(msg).await
+    }
+}
+
+impl<const N: usize> Drop for UdpAssociate<N> {
+    fn drop(&mut self) {
+        trace!("abort associate task");
+        self.task.abort();
+    }
+}
+
+struct UdpAssociateContext<const N: usize> {
+    session: Session<N>,
+    client_addr: SocketAddr,
+    peer_addr: Address,
+    inbound: Sender<(BytesMut, Address, SocketAddr, Session<N>)>,
+    outbound: UdpSocket,
+    filter: PacketWindowFilter,
+}
+
+impl<const N: usize> UdpAssociateContext<N> {
+    async fn create(
+        session: Session<N>,
+        client_addr: SocketAddr,
+        peer_addr: Address,
+        inbound: Sender<(BytesMut, Address, SocketAddr, Session<N>)>,
+    ) -> anyhow::Result<UdpAssociate<N>> {
+        // UDP_ASSOCIATION_SEND_CHANNEL_SIZE
+        let (sender, receiver) = mpsc::channel::<BytesMut>(1024);
+
+        let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
+        outbound.connect(&peer_addr.to_socket_addr()?).await?;
+        let mut assoc = Self { session, client_addr, peer_addr, inbound, outbound, filter: PacketWindowFilter::new() };
+        let task = tokio::spawn(async move { assoc.relay(receiver).await });
+        Ok(UdpAssociate { task, sender })
+    }
+
+    async fn relay(&mut self, mut receiver: Receiver<BytesMut>) {
+        let mut buf = [0; 0x10000];
+        loop {
+            tokio::select! {
+                peer_msg = self.outbound.recv(&mut buf) => {
+                    match peer_msg {
+                        Ok(len) => {
+                            let content = BytesMut::from(&buf[..len]);
+                            if let Err(e) = self.inbound.send((content, self.peer_addr.clone(), self.client_addr, self.session.clone())).await {
+                                warn!("[udp] p_s_c channel closed; error={e}");
+                            }
+                        },
+                        Err(e) => {
+                            error!("[udp] recv peer failed; client={}, peer={}, error={}", self.client_addr, self.peer_addr, e);
+                            break;
+                        }
+                    }
+                },
+                client_msg = receiver.recv() => {
+                    match client_msg {
+                        Some(item) => {
+                            if !self.validate_packet_id() {
+                                error!("[udp] packet_id {} out of window; client={}, peer={}", self.session.packet_id, self.client_addr, self.peer_addr);
+                                break;
+                            }
+                            self.session.increase_packet_id();
+                            if let Err(e) = self.outbound.send(&item).await {
+                                error!("[udp] send peer failed; client={}, peer={}, error={}", self.client_addr, self.peer_addr, e);
+                                break;
+                            }
+                        }
+                        None => {
+                            trace!("[udp] c_s_p channel closed; peer={}", self.peer_addr);
+                            break;
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    fn validate_packet_id(&mut self) -> bool {
+        self.filter.validate_packet_id(self.session.packet_id, u64::MAX)
+    }
 }
 
 mod udp {
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
     use octo_squirrel::common::codec::shadowsocks::udp::Context;
-    use octo_squirrel::common::codec::shadowsocks::udp::DatagramPacketCodec;
+    use octo_squirrel::common::codec::shadowsocks::udp::SessionPacketCodec;
 
     use super::*;
     pub fn new_codec<const N: usize, CM: CipherMethod + KeyInit>(
         config: &ServerConfig,
         user_manager: Arc<ServerUserManager<N>>,
-    ) -> anyhow::Result<DatagramPacketCodec<N, CM>> {
-        let context = Context::new(Mode::Server, None, Some(user_manager));
+    ) -> anyhow::Result<SessionPacketCodec<N, CM>> {
+        let context = Context::new(Mode::Server, Some(user_manager));
         let cipher = AEADCipherCodec::new(config.cipher, &config.password).map_err(|e| anyhow!(e))?;
-        Ok(DatagramPacketCodec::new(context, cipher))
+        Ok(SessionPacketCodec::new(context, cipher))
     }
 }
 

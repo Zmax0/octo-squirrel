@@ -62,6 +62,6 @@ where
             }
         }
     }
-    info!("Startup tcp server => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
+    info!("Tcp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
     Ok(())
 }

@@ -48,7 +48,9 @@ pub(super) mod udp {
     use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
     use octo_squirrel::common::codec::shadowsocks::udp::Context;
-    use octo_squirrel::common::codec::shadowsocks::udp::DatagramPacketCodec;
+    use octo_squirrel::common::codec::shadowsocks::udp::Session;
+    use octo_squirrel::common::codec::shadowsocks::udp::SessionPacket;
+    use octo_squirrel::common::codec::shadowsocks::udp::SessionPacketCodec;
     use octo_squirrel::common::codec::DatagramPacket;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::shadowsocks::Mode;
@@ -56,34 +58,31 @@ pub(super) mod udp {
     use tokio::net::UdpSocket;
     use tokio_util::udp::UdpFramed;
 
-    pub fn new_key(from: SocketAddr, to: &Address) -> (SocketAddr, String) {
-        (from, to.to_string())
+    pub fn new_key(from: SocketAddr, _: &Address) -> SocketAddr {
+        from
     }
 
     pub async fn new_plain_outbound<const N: usize, CM: CipherMethod + KeyInit>(
         _: SocketAddr,
         _: &Address,
         config: &ServerConfig,
-    ) -> Result<UdpFramed<DatagramPacketCodec<N, CM>>> {
+    ) -> Result<UdpFramed<SessionPacketCodec<N, CM>>> {
         let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
         let outbound_framed = UdpFramed::new(
             outbound,
-            DatagramPacketCodec::new(
-                Context::new(Mode::Client, None, None),
-                AEADCipherCodec::new(config.cipher, &config.password).map_err(|e| anyhow!(e))?,
-            ),
+            SessionPacketCodec::new(Context::new(Mode::Client, None), AEADCipherCodec::new(config.cipher, &config.password).map_err(|e| anyhow!(e))?),
         );
         Ok(outbound_framed)
     }
 
-    pub fn to_outbound_send(item: (BytesMut, &Address), proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub fn to_outbound_send<const N: usize>(item: (BytesMut, &Address), proxy: SocketAddr) -> (SessionPacket<N>, SocketAddr) {
         let (content, target) = item;
-        ((content, target.clone()), proxy)
+        ((content, target.clone(), Session::from(Mode::Client)), proxy)
     }
 
-    pub fn to_inbound_recv(item: (DatagramPacket, SocketAddr), _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub fn to_inbound_recv<const N: usize>(item: (SessionPacket<N>, SocketAddr), _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         let (item, _) = item;
-        (item, sender)
+        ((item.0, item.1), sender)
     }
 }
 

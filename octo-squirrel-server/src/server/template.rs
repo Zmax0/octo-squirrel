@@ -155,14 +155,13 @@ pub mod tcp {
         OtoI: FnMut(O) -> I,
     {
         let mut outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(|o| Ok(o_to_i(o)));
-        let p_s_c = inbound_sink.send_all(&mut outbound_stream);
         let c_s_p = async {
             outbound_sink.send(m_to_o(first)?).await?;
             let mut inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(m_to_o);
             outbound_sink.send_all(&mut inbound_stream).await
         };
         tokio::select! {
-            res = p_s_c => {
+            res = inbound_sink.send_all(&mut outbound_stream) => {
                 match res {
                     Ok(_) => relay::Result::Close(End::Peer, End::Server),
                     Err(e) => relay::Result::Err(End::Peer, End::Server,e),

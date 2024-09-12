@@ -143,7 +143,7 @@ where
     type Output = Future::Output;
 }
 
-pub async fn transfer_udp<Item, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv>(
+pub async fn transfer_udp<OutRecv, OutSend, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv>(
     inbound: UdpSocket,
     config: &ServerConfig,
     new_key: NewKey,
@@ -152,13 +152,13 @@ pub async fn transfer_udp<Item, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv>(
     to_outbound_send: ToOutSend,
 ) -> Result<()>
 where
-    Item: Send + Sync + 'static,
-    Out: Sink<Item, Error = anyhow::Error> + Stream<Item = Result<Item, anyhow::Error>> + Unpin + Send + 'static,
+    OutRecv: Send + Sync + 'static,
+    Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
     NewKey: FnOnce(SocketAddr, &Address) -> Key + Copy,
     Key: Ord + Debug + Clone + Send + Sync + 'static,
-    NewOut: for<'a, 'b> AsyncP3G2<SocketAddr, &'a Address, &'b ServerConfig, Out, Item, Output = Result<Out, anyhow::Error>> + Copy,
-    ToOutSend: FnOnce((BytesMut, &Address), SocketAddr) -> Item + Copy,
-    ToInRecv: FnOnce(Item, &Address, SocketAddr) -> ((BytesMut, Address), SocketAddr) + Send + Copy + 'static,
+    NewOut: for<'a, 'b> AsyncP3G2<SocketAddr, &'a Address, &'b ServerConfig, Out, OutRecv, Output = Result<Out, anyhow::Error>> + Copy,
+    ToOutSend: FnOnce((BytesMut, &Address), SocketAddr) -> OutSend + Copy,
+    ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> ((BytesMut, Address), SocketAddr) + Send + Copy + 'static,
 {
     let server_addr = Address::Domain(config.host.clone(), config.port).to_socket_addr()?;
     // client->local|inbound, local->client|inbound
