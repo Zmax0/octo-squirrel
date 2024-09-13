@@ -99,7 +99,7 @@ impl AEADBodyCodec {
         let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.size_bytes() - padding_length);
         // trace!("Encode payload; payload length={}", encrypted_size - tag_size);
         let encrypted_size_bytes = self.encode_size(encrypted_size + padding_length + tag_size, session.chunk_nonce())?;
-        dst.put_slice(&encrypted_size_bytes);
+        dst.extend_from_slice(&encrypted_size_bytes);
         let mut payload_bytes = src.split_to(encrypted_size);
         self.auth.seal(&mut payload_bytes, session.encoder_nonce())?;
         dst.put(payload_bytes);

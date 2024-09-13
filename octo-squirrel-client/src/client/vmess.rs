@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::mem::size_of;
+use std::net::SocketAddr;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -22,8 +23,10 @@ use octo_squirrel::common::protocol::vmess::VERSION;
 use octo_squirrel::common::util::Dice;
 use octo_squirrel::common::util::FNV;
 use rand::Rng;
+use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
+use tokio_util::codec::Framed;
 
 pub struct ClientAEADCodec {
     header: RequestHeader,
@@ -47,8 +50,8 @@ impl Encoder<BytesMut> for ClientAEADCodec {
         if self.body_encoder.is_none() {
             let mut header = BytesMut::new();
             header.put_u8(VERSION);
-            header.put_slice(&self.session.request_body_iv);
-            header.put_slice(&self.session.request_body_key);
+            header.extend_from_slice(&self.session.request_body_iv);
+            header.extend_from_slice(&self.session.request_body_key);
             header.put_u8(self.session.response_header);
             header.put_u8(RequestOption::get_mask(&self.header.option)); // option mask
             let padding_len = rand::thread_rng().gen_range(0..16); // dice roll 16
@@ -57,7 +60,7 @@ impl Encoder<BytesMut> for ClientAEADCodec {
             header.put_u8(0);
             header.put_u8(self.header.command as u8);
             AddressCodec::write_address_port(&self.header.address, &mut header)?; // address
-            header.put_slice(&Dice::roll_bytes(padding_len as usize)); // padding
+            header.extend_from_slice(&Dice::roll_bytes(padding_len as usize)); // padding
             header.put_u32(FNV::fnv1a32(&header));
             dst.put(&Encrypt::seal_header(&self.header.id, header.freeze())?[..]);
             self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &mut self.session)?);
@@ -122,7 +125,7 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub mod tcp {
+pub(super) mod tcp {
     use octo_squirrel::common::codec::aead::CipherKind;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::vmess::header::RequestCommand;
@@ -132,47 +135,78 @@ pub mod tcp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_codec(addr: Address, config: &ServerConfig) -> anyhow::Result<ClientAEADCodec> {
+    pub fn new_codec(addr: &Address, config: &ServerConfig) -> anyhow::Result<ClientAEADCodec> {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::TCP, security, addr, &config.password)?;
+        let header = RequestHeader::default(RequestCommand::TCP, security, addr.clone(), &config.password)?;
         Ok(ClientAEADCodec::new(header))
     }
 }
 
-pub mod udp {
+pub(super) mod udp {
     use std::net::SocketAddr;
 
+    use anyhow::anyhow;
     use anyhow::Result;
     use bytes::BytesMut;
-    use futures::stream::SplitSink;
-    use futures::stream::SplitStream;
-    use futures::StreamExt;
     use octo_squirrel::common::codec::aead::CipherKind;
     use octo_squirrel::common::codec::DatagramPacket;
+    use octo_squirrel::common::codec::WebSocketFramed;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::vmess::header::RequestCommand;
     use octo_squirrel::common::protocol::vmess::header::RequestHeader;
     use octo_squirrel::common::protocol::vmess::header::SecurityType;
     use octo_squirrel::config::ServerConfig;
     use tokio::net::TcpStream;
+    use tokio_native_tls::TlsStream;
     use tokio_util::codec::Framed;
 
     use super::ClientAEADCodec;
+    use crate::client::template;
 
     pub fn new_key(sender: SocketAddr, target: &Address) -> (SocketAddr, String) {
         (sender, target.to_string())
     }
 
-    pub async fn new_outbound(
+    pub fn new_codec(addr: &Address, config: &ServerConfig) -> anyhow::Result<ClientAEADCodec> {
+        let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
+        let header = RequestHeader::default(RequestCommand::UDP, security, addr.clone(), &config.password)?;
+        Ok(ClientAEADCodec::new(header))
+    }
+
+    pub async fn new_plain_outbound(server_addr: SocketAddr, target: &Address, config: &ServerConfig) -> Result<Framed<TcpStream, ClientAEADCodec>> {
+        let codec = new_codec(target, config)?;
+        super::new_plain_outbound(server_addr, codec).await
+    }
+
+    pub async fn new_ws_outbound(
         server_addr: SocketAddr,
         target: &Address,
         config: &ServerConfig,
-    ) -> Result<(SplitSink<Framed<TcpStream, ClientAEADCodec>, BytesMut>, SplitStream<Framed<TcpStream, ClientAEADCodec>>)> {
-        let outbound = TcpStream::connect(server_addr).await?;
-        let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::UDP, security, target.clone(), &config.password)?;
-        let outbound = Framed::new(outbound, ClientAEADCodec::new(header));
-        Ok(outbound.split())
+    ) -> Result<WebSocketFramed<TcpStream, ClientAEADCodec, BytesMut, BytesMut>> {
+        let codec = new_codec(target, config)?;
+        let ws_config = config.ws.as_ref().ok_or(anyhow!("require ws config"))?;
+        template::new_ws_outbound(server_addr, codec, ws_config).await
+    }
+
+    pub async fn new_tls_outbound(
+        server_addr: SocketAddr,
+        target: &Address,
+        config: &ServerConfig,
+    ) -> Result<Framed<TlsStream<TcpStream>, ClientAEADCodec>> {
+        let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
+        let codec = new_codec(target, config)?;
+        template::new_tls_outbound(server_addr, codec, ssl_config).await
+    }
+
+    pub async fn new_wss_outbound(
+        server_addr: SocketAddr,
+        target: &Address,
+        config: &ServerConfig,
+    ) -> Result<WebSocketFramed<TlsStream<TcpStream>, ClientAEADCodec, BytesMut, BytesMut>> {
+        let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
+        let ws_config = config.ws.as_ref().ok_or(anyhow!("require ws config"))?;
+        let codec = new_codec(target, config)?;
+        template::new_wss_outbound(server_addr, codec, ssl_config, ws_config).await
     }
 
     pub fn to_outbound_send(item: (BytesMut, &Address), _: SocketAddr) -> BytesMut {
@@ -182,4 +216,9 @@ pub mod udp {
     pub fn to_inbound_recv(item: BytesMut, recipient: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         ((item, recipient.clone()), sender)
     }
+}
+
+pub async fn new_plain_outbound(server_addr: SocketAddr, codec: ClientAEADCodec) -> Result<Framed<TcpStream, ClientAEADCodec>> {
+    let outbound = TcpStream::connect(server_addr).await?;
+    Ok(Framed::new(outbound, codec))
 }

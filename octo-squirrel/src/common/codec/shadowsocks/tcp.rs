@@ -180,9 +180,7 @@ where
         let request_salt_len = if let Mode::Server = session.mode { 0 } else { N };
         let mut require_eih = false;
         if matches!(session.mode, Mode::Server) {
-            if let Some(user_manager) = session.user_manager.clone() {
-                require_eih = self.kind.support_eih() && user_manager.user_count() > 0
-            }
+            require_eih = self.kind.support_eih() && session.user_manager.as_ref().is_some_and(|m| m.user_count() > 0);
         }
         let eih_len = if require_eih { 16 } else { 0 };
         let mut salt = [0; N];
@@ -244,7 +242,7 @@ where
 
     fn with_identity(session: &mut Session<N>, kind: &CipherKind, keys: &Keys<N>, dst: &mut BytesMut) {
         let salt = &session.identity.salt;
-        dst.put_slice(salt);
+        dst.extend_from_slice(salt);
         if matches!(session.mode, Mode::Client) && kind.support_eih() {
             aead_2022::tcp::with_eih(kind, keys, salt, dst);
         }

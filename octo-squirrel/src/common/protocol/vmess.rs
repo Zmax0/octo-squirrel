@@ -57,18 +57,18 @@ impl AddressCodec {
                 let bytes = host.as_bytes();
                 buf.put_u8(AddressType::Domain as u8);
                 buf.put_u8(bytes.len() as u8);
-                buf.put_slice(bytes);
+                buf.extend_from_slice(bytes);
             }
             Address::Socket(addr) => match addr {
                 SocketAddr::V4(v4) => {
                     buf.put_u16(v4.port());
                     buf.put_u8(AddressType::Ipv4 as u8);
-                    buf.put_slice(&v4.ip().octets());
+                    buf.extend_from_slice(&v4.ip().octets());
                 }
                 SocketAddr::V6(v6) => {
                     buf.put_u16(v6.port());
                     buf.put_u8(AddressType::Ipv6 as u8);
-                    buf.put_slice(&v6.ip().octets());
+                    buf.extend_from_slice(&v6.ip().octets());
                 }
             },
         }

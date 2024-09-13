@@ -5,8 +5,12 @@ pub struct Dice;
 impl Dice {
     pub fn roll_bytes(len: usize) -> Vec<u8> {
         let mut dest = vec![0; len];
-        rand::thread_rng().fill_bytes(&mut dest);
+        Self::fill_bytes(&mut dest);
         dest
+    }
+
+    pub fn fill_bytes(bytes: &mut [u8]) {
+        rand::thread_rng().fill_bytes(bytes);
     }
 }
 

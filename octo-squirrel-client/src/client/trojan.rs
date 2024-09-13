@@ -3,7 +3,7 @@ enum CodecState {
     Body,
 }
 
-pub mod tcp {
+pub(super) mod tcp {
     use bytes::BufMut;
     use bytes::BytesMut;
     use octo_squirrel::common::protocol::address::Address;
@@ -19,8 +19,8 @@ pub mod tcp {
 
     use super::CodecState;
 
-    pub fn new_codec(addr: Address, config: &ServerConfig) -> anyhow::Result<ClientCodec> {
-        Ok(ClientCodec::new(config.password.as_bytes(), Socks5CommandType::Connect as u8, addr))
+    pub fn new_codec(addr: &Address, config: &ServerConfig) -> anyhow::Result<ClientCodec> {
+        Ok(ClientCodec::new(config.password.as_bytes(), Socks5CommandType::Connect as u8, addr.clone()))
     }
 
     pub struct ClientCodec {
@@ -46,11 +46,11 @@ pub mod tcp {
 
         fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
             if matches!(self.status, CodecState::Header) {
-                dst.put_slice(&self.key);
-                dst.put_slice(&trojan::CR_LF);
+                dst.extend_from_slice(&self.key);
+                dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
                 AddressCodec::encode(&self.address, dst)?;
-                dst.put_slice(&trojan::CR_LF);
+                dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
             dst.put(item);
@@ -74,19 +74,17 @@ pub mod tcp {
     }
 }
 
-pub mod udp {
+pub(super) mod udp {
     use std::fs;
     use std::net::SocketAddr;
 
-    use anyhow::bail;
+    use anyhow::anyhow;
     use anyhow::Result;
     use bytes::Buf;
     use bytes::BufMut;
     use bytes::BytesMut;
-    use futures::stream::SplitSink;
-    use futures::stream::SplitStream;
-    use futures::StreamExt;
     use octo_squirrel::common::codec::DatagramPacket;
+    use octo_squirrel::common::codec::WebSocketFramed;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::socks5::address::AddressCodec;
     use octo_squirrel::common::protocol::socks5::Socks5CommandType;
@@ -105,6 +103,7 @@ pub mod udp {
     use tokio_util::codec::Framed;
 
     use super::CodecState;
+    use crate::client::template;
 
     pub fn new_key(sender: SocketAddr, _: &Address) -> SocketAddr {
         sender
@@ -114,30 +113,26 @@ pub mod udp {
         server_addr: SocketAddr,
         target: &Address,
         config: &ServerConfig,
-    ) -> Result<(SplitSink<Framed<TlsStream<TcpStream>, ClientCodec>, DatagramPacket>, SplitStream<Framed<TlsStream<TcpStream>, ClientCodec>>)> {
+    ) -> Result<Framed<TlsStream<TcpStream>, ClientCodec>> {
+        let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
+        let pem = fs::read(ssl_config.certificate_file.as_str())?;
+        let cert = Certificate::from_pem(&pem)?;
         let outbound = TcpStream::connect(server_addr).await?;
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        if let Some(ssl_config) = &config.ssl {
-            let pem = fs::read(ssl_config.certificate_file.as_str())?;
-            let cert = Certificate::from_pem(&pem)?;
-            let tls_connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-            match tls_connector.connect(ssl_config.server_name.as_str(), outbound).await {
-                Ok(outbound) => Ok(Framed::new(outbound, codec).split()),
-                Err(e) => bail!("tls handshake failed: {}", e),
-            }
-        } else {
-            bail!("require ssl config")
-        }
+        let tls_connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
+        let outbound = tls_connector.connect(ssl_config.server_name.as_str(), outbound).await?;
+        Ok(Framed::new(outbound, codec))
     }
 
-    pub async fn new_outbound(
-        server_addr: SocketAddr,
+    pub async fn new_wss_outbound(
+        addr: SocketAddr,
         target: &Address,
         config: &ServerConfig,
-    ) -> Result<(SplitSink<Framed<TcpStream, ClientCodec>, DatagramPacket>, SplitStream<Framed<TcpStream, ClientCodec>>)> {
-        let outbound = TcpStream::connect(server_addr).await?;
+    ) -> Result<WebSocketFramed<TlsStream<TcpStream>, ClientCodec, DatagramPacket, DatagramPacket>> {
+        let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
+        let ws_config = config.ws.as_ref().ok_or(anyhow!("require ws config"))?;
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        Ok(Framed::new(outbound, codec).split())
+        template::new_wss_outbound(addr, codec, ssl_config, ws_config).await
     }
 
     pub fn to_outbound_send(item: (BytesMut, &Address), _: SocketAddr) -> DatagramPacket {
@@ -172,17 +167,17 @@ pub mod udp {
 
         fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<(), Self::Error> {
             if matches!(self.status, CodecState::Header) {
-                dst.put_slice(&self.key);
-                dst.put_slice(&trojan::CR_LF);
+                dst.extend_from_slice(&self.key);
+                dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
                 AddressCodec::encode(&self.address, dst)?;
-                dst.put_slice(&trojan::CR_LF);
+                dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
             let buffer = &mut BytesMut::new();
             AddressCodec::encode(&item.1, buffer)?;
             buffer.put_u16(item.0.len() as u16);
-            buffer.put_slice(&trojan::CR_LF);
+            buffer.extend_from_slice(&trojan::CR_LF);
             buffer.put(item.0);
             dst.put(buffer);
             Ok(())

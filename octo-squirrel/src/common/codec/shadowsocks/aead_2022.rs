@@ -17,12 +17,6 @@ const SERVER_STREAM_TIMESTAMP_MAX_DIFF: u64 = 30;
 const MIN_PADDING_LENGTH: u16 = 0;
 const MAX_PADDING_LENGTH: u16 = 900;
 
-pub fn generate_key<const N: usize>(password: &[u8]) -> Result<[u8; N], base64ct::Error> {
-    let mut key = [0; N];
-    Base64::decode(password, &mut key)?;
-    Ok(key)
-}
-
 fn session_sub_key(key: &[u8], salt: &[u8]) -> [u8; blake3::OUT_LEN] {
     let key_material = [key, salt].concat();
     blake3::derive_key("shadowsocks 2022 session subkey", &key_material)

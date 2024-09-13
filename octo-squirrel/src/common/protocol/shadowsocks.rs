@@ -1,6 +1,4 @@
-pub mod udp;
-
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub enum Mode {
     Client,
     Server,

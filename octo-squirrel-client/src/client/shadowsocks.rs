@@ -29,10 +29,10 @@ pub(super) mod tcp {
     use super::PayloadCodec;
 
     pub fn new_payload_codec<const N: usize, CM: CipherMethod + KeyInit>(
-        addr: Address,
+        addr: &Address,
         config: &ServerConfig,
     ) -> anyhow::Result<PayloadCodec<N, CM>> {
-        PayloadCodec::new(Arc::new(Context::default()), config, Mode::Client, Some(addr), None)
+        PayloadCodec::new(Arc::new(Context::default()), config, Mode::Client, Some(addr.clone()), None)
     }
 }
 
@@ -42,17 +42,17 @@ pub(super) mod udp {
     use std::net::SocketAddrV4;
 
     use anyhow::anyhow;
+    use anyhow::Result;
     use bytes::BytesMut;
-    use futures::stream::SplitSink;
-    use futures::stream::SplitStream;
-    use futures::StreamExt;
     use octo_squirrel::common::codec::aead::CipherMethod;
     use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
-    use octo_squirrel::common::codec::shadowsocks::udp::DatagramPacketCodec;
+    use octo_squirrel::common::codec::shadowsocks::udp::Context;
+    use octo_squirrel::common::codec::shadowsocks::udp::Session;
+    use octo_squirrel::common::codec::shadowsocks::udp::SessionPacket;
+    use octo_squirrel::common::codec::shadowsocks::udp::SessionPacketCodec;
     use octo_squirrel::common::codec::DatagramPacket;
     use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::shadowsocks::udp::Context;
     use octo_squirrel::common::protocol::shadowsocks::Mode;
     use octo_squirrel::config::ServerConfig;
     use tokio::net::UdpSocket;
@@ -62,33 +62,27 @@ pub(super) mod udp {
         from
     }
 
-    pub async fn new_outbound<const N: usize, CM: CipherMethod + KeyInit>(
+    pub async fn new_plain_outbound<const N: usize, CM: CipherMethod + KeyInit>(
         _: SocketAddr,
         _: &Address,
         config: &ServerConfig,
-    ) -> Result<
-        (SplitSink<UdpFramed<DatagramPacketCodec<N, CM>>, (DatagramPacket, SocketAddr)>, SplitStream<UdpFramed<DatagramPacketCodec<N, CM>>>),
-        anyhow::Error,
-    > {
+    ) -> Result<UdpFramed<SessionPacketCodec<N, CM>>> {
         let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
         let outbound_framed = UdpFramed::new(
             outbound,
-            DatagramPacketCodec::new(
-                Context::udp(Mode::Client, None),
-                AEADCipherCodec::new(config.cipher, config.password.as_bytes()).map_err(|e| anyhow!(e))?,
-            ),
+            SessionPacketCodec::new(Context::new(Mode::Client, None), AEADCipherCodec::new(config.cipher, &config.password).map_err(|e| anyhow!(e))?),
         );
-        Ok(outbound_framed.split())
+        Ok(outbound_framed)
     }
 
-    pub fn to_outbound_send(item: (BytesMut, &Address), proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub fn to_outbound_send<const N: usize>(item: (BytesMut, &Address), proxy: SocketAddr) -> (SessionPacket<N>, SocketAddr) {
         let (content, target) = item;
-        ((content, target.clone()), proxy)
+        ((content, target.clone(), Session::from(Mode::Client)), proxy)
     }
 
-    pub fn to_inbound_recv(item: (DatagramPacket, SocketAddr), _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub fn to_inbound_recv<const N: usize>(item: (SessionPacket<N>, SocketAddr), _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         let (item, _) = item;
-        (item, sender)
+        ((item.0, item.1), sender)
     }
 }
 
