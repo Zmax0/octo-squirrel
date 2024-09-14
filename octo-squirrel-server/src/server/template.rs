@@ -164,7 +164,7 @@ pub mod tcp {
             res = inbound_sink.send_all(&mut outbound_stream) => {
                 match res {
                     Ok(_) => relay::Result::Close(End::Peer, End::Server),
-                    Err(e) => relay::Result::Err(End::Peer, End::Server,e),
+                    Err(e) => relay::Result::Err(End::Peer, End::Server, e),
                 }
             },
             res = c_s_p => {

@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use core::fmt::Debug;
 use std::fs;
 use std::future::Future;
 use std::net::IpAddr;
@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::BytesMut;
+use futures::stream::SplitSink;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -18,9 +19,11 @@ use http::HeaderValue;
 use log::debug;
 use log::error;
 use log::info;
+use log::trace;
 use lru_time_cache::Entry;
 use lru_time_cache::LruCache;
 use octo_squirrel::common::codec::BytesCodec;
+use octo_squirrel::common::codec::DatagramPacket;
 use octo_squirrel::common::codec::WebSocketFramed;
 use octo_squirrel::common::protocol::address::Address;
 use octo_squirrel::common::protocol::socks5::codec::Socks5UdpCodec;
@@ -34,6 +37,8 @@ use tokio::net::TcpStream;
 use tokio::net::ToSocketAddrs;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time;
 use tokio_native_tls::native_tls;
 use tokio_native_tls::native_tls::Certificate;
 use tokio_native_tls::TlsConnector;
@@ -142,7 +147,6 @@ where
     type Future = Future;
     type Output = Future::Output;
 }
-
 pub async fn transfer_udp<OutRecv, OutSend, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv>(
     inbound: UdpSocket,
     config: &ServerConfig,
@@ -158,45 +162,67 @@ where
     Key: Ord + Debug + Clone + Send + Sync + 'static,
     NewOut: for<'a, 'b> AsyncP3G2<SocketAddr, &'a Address, &'b ServerConfig, Out, OutRecv, Output = Result<Out, anyhow::Error>> + Copy,
     ToOutSend: FnOnce((BytesMut, &Address), SocketAddr) -> OutSend + Copy,
-    ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> ((BytesMut, Address), SocketAddr) + Send + Copy + 'static,
+    ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
 {
     let server_addr = Address::Domain(config.host.clone(), config.port).to_socket_addr()?;
     // client->local|inbound, local->client|inbound
     let (mut client_local, mut local_client) = UdpFramed::new(inbound, Socks5UdpCodec).split();
-    let mut client_server_cache = LruCache::with_expiry_duration_and_capacity(Duration::from_secs(600), 64);
-    let (client_local_tx, mut client_local_rx) = mpsc::channel::<((BytesMut, Address), SocketAddr)>(32);
-    // client->local|mpsc
-    tokio::spawn(async move {
-        while let Some(item) = client_local_rx.recv().await {
-            client_local.send(item).await.unwrap_or_else(|e| error!("[udp] failed to send inbound msg; error={}", e));
-        }
-    });
-    // local->client|inbound
-    while let Some(Ok(((content, target), sender))) = local_client.next().await {
-        let key = new_key(sender, &target);
-        if let Entry::Vacant(entry) = client_server_cache.entry(key.clone()) {
-            let target = target.clone();
-            debug!("[udp] new binding; key={:?}", key);
-            // client->server|outbound, server->client|outbound
-            let (client_server, mut server_client) = new_out(server_addr, &target, config).await?.split();
-            entry.insert(client_server);
-            let _client_local_tx = client_local_tx.clone();
-            let _key = key.clone();
-            tokio::spawn(async move {
-                // server->client|outbound
-                while let Some(Ok(outbound_recv)) = server_client.next().await {
-                    // client->local|mpsc
-                    _client_local_tx
-                        .send(to_inbound_recv(outbound_recv, &target, sender))
-                        .await
-                        .unwrap_or_else(|e| error!("[udp] failed to send inbound mpsc msg; {}", e));
+    let ttl = Duration::from_secs(600);
+    let mut client_server_cache = LruCache::with_expiry_duration_and_capacity(ttl, 64);
+    let (client_local_tx, mut client_local_rx) = mpsc::channel(1024);
+    let mut cleanup_timer = time::interval(ttl);
+    loop {
+        tokio::select! {
+            // clean up
+            _ = cleanup_timer.tick() => {
+                client_server_cache.iter();
+            }
+            // client->local|mpsc
+            Some((item, key)) = client_local_rx.recv() => {
+                client_server_cache.get(&key);
+                client_local.send(item).await.unwrap_or_else(|e| error!("[udp] failed to send inbound msg; error={}", e));
+            }
+            // local->client|inbound
+            Some(Ok(((content, target), sender))) = local_client.next() => {
+                let key = new_key(sender, &target);
+                if let Entry::Vacant(entry) = client_server_cache.entry(key.clone()) {
+                    let target = target.clone();
+                    debug!("[udp] new binding; key={:?}", &key);
+                    // client->server|outbound, server->client|outbound
+                    let (client_server, mut server_client) = new_out(server_addr, &target, config).await?.split();
+                    let _client_local_tx = client_local_tx.clone();
+                    let _key = key.clone();
+                    let relay_task = tokio::spawn(async move {
+                        // server->client|outbound
+                        while let Some(Ok(outbound_recv)) = server_client.next().await {
+                            // client->local|mpsc
+                            _client_local_tx
+                                .send((to_inbound_recv(outbound_recv, &target, sender), _key.clone()))
+                                .await
+                                .unwrap_or_else(|e| error!("[udp] failed to send inbound mpsc msg; {}", e));
+                        }
+                    });
+                    entry.insert(Binding { sink: client_server, relay_task });
                 }
-            });
+                // client->server|outbound
+                client_server_cache.get_mut(&key).unwrap().sink.send(to_outbound_send((content, &target), server_addr)).await?;
+            }
+            else => break,
         }
-        // client->server|outbound
-        client_server_cache.get_mut(&key).unwrap().send(to_outbound_send((content, &target), server_addr)).await?;
     }
     Ok(())
+}
+
+struct Binding<Out, OutSend> {
+    sink: SplitSink<Out, OutSend>,
+    relay_task: JoinHandle<()>,
+}
+
+impl<Out, OutSend> Drop for Binding<Out, OutSend> {
+    fn drop(&mut self) {
+        trace!("remove binding");
+        self.relay_task.abort();
+    }
 }
 
 pub async fn new_tls_outbound<A, C, E, D>(addr: A, codec: C, ssl_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>

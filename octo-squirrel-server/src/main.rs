@@ -8,6 +8,7 @@ mod server;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    console_subscriber::init();
     let servers = octo_squirrel::config::init_server()?;
     let logger = Logger::new(env::args().nth(2).unwrap_or("info".to_owned()));
     octo_squirrel::log::init(&logger)?;

@@ -19,7 +19,7 @@ use octo_squirrel::common::codec::aead::CipherKind;
 use octo_squirrel::common::codec::aead::CipherMethod;
 use octo_squirrel::common::codec::aead::KeyInit;
 use octo_squirrel::common::codec::shadowsocks::udp::Session;
-use octo_squirrel::common::codec::shadowsocks::udp::SessionPacketCodec;
+use octo_squirrel::common::codec::shadowsocks::udp::SessionCodec;
 use octo_squirrel::common::manager::packet_window::PacketWindowFilter;
 use octo_squirrel::common::manager::shadowsocks::ServerUser;
 use octo_squirrel::common::manager::shadowsocks::ServerUserManager;
@@ -119,7 +119,7 @@ async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send +
     let codec = udp::new_codec::<N, CM>(config, user_manager.clone())?;
     let inbound = UdpSocket::bind(format!("{}:{}", config.host, config.port)).await?;
     let (tx, mut rx) = mpsc::channel::<(BytesMut, Address, SocketAddr, Session<N>)>(1024);
-    let ttl = Duration::from_secs(10);
+    let ttl = Duration::from_secs(300);
     let mut net_map: LruCache<u64, UdpAssociate<N>> = LruCache::with_expiry_duration_and_capacity(ttl, 10240);
     let mut cleanup_timer = time::interval(ttl);
     info!("Udp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
@@ -134,7 +134,7 @@ async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send +
                 if let Some((content, peer_addr, client_addr, session)) = peer_msg {
                     net_map.get(&session.client_session_id); // keep alive
                     let mut dst = BytesMut::new();
-                    if let Err(e) = SessionPacketCodec::encode(&codec, (content, peer_addr, session), &mut dst) {
+                    if let Err(e) = SessionCodec::encode(&codec, (content, peer_addr, session), &mut dst) {
                         error!("[udp] encode failed; error={e}")
                     } else {
                         inbound.send_to(&dst, client_addr).await?;
@@ -149,7 +149,7 @@ async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send +
                 match client_msg {
                     Ok((len, client_addr)) => {
                         let mut src = BytesMut::from(&buf[..len]);
-                        match SessionPacketCodec::<N, CM>::decode(&codec, &mut src) {
+                        match SessionCodec::<N, CM>::decode(&codec, &mut src) {
                             Ok(Some((content, peer_addr, session))) => {
                                 let key = session.client_session_id;
                                 if let Some(assoc) = net_map.get_mut(&key) {
@@ -210,8 +210,7 @@ impl<const N: usize> UdpAssociateContext<N> {
         peer_addr: Address,
         inbound: Sender<(BytesMut, Address, SocketAddr, Session<N>)>,
     ) -> anyhow::Result<UdpAssociate<N>> {
-        // UDP_ASSOCIATION_SEND_CHANNEL_SIZE
-        let (sender, receiver) = mpsc::channel::<BytesMut>(1024);
+        let (sender, receiver) = mpsc::channel(1024);
 
         let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
         outbound.connect(&peer_addr.to_socket_addr()?).await?;
@@ -269,16 +268,16 @@ impl<const N: usize> UdpAssociateContext<N> {
 mod udp {
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
     use octo_squirrel::common::codec::shadowsocks::udp::Context;
-    use octo_squirrel::common::codec::shadowsocks::udp::SessionPacketCodec;
+    use octo_squirrel::common::codec::shadowsocks::udp::SessionCodec;
 
     use super::*;
     pub fn new_codec<const N: usize, CM: CipherMethod + KeyInit>(
         config: &ServerConfig,
         user_manager: Arc<ServerUserManager<N>>,
-    ) -> anyhow::Result<SessionPacketCodec<N, CM>> {
+    ) -> anyhow::Result<SessionCodec<N, CM>> {
         let context = Context::new(Mode::Server, Some(user_manager));
         let cipher = AEADCipherCodec::new(config.cipher, &config.password).map_err(|e| anyhow!(e))?;
-        Ok(SessionPacketCodec::new(context, cipher))
+        Ok(SessionCodec::new(context, cipher))
     }
 }
 

@@ -10,8 +10,6 @@ use bytes::BufMut;
 use bytes::BytesMut;
 use log::trace;
 use rand::random;
-use tokio_util::codec::Decoder;
-use tokio_util::codec::Encoder;
 
 use super::aead_2022;
 use super::ChunkDecoder;
@@ -235,13 +233,15 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
     }
 }
 
-pub struct SessionPacketCodec<const N: usize, CM> {
+pub type SessionPacket<const N: usize> = (BytesMut, Address, Session<N>);
+
+pub struct SessionCodec<const N: usize, CM> {
     context: Context<N>,
     cipher: AEADCipherCodec<N, CM>,
     method: PhantomData<CM>,
 }
 
-impl<const N: usize, CM: CipherMethod + KeyInit> SessionPacketCodec<N, CM> {
+impl<const N: usize, CM: CipherMethod + KeyInit> SessionCodec<N, CM> {
     pub fn new(context: Context<N>, cipher: AEADCipherCodec<N, CM>) -> Self {
         Self { context, cipher, method: PhantomData }
     }
@@ -251,33 +251,6 @@ impl<const N: usize, CM: CipherMethod + KeyInit> SessionPacketCodec<N, CM> {
     }
 
     pub fn decode(&self, src: &mut BytesMut) -> anyhow::Result<Option<SessionPacket<N>>> {
-        if src.is_empty() {
-            Ok(None)
-        } else {
-            let len = src.len();
-            let mut src = src.split_to(len);
-            let (content, address, session) = self.cipher.decode(&self.context, &mut src)?;
-            Ok(Some((content, address, session)))
-        }
-    }
-}
-
-impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<SessionPacket<N>> for SessionPacketCodec<N, CM> {
-    type Error = anyhow::Error;
-
-    fn encode(&mut self, (content, address, session): SessionPacket<N>, dst: &mut BytesMut) -> anyhow::Result<()> {
-        self.cipher.encode(&self.context, &session, &address, content, dst)
-    }
-}
-
-pub type SessionPacket<const N: usize> = (BytesMut, Address, Session<N>);
-
-impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for SessionPacketCodec<N, CM> {
-    type Item = SessionPacket<N>;
-
-    type Error = anyhow::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> anyhow::Result<Option<Self::Item>> {
         if src.is_empty() {
             Ok(None)
         } else {
@@ -351,7 +324,7 @@ mod test {
     use crate::common::codec::shadowsocks::udp::AEADCipherCodec;
     use crate::common::codec::shadowsocks::udp::Context;
     use crate::common::codec::shadowsocks::udp::Session;
-    use crate::common::codec::shadowsocks::udp::SessionPacketCodec;
+    use crate::common::codec::shadowsocks::udp::SessionCodec;
     use crate::common::protocol::address::Address;
     use crate::common::protocol::shadowsocks::Mode;
 
@@ -364,7 +337,7 @@ mod test {
                 let password: String = rand::thread_rng().sample_iter(&Alphanumeric).take(password_len).map(char::from).collect();
                 let codec = AEADCipherCodec::new(cipher, &password).map_err(|e| anyhow!(e))?;
                 let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
-                let codec: SessionPacketCodec<N, CM> = SessionPacketCodec::new(Context::new(Mode::Server, None), codec);
+                let codec: SessionCodec<N, CM> = SessionCodec::new(Context::new(Mode::Server, None), codec);
                 let mut dst = BytesMut::new();
                 let addr = Address::Socket(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random())));
                 codec.encode((expect.as_bytes().into(), addr.clone(), Session::default()), &mut dst)?;
