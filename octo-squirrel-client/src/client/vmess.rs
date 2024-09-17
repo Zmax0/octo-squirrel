@@ -163,8 +163,8 @@ pub(super) mod udp {
     use super::ClientAEADCodec;
     use crate::client::template;
 
-    pub fn new_key(sender: SocketAddr, target: &Address) -> (SocketAddr, String) {
-        (sender, target.to_string())
+    pub fn new_key(sender: SocketAddr, target: &Address) -> (SocketAddr, Address) {
+        (sender, target.clone())
     }
 
     pub fn new_codec(addr: &Address, config: &ServerConfig) -> anyhow::Result<ClientAEADCodec> {

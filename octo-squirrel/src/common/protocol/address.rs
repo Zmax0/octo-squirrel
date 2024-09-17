@@ -1,10 +1,11 @@
 use std::fmt::Display;
 use std::io;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
 use std::vec;
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, PartialOrd, Eq, Debug, Clone)]
 pub enum Address {
     Domain(String, u16),
     Socket(SocketAddr),
@@ -17,6 +18,30 @@ impl Address {
                 format!("{host}:{port}").to_socket_addrs()?.next().ok_or(io::Error::new(io::ErrorKind::AddrNotAvailable, ""))
             }
             Address::Socket(addr) => Ok(*addr),
+        }
+    }
+}
+
+impl Ord for Address {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        fn cmp_ip_addr(this: &[u8], other: IpAddr) -> std::cmp::Ordering {
+            match other {
+                IpAddr::V4(ref ipv4_addr) => this.cmp(&ipv4_addr.octets()),
+                IpAddr::V6(ref ipv6_addr) => this.cmp(&ipv6_addr.octets()),
+            }
+        }
+
+        match (self, other) {
+            (Address::Domain(this_host, this_port), Address::Domain(other_host, other_port)) => {
+                this_port.cmp(other_port).then_with(|| this_host.cmp(other_host))
+            }
+            (Address::Domain(this_host, this_port), Address::Socket(other_addr)) => {
+                this_port.cmp(&other_addr.port()).then_with(|| cmp_ip_addr(this_host.as_bytes(), other_addr.ip()))
+            }
+            (Address::Socket(this_addr), Address::Domain(other_host, other_port)) => {
+                this_addr.port().cmp(other_port).then_with(|| cmp_ip_addr(other_host.as_bytes(), this_addr.ip()).reverse())
+            }
+            (Address::Socket(this), Address::Socket(other)) => this.cmp(other),
         }
     }
 }

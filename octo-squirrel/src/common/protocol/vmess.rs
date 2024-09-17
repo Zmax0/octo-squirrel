@@ -79,12 +79,12 @@ impl AddressCodec {
         let port = buf.get_u16();
         let addr_type = AddressType::new(buf.get_u8());
         match addr_type {
-            AddressType::Ipv4 => Ok(Address::Socket(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(buf.get_u32()), port)))),
+            AddressType::Ipv4 => Ok(Address::from(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(buf.get_u32()), port)))),
             AddressType::Domain => {
                 let length = buf.get_u8() as usize;
                 Ok(Address::Domain(String::from_utf8(buf.copy_to_bytes(length).to_vec())?, port))
             }
-            AddressType::Ipv6 => Ok(Address::Socket(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(buf.get_u128()), port, 0, 0)))),
+            AddressType::Ipv6 => Ok(Address::from(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(buf.get_u128()), port, 0, 0)))),
         }
     }
 }

@@ -159,12 +159,14 @@ where
     OutRecv: Send + Sync + 'static,
     Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
     NewKey: FnOnce(SocketAddr, &Address) -> Key + Copy,
-    Key: Ord + Debug + Clone + Send + Sync + 'static,
+    Key: Ord + Clone + Debug + Send + Sync + 'static,
     NewOut: for<'a, 'b> AsyncP3G2<SocketAddr, &'a Address, &'b ServerConfig, Out, OutRecv, Output = Result<Out, anyhow::Error>> + Copy,
     ToOutSend: FnOnce((BytesMut, &Address), SocketAddr) -> OutSend + Copy,
     ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
 {
-    let server_addr = Address::Domain(config.host.clone(), config.port).to_socket_addr()?;
+    use std::net::ToSocketAddrs;
+
+    let server_addr = format!("{}:{}", config.host, config.port).to_socket_addrs()?.next().ok_or(anyhow!("server address is not available"))?;
     // client->local|inbound, local->client|inbound
     let (mut client_local, mut local_client) = UdpFramed::new(inbound, Socks5UdpCodec).split();
     let ttl = Duration::from_secs(600);

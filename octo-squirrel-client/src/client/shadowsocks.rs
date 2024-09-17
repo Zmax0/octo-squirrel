@@ -84,8 +84,8 @@ pub(super) mod udp {
     use tokio_util::codec::Encoder;
     use tokio_util::udp::UdpFramed;
 
-    pub fn new_key(from: SocketAddr, to: &Address) -> (SocketAddr, String) {
-        (from, to.to_string())
+    pub fn new_key(from: SocketAddr, to: &Address) -> (SocketAddr, Address) {
+        (from, to.clone())
     }
 
     pub async fn new_plain_outbound<const N: usize, CM: CipherMethod + KeyInit>(
