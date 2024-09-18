@@ -4,7 +4,7 @@ use anyhow::bail;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
-use octo_squirrel::common::protocol::socks5::address::AddressCodec;
+use octo_squirrel::common::protocol::socks5::address;
 use octo_squirrel::common::protocol::socks5::Socks5CommandType;
 use octo_squirrel::common::protocol::trojan;
 use octo_squirrel::common::util::hex;
@@ -42,7 +42,7 @@ impl Decoder for ServerCodec {
     fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match self.state {
             CodecState::Header => {
-                if src.remaining() < 60 || src.remaining() < 59 + AddressCodec::try_decode_at(src, 59)? {
+                if src.remaining() < 60 || src.remaining() < 59 + address::try_decode_at(src, 59)? {
                     return Ok(None);
                 }
                 if src[56] != b'\r' {
@@ -55,7 +55,7 @@ impl Decoder for ServerCodec {
                 }
                 src.advance(trojan::CR_LF.len());
                 let command = Socks5CommandType::new(src.get_u8())?;
-                let peer_addr = AddressCodec::decode(src)?;
+                let peer_addr = address::decode(src)?;
                 src.advance(trojan::CR_LF.len());
                 if matches!(command, Socks5CommandType::Connect) {
                     self.state = CodecState::Tcp;

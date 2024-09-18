@@ -1,6 +1,6 @@
 use bytes::BufMut;
 
-use super::address::AddressCodec;
+use super::address;
 use super::Socks5AuthMethod;
 use super::Socks5CommandStatus;
 use super::Socks5CommandType;
@@ -64,7 +64,7 @@ impl Socks5Message for Socks5CommandRequest {
         dst.put_u8(VERSION);
         dst.put_u8(self.command_type as u8);
         dst.put_u8(0);
-        AddressCodec::encode(&self.dst_addr, dst);
+        address::encode(&self.dst_addr, dst);
     }
 }
 
@@ -78,7 +78,7 @@ impl Socks5Message for Socks5CommandResponse {
         dst.put_u8(VERSION);
         dst.put_u8(self.command_status as u8);
         dst.put_u8(0x00);
-        AddressCodec::encode(&self.bnd_addr, dst);
+        address::encode(&self.bnd_addr, dst);
     }
 }
 

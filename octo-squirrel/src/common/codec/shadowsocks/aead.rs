@@ -1,4 +1,5 @@
 use hkdf::Hkdf;
+use hkdf::InvalidLength;
 use md5::Digest;
 use md5::Md5;
 use sha1::Sha1;
@@ -7,10 +8,8 @@ use super::Authenticator;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
 use super::ChunkSizeParser;
-use super::NonceGenerator;
+use crate::common::codec::aead::CipherKind;
 use crate::common::codec::aead::CipherMethod;
-use crate::common::codec::aead::IncreasingNonceGenerator;
-use crate::common::codec::aead::KeyInit;
 
 pub fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
     let mut encoded: [u8; N] = [0; N];
@@ -34,28 +33,28 @@ pub fn openssl_bytes_to_key<const N: usize>(password: &[u8]) -> [u8; N] {
     encoded
 }
 
-pub fn new_encoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> Result<ChunkEncoder<CM>, String> {
+pub fn new_encoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> Result<ChunkEncoder, InvalidLength> {
     let key = hkdfsha1(key, salt)?;
-    let auth = new_auth(&key).map_err(|e| e.to_string())?;
+    let auth = new_auth(kind, &key);
     Ok(ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth))
 }
 
-pub fn new_decoder<CM: CipherMethod + KeyInit>(key: &[u8], salt: &[u8]) -> Result<ChunkDecoder<CM>, String> {
+pub fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> Result<ChunkDecoder, InvalidLength> {
     let key = hkdfsha1(key, salt)?;
-    let auth = new_auth(&key).map_err(|e| e.to_string())?;
+    let auth = new_auth(kind, &key);
     Ok(ChunkDecoder::new(auth, ChunkSizeParser::Auth))
 }
 
-fn hkdfsha1(ikm: &[u8], salt: &[u8]) -> Result<Vec<u8>, String> {
+fn hkdfsha1(ikm: &[u8], salt: &[u8]) -> Result<Vec<u8>, InvalidLength> {
     let hk = Hkdf::<Sha1>::new(Some(salt), ikm);
     let okm = &mut vec![0; salt.len()];
-    hk.expand(b"ss-subkey", okm).map_err(|e| e.to_string())?;
+    hk.expand(b"ss-subkey", okm)?;
     Ok(okm.to_vec())
 }
 
-fn new_auth<CM: CipherMethod + KeyInit>(key: &[u8]) -> Result<Authenticator<CM>, digest::InvalidLength> {
-    let method = CM::init(key)?;
-    Ok(Authenticator::new(method, NonceGenerator::Increasing(IncreasingNonceGenerator::init())))
+fn new_auth(kind: CipherKind, key: &[u8]) -> Authenticator {
+    let method = CipherMethod::new(kind, key);
+    Authenticator::new(method)
 }
 
 #[cfg(test)]

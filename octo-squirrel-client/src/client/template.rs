@@ -195,12 +195,17 @@ where
                     let _key = key.clone();
                     let relay_task = tokio::spawn(async move {
                         // server->client|outbound
-                        while let Some(Ok(outbound_recv)) = server_client.next().await {
-                            // client->local|mpsc
-                            _client_local_tx
-                                .send((to_inbound_recv(outbound_recv, &target, sender), _key.clone()))
-                                .await
-                                .unwrap_or_else(|e| error!("[udp] failed to send inbound mpsc msg; {}", e));
+                        while let Some(next) = server_client.next().await {
+                            match next {
+                                Ok(outbound_recv) => {
+                                    // client->local|mpsc
+                                    _client_local_tx
+                                    .send((to_inbound_recv(outbound_recv, &target, sender), _key.clone()))
+                                    .await
+                                    .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
+                                }
+                                Err(e) => error!("[udp] server*-client decode failed; error={}", e),
+                            }
                         }
                     });
                     entry.insert(Binding { sink: client_server, relay_task });

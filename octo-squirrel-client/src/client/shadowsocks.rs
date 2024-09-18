@@ -4,8 +4,6 @@ pub(super) mod tcp {
     use anyhow::anyhow;
     use anyhow::Result;
     use bytes::BytesMut;
-    use octo_squirrel::common::codec::aead::CipherMethod;
-    use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::tcp::AEADCipherCodec;
     use octo_squirrel::common::codec::shadowsocks::tcp::Context;
     use octo_squirrel::common::codec::shadowsocks::tcp::Identity;
@@ -17,19 +15,16 @@ pub(super) mod tcp {
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
-    pub fn new_payload_codec<const N: usize, CM: CipherMethod + KeyInit>(
-        addr: &Address,
-        config: &ServerConfig,
-    ) -> anyhow::Result<PayloadCodec<N, CM>> {
+    pub fn new_payload_codec<const N: usize>(addr: &Address, config: &ServerConfig) -> anyhow::Result<PayloadCodec<N>> {
         PayloadCodec::new(Arc::new(Context::default()), config, Mode::Client, Some(addr.clone()), None)
     }
 
-    pub struct PayloadCodec<const N: usize, CM> {
+    pub struct PayloadCodec<const N: usize> {
         session: Session<N>,
-        cipher: AEADCipherCodec<N, CM>,
+        cipher: AEADCipherCodec<N>,
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> PayloadCodec<N, CM> {
+    impl<const N: usize> PayloadCodec<N> {
         pub fn new(
             context: Arc<Context>,
             config: &ServerConfig,
@@ -42,7 +37,7 @@ pub(super) mod tcp {
         }
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<BytesMut> for PayloadCodec<N, CM> {
+    impl<const N: usize> Encoder<BytesMut> for PayloadCodec<N> {
         type Error = anyhow::Error;
 
         fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
@@ -50,7 +45,7 @@ pub(super) mod tcp {
         }
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for PayloadCodec<N, CM> {
+    impl<const N: usize> Decoder for PayloadCodec<N> {
         type Item = BytesMut;
 
         type Error = anyhow::Error;
@@ -69,8 +64,6 @@ pub(super) mod udp {
     use anyhow::anyhow;
     use anyhow::Result;
     use bytes::BytesMut;
-    use octo_squirrel::common::codec::aead::CipherMethod;
-    use octo_squirrel::common::codec::aead::KeyInit;
     use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
     use octo_squirrel::common::codec::shadowsocks::udp::Context;
     use octo_squirrel::common::codec::shadowsocks::udp::Session;
@@ -88,11 +81,7 @@ pub(super) mod udp {
         (from, to.clone())
     }
 
-    pub async fn new_plain_outbound<const N: usize, CM: CipherMethod + KeyInit>(
-        _: SocketAddr,
-        _: &Address,
-        config: &ServerConfig,
-    ) -> Result<UdpFramed<DatagramPacketCodec<N, CM>>> {
+    pub async fn new_plain_outbound<const N: usize>(_: SocketAddr, _: &Address, config: &ServerConfig) -> Result<UdpFramed<DatagramPacketCodec<N>>> {
         let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
         let outbound_framed = UdpFramed::new(
             outbound,
@@ -114,18 +103,18 @@ pub(super) mod udp {
         (item, sender)
     }
 
-    pub struct DatagramPacketCodec<const N: usize, CM> {
+    pub struct DatagramPacketCodec<const N: usize> {
         session: Session<N>,
-        codec: SessionCodec<N, CM>,
+        codec: SessionCodec<N>,
     }
 
-    impl<const N: usize, CM> DatagramPacketCodec<N, CM> {
-        pub fn new(codec: SessionCodec<N, CM>) -> Self {
+    impl<const N: usize> DatagramPacketCodec<N> {
+        pub fn new(codec: SessionCodec<N>) -> Self {
             Self { session: Session::from(Mode::Client), codec }
         }
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<DatagramPacket> for DatagramPacketCodec<N, CM> {
+    impl<const N: usize> Encoder<DatagramPacket> for DatagramPacketCodec<N> {
         type Error = anyhow::Error;
 
         fn encode(&mut self, (content, addr): DatagramPacket, dst: &mut BytesMut) -> anyhow::Result<()> {
@@ -133,7 +122,7 @@ pub(super) mod udp {
         }
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for DatagramPacketCodec<N, CM> {
+    impl<const N: usize> Decoder for DatagramPacketCodec<N> {
         type Item = DatagramPacket;
 
         type Error = anyhow::Error;

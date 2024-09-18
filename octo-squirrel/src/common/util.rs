@@ -1,11 +1,8 @@
-use rand::RngCore;
-
-pub struct Dice;
-
-impl Dice {
+pub mod dice {
+    use rand::RngCore;
     pub fn roll_bytes(len: usize) -> Vec<u8> {
         let mut dest = vec![0; len];
-        Self::fill_bytes(&mut dest);
+        fill_bytes(&mut dest);
         dest
     }
 
@@ -14,9 +11,7 @@ impl Dice {
     }
 }
 
-pub struct FNV;
-
-impl FNV {
+pub mod fnv {
     pub fn fnv1a32(data: &[u8]) -> u32 {
         let mut hash: u32 = 2166136261; // offset basis
         for b in data {
@@ -25,12 +20,6 @@ impl FNV {
         }
         hash
     }
-}
-
-#[test]
-fn test_fnv1a32() {
-    let data = b"fn bubble_sort<T: Ord>(arr: &mut [T]) {let mut swapped = true;while swapped {swapped = false;for i in 1..arr.len() {if arr[i - 1] > arr[i] {arr.swap(i - 1, i);swapped = true;}}}}";
-    assert_eq!(3156541508, FNV::fnv1a32(data));
 }
 
 pub mod hex {
@@ -86,4 +75,10 @@ pub mod hex {
     }
 
     impl std::error::Error for DecodeHexError {}
+}
+
+#[test]
+fn test_fnv1a32() {
+    let data = b"fn bubble_sort<T: Ord>(arr: &mut [T]) {let mut swapped = true;while swapped {swapped = false;for i in 1..arr.len() {if arr[i - 1] > arr[i] {arr.swap(i - 1, i);swapped = true;}}}}";
+    assert_eq!(3156541508, fnv::fnv1a32(data));
 }

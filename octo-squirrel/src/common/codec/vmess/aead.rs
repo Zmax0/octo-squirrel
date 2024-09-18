@@ -18,14 +18,13 @@ use rand::Rng;
 use sha3::Shake128;
 use sha3::Shake128ReaderCore;
 
-use crate::common::codec::aead::Aes128GcmCipher;
-use crate::common::codec::aead::ChaCha20Poly1305Cipher;
+use crate::common::codec::aead::CipherKind;
 use crate::common::codec::aead::CipherMethod;
 use crate::common::codec::aead::CountingNonceGenerator;
 use crate::common::codec::aead::PaddingLengthGenerator;
 use crate::common::codec::chunk::PlainSizeParser;
-use crate::common::protocol::vmess::aead::KDF;
-use crate::common::protocol::vmess::encoding::Auth;
+use crate::common::protocol::vmess::aead::kdf;
+use crate::common::protocol::vmess::auth;
 use crate::common::protocol::vmess::header::RequestHeader;
 use crate::common::protocol::vmess::header::RequestOption;
 use crate::common::protocol::vmess::header::SecurityType;
@@ -64,9 +63,9 @@ macro_rules! new_aead_body_codec {
             let cipher;
             match header.security {
                 SecurityType::Chacha20Poly1305 => {
-                    cipher = Self::new_aead_cipher(header.security, &Auth::generate_chacha20_poly1305_key(session.$key()))?
+                    cipher = Self::new_aead_cipher(header.security, &auth::generate_chacha20_poly1305_key(session.$key()))
                 }
-                _ => cipher = Self::new_aead_cipher(header.security, session.$key())?,
+                _ => cipher = Self::new_aead_cipher(header.security, session.$key()),
             }
             Ok(Self { auth: Authenticator::new(cipher), chunk, padding, shake, payload_limit: 2048, payload_length: None, padding_length: None })
         }
@@ -78,17 +77,17 @@ impl AEADBodyCodec {
     new_aead_body_codec!(decoder, decoder_key, decoder_nonce);
 
     fn new_aead_chunk_size_cipher(security: SecurityType, key: &[u8]) -> Result<Authenticator, InvalidLength> {
-        let key = &KDF::kdf16(key, vec![AUTH_LEN]);
+        let key = &kdf::kdf16(key, vec![AUTH_LEN]);
         match security {
-            SecurityType::Chacha20Poly1305 => Ok(Authenticator::new(Self::new_aead_cipher(security, &Auth::generate_chacha20_poly1305_key(key))?)),
-            _ => Ok(Authenticator::new(Self::new_aead_cipher(security, key)?)),
+            SecurityType::Chacha20Poly1305 => Ok(Authenticator::new(Self::new_aead_cipher(security, &auth::generate_chacha20_poly1305_key(key)))),
+            _ => Ok(Authenticator::new(Self::new_aead_cipher(security, key))),
         }
     }
 
-    fn new_aead_cipher(security: SecurityType, key: &[u8]) -> Result<Box<dyn CipherMethod>, InvalidLength> {
+    fn new_aead_cipher(security: SecurityType, key: &[u8]) -> CipherMethod {
         match security {
-            SecurityType::Chacha20Poly1305 => Ok(Box::new(ChaCha20Poly1305Cipher::new_from_slice(key)?)),
-            _ => Ok(Box::new(Aes128GcmCipher::new_from_slice(key)?)),
+            SecurityType::Chacha20Poly1305 => CipherMethod::new(CipherKind::ChaCha20Poly1305, key),
+            _ => CipherMethod::new(CipherKind::Aes128Gcm, key),
         }
     }
 
@@ -191,6 +190,7 @@ impl AEADBodyCodec {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum ChunkSizeParser {
     Plain(PlainSizeParser),
     Auth(Authenticator),
@@ -198,12 +198,12 @@ enum ChunkSizeParser {
 }
 
 struct Authenticator {
-    cipher: Box<dyn CipherMethod>,
+    cipher: CipherMethod,
     counting: CountingNonceGenerator,
 }
 
 impl Authenticator {
-    fn new(cipher: Box<dyn CipherMethod>) -> Self {
+    fn new(cipher: CipherMethod) -> Self {
         let nonce_size = cipher.nonce_size();
         Self { cipher, counting: CountingNonceGenerator::new(nonce_size) }
     }
@@ -224,11 +224,11 @@ impl Authenticator {
     }
 
     fn seal(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), ::aead::Error> {
-        self.cipher.encrypt_in_place(&self.counting.generate(nonce), b"", buffer)
+        self.cipher.encrypt_in_place(self.counting.generate(nonce), b"", buffer)
     }
 
     fn open(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), ::aead::Error> {
-        self.cipher.decrypt_in_place(&self.counting.generate(nonce), b"", buffer)
+        self.cipher.decrypt_in_place(self.counting.generate(nonce), b"", buffer)
     }
 }
 
@@ -287,9 +287,9 @@ mod test {
     use crate::common::codec::vmess::aead::ShakeSizeParser;
     use crate::common::protocol::address::Address;
     use crate::common::protocol::vmess::header::*;
+    use crate::common::protocol::vmess::id;
     use crate::common::protocol::vmess::session::ClientSession;
     use crate::common::protocol::vmess::session::ServerSession;
-    use crate::common::protocol::vmess::ID;
     use crate::common::protocol::vmess::VERSION;
 
     #[test]
@@ -352,7 +352,7 @@ mod test {
                 option: RequestOption::from_mask(mask),
                 security: SecurityType::Chacha20Poly1305,
                 address: new_address(),
-                id: ID::from_uuid(uuid::Uuid::new_v4()),
+                id: id::from_uuid(uuid::Uuid::new_v4()),
             };
             test_by_header(header)?;
             let header = RequestHeader {
@@ -361,7 +361,7 @@ mod test {
                 option: RequestOption::from_mask(mask),
                 security: SecurityType::Aes128Gcm,
                 address: new_address(),
-                id: ID::from_uuid(uuid::Uuid::new_v4()),
+                id: id::from_uuid(uuid::Uuid::new_v4()),
             };
             test_by_header(header)?;
             Ok(())

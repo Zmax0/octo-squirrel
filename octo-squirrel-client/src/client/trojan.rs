@@ -7,7 +7,7 @@ pub(super) mod tcp {
     use bytes::BufMut;
     use bytes::BytesMut;
     use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::socks5::address::AddressCodec;
+    use octo_squirrel::common::protocol::socks5::address;
     use octo_squirrel::common::protocol::socks5::Socks5CommandType;
     use octo_squirrel::common::protocol::trojan;
     use octo_squirrel::common::util::hex;
@@ -49,7 +49,7 @@ pub(super) mod tcp {
                 dst.extend_from_slice(&self.key);
                 dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
-                AddressCodec::encode(&self.address, dst);
+                address::encode(&self.address, dst);
                 dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
@@ -86,7 +86,7 @@ pub(super) mod udp {
     use octo_squirrel::common::codec::DatagramPacket;
     use octo_squirrel::common::codec::WebSocketFramed;
     use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::socks5::address::AddressCodec;
+    use octo_squirrel::common::protocol::socks5::address;
     use octo_squirrel::common::protocol::socks5::Socks5CommandType;
     use octo_squirrel::common::protocol::trojan;
     use octo_squirrel::common::util::hex;
@@ -170,12 +170,12 @@ pub(super) mod udp {
                 dst.extend_from_slice(&self.key);
                 dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
-                AddressCodec::encode(&self.address, dst);
+                address::encode(&self.address, dst);
                 dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
             let buffer = &mut BytesMut::new();
-            AddressCodec::encode(&item.1, buffer);
+            address::encode(&item.1, buffer);
             buffer.put_u16(item.0.len() as u16);
             buffer.extend_from_slice(&trojan::CR_LF);
             buffer.put(item.0);
@@ -191,7 +191,7 @@ pub(super) mod udp {
 
         fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
             if !src.is_empty() {
-                let addr = AddressCodec::decode(src)?;
+                let addr = address::decode(src)?;
                 let len = src.get_u16();
                 src.advance(trojan::CR_LF.len());
                 let content = src.split_to(len as usize);

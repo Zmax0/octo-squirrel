@@ -5,7 +5,7 @@ use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::address::AddressCodec;
+use super::address;
 use super::message::Socks5CommandRequest;
 use super::message::Socks5CommandResponse;
 use super::message::Socks5InitialRequest;
@@ -74,7 +74,7 @@ impl Decoder for Socks5CommandRequestDecoder {
         }
         let command_type = Socks5CommandType::new(src.get_u8())?;
         src.advance(1); // Reserved
-        let addr = AddressCodec::decode(src)?;
+        let addr = address::decode(src)?;
         Ok(Some(Socks5CommandRequest::new(command_type, addr)))
     }
 }
@@ -109,7 +109,7 @@ impl Decoder for Socks5CommandResponseDecoder {
         }
         let command_status = Socks5CommandStatus::try_from(src.get_u8())?;
         src.advance(1); // Reserved
-        let addr = AddressCodec::decode(src)?;
+        let addr = address::decode(src)?;
         Ok(Some(Socks5CommandResponse::new(command_status, addr)))
     }
 }
@@ -132,7 +132,7 @@ impl Decoder for Socks5UdpCodec {
             bail!("Discarding fragmented payload");
         }
         src.advance(3);
-        let recipient = AddressCodec::decode(src)?;
+        let recipient = address::decode(src)?;
         Ok(Some((src.split_off(0), recipient)))
     }
 }
@@ -142,7 +142,7 @@ impl Encoder<(BytesMut, Address)> for Socks5UdpCodec {
 
     fn encode(&mut self, item: (BytesMut, Address), dst: &mut BytesMut) -> Result<(), Self::Error> {
         dst.extend_from_slice(&[0, 0, 0]); // Fragment
-        AddressCodec::encode(&item.1, dst);
+        address::encode(&item.1, dst);
         dst.extend_from_slice(&item.0);
         Ok(())
     }

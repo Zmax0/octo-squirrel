@@ -5,35 +5,20 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use digest::InvalidLength;
 use log::trace;
 
 use super::now;
 use crate::common::codec::aead::CipherKind;
-use crate::common::codec::aead::CipherMethod;
-use crate::common::codec::aead::IncreasingNonceGenerator;
-use crate::common::codec::aead::KeyInit;
 use crate::common::codec::shadowsocks::tcp::Identity;
 use crate::common::codec::shadowsocks::Authenticator;
 use crate::common::codec::shadowsocks::ChunkDecoder;
-use crate::common::codec::shadowsocks::ChunkEncoder;
-use crate::common::codec::shadowsocks::ChunkSizeParser;
 use crate::common::codec::shadowsocks::Keys;
-use crate::common::codec::shadowsocks::NonceGenerator;
 use crate::common::crypto::Aes128EcbNoPadding;
 use crate::common::crypto::Aes256EcbNoPadding;
 use crate::common::manager::shadowsocks::ServerUserManager;
 use crate::common::protocol::shadowsocks::Mode;
 
-pub fn new_header<CM>(
-    auth: &mut Authenticator<CM>,
-    msg: &mut BytesMut,
-    stream_type: &Mode,
-    request_salt: Option<&[u8]>,
-) -> anyhow::Result<(Bytes, Bytes)>
-where
-    CM: CipherMethod + KeyInit,
-{
+pub fn new_header(auth: &mut Authenticator, msg: &mut BytesMut, stream_type: &Mode, request_salt: Option<&[u8]>) -> anyhow::Result<(Bytes, Bytes)> {
     let mut salt_len = 0;
     if let Some(request_salt) = request_salt {
         salt_len = request_salt.len();
@@ -52,39 +37,14 @@ where
     Ok((fixed.freeze(), via.freeze()))
 }
 
-pub fn session_sub_key(key: &[u8], salt: &[u8]) -> [u8; 32] {
-    super::session_sub_key(key, salt)
-}
-
-pub fn new_encoder<const N: usize, CM>(key: &[u8], salt: &[u8]) -> Result<ChunkEncoder<CM>, InvalidLength>
-where
-    CM: CipherMethod + KeyInit,
-{
-    let key = session_sub_key(key, salt);
-    let auth = Authenticator::new(CM::init(&key[..N])?, NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
-    Ok(ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth))
-}
-
-pub fn new_decoder<const N: usize, CM>(key: &[u8], salt: &[u8]) -> Result<ChunkDecoder<CM>, InvalidLength>
-where
-    CM: CipherMethod + KeyInit,
-{
-    let key = session_sub_key(key, salt);
-    let auth = Authenticator::new(CM::init(&key[..N])?, NonceGenerator::Increasing(IncreasingNonceGenerator::init()));
-    Ok(ChunkDecoder::new(auth, ChunkSizeParser::Auth))
-}
-
-pub fn new_decoder_with_eih<const N: usize, CM>(
-    kind: &CipherKind,
+pub fn new_decoder_with_eih<const N: usize>(
+    kind: CipherKind,
     key: &[u8],
     salt: &[u8],
     mut user_hash: [u8; 16],
     identity: &mut Identity<N>,
     user_manager: &ServerUserManager<N>,
-) -> Result<ChunkDecoder<CM>, anyhow::Error>
-where
-    CM: CipherMethod + KeyInit,
-{
+) -> Result<ChunkDecoder, anyhow::Error> {
     let identity_sub_key = blake3::derive_key("shadowsocks 2022 identity subkey", &[key, salt].concat());
     let eih = user_hash;
     match kind {
@@ -96,7 +56,7 @@ where
     if let Some(user) = user_manager.get_user_by_hash(&user_hash) {
         trace!("{} chosen by EIH", user);
         identity.user = Some(user.clone());
-        new_decoder::<N, CM>(&user.key, salt).map_err(|e| anyhow!(e))
+        Ok(super::new_decoder(kind, &user.key, salt))
     } else {
         bail!("invalid client user identity {:?}", ByteStr::new(&user_hash))
     }

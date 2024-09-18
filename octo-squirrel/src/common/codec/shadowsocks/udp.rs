@@ -1,6 +1,8 @@
+use std::cmp::Ordering;
 use std::io::Cursor;
-use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -8,7 +10,9 @@ use byte_string::ByteStr;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
+use log::debug;
 use log::trace;
+use lru_time_cache::LruCache;
 use rand::random;
 
 use super::aead_2022;
@@ -17,24 +21,22 @@ use super::ChunkEncoder;
 use super::Keys;
 use crate::common::codec::aead::CipherKind;
 use crate::common::codec::aead::CipherMethod;
-use crate::common::codec::aead::KeyInit;
 use crate::common::codec::shadowsocks::aead_2022::udp;
 use crate::common::manager::shadowsocks::ServerUser;
 use crate::common::manager::shadowsocks::ServerUserManager;
 use crate::common::protocol::address::Address;
 use crate::common::protocol::shadowsocks::Mode;
-use crate::common::protocol::socks5::address::AddressCodec;
-use crate::common::util::Dice;
+use crate::common::protocol::socks5::address;
+use crate::common::util::dice;
 
-pub struct AEADCipherCodec<const N: usize, CM> {
+pub struct AEADCipherCodec<const N: usize> {
     kind: CipherKind,
     keys: Keys<N>,
-    method: PhantomData<CM>,
 }
 
-impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
+impl<const N: usize> AEADCipherCodec<N> {
     pub fn new(kind: CipherKind, password: &str) -> Result<Self, base64ct::Error> {
-        Ok(Self { kind, keys: Keys::from(kind, password)?, method: PhantomData })
+        Ok(Self { kind, keys: Keys::from(kind, password)? })
     }
 
     pub fn encode(&self, context: &Context<N>, session: &Session<N>, address: &Address, item: BytesMut, dst: &mut BytesMut) -> anyhow::Result<()> {
@@ -43,12 +45,12 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
             (true, Mode::Server) => self.encode_server_packet_aead_2022(session, address, item, dst),
             (false, _) => {
                 let salt = &mut [0; N];
-                Dice::fill_bytes(salt);
+                dice::fill_bytes(salt);
                 dst.put(&salt[..]);
-                let mut temp = BytesMut::with_capacity(AddressCodec::length(address) + item.remaining());
-                AddressCodec::encode(address, &mut temp);
+                let mut temp = BytesMut::with_capacity(address::length(address) + item.remaining());
+                address::encode(address, &mut temp);
                 temp.put(item);
-                let mut encoder: ChunkEncoder<CM> = self.new_encoder(salt).map_err(anyhow::Error::msg)?;
+                let mut encoder = self.new_encoder(salt)?;
                 encoder.encode_packet(temp, dst).map_err(|e| anyhow!(e))
             }
         }
@@ -61,7 +63,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
         let require_eih = self.kind.support_eih() && !self.keys.identity_keys.is_empty();
         let eih_len = if require_eih { 16 } else { 0 };
         let mut temp = BytesMut::with_capacity(
-            nonce_length + 8 + 8 + eih_len + 1 + 8 + 2 + padding_length as usize + AddressCodec::length(address) + item.remaining() + tag_size,
+            nonce_length + 8 + 8 + eih_len + 1 + 8 + 2 + padding_length as usize + address::length(address) + item.remaining() + tag_size,
         );
         temp.put_u64(session.client_session_id);
         temp.put_u64(session.packet_id);
@@ -73,8 +75,8 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
         temp.put_u8(Mode::Client.to_u8());
         temp.put_u64(super::aead_2022::now()?);
         temp.put_u16(padding_length);
-        temp.put(&Dice::roll_bytes(padding_length as usize)[..]);
-        AddressCodec::encode(address, &mut temp);
+        temp.put(&dice::roll_bytes(padding_length as usize)[..]);
+        address::encode(address, &mut temp);
         temp.put(item);
         let mut header = temp.split_to(16);
         let mut nonce: [u8; 12] = [0; 12];
@@ -85,14 +87,17 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
         if eih_len > 0 {
             dst.extend_from_slice(&temp.split_to(eih_len))
         }
-        udp::new_encoder::<CM>(&self.keys.enc_key, session.client_session_id, nonce)?.encode_packet(temp, dst).map_err(|e| anyhow!(e))
+        let cipher = unsafe { get_cipher(self.kind, &self.keys.enc_key, session.client_session_id) };
+        cipher.encrypt_in_place(&nonce, b"", &mut temp).map_err(|e| anyhow!(e))?;
+        dst.extend_from_slice(&temp);
+        Ok(())
     }
 
     fn encode_server_packet_aead_2022(&self, session: &Session<N>, address: &Address, item: BytesMut, dst: &mut BytesMut) -> anyhow::Result<()> {
         let padding_length = super::aead_2022::next_padding_length(&item);
         let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
         let mut temp = BytesMut::with_capacity(
-            nonce_length + 8 + 8 + 1 + 8 + 8 + 2 + padding_length as usize + AddressCodec::length(address) + item.remaining() + self.kind.tag_size(),
+            nonce_length + 8 + 8 + 1 + 8 + 8 + 2 + padding_length as usize + address::length(address) + item.remaining() + self.kind.tag_size(),
         );
         temp.put_u64(session.server_session_id);
         temp.put_u64(session.packet_id);
@@ -100,8 +105,8 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
         temp.put_u64(super::aead_2022::now()?);
         temp.put_u64(session.client_session_id);
         temp.put_u16(padding_length);
-        temp.put(&Dice::roll_bytes(padding_length as usize)[..]);
-        AddressCodec::encode(address, &mut temp);
+        temp.put(&dice::roll_bytes(padding_length as usize)[..]);
+        address::encode(address, &mut temp);
         temp.put(item);
         let key = if let Some(user) = &session.user {
             trace!("encrypt with identity {}", user);
@@ -114,14 +119,17 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
         nonce.copy_from_slice(&header[4..16]);
         udp::aes_encrypt_in_place(self.kind, key, &mut header)?;
         dst.put(header);
-        udp::new_encoder::<CM>(key, session.server_session_id, nonce)?.encode_packet(temp, dst).map_err(|e| anyhow!(e))
+        let cipher = unsafe { get_cipher(self.kind, key, session.server_session_id) };
+        cipher.encrypt_in_place(&nonce, b"", &mut temp).map_err(|e| anyhow!(e))?;
+        dst.extend_from_slice(&temp);
+        Ok(())
     }
 
-    fn new_encoder(&self, salt: &[u8]) -> Result<ChunkEncoder<CM>, String> {
+    fn new_encoder(&self, salt: &[u8]) -> anyhow::Result<ChunkEncoder> {
         if self.kind.is_aead_2022() {
-            super::aead_2022::tcp::new_encoder::<N, CM>(&self.keys.enc_key, salt).map_err(|e| e.to_string())
+            Ok(super::aead_2022::new_encoder(self.kind, &self.keys.enc_key, salt))
         } else {
-            super::aead::new_encoder(&self.keys.enc_key, salt)
+            super::aead::new_encoder(self.kind, &self.keys.enc_key, salt).map_err(|e| anyhow!(e))
         }
     }
 
@@ -134,9 +142,9 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
                     bail!("invalid packet length");
                 }
                 let salt = src.split_to(self.keys.enc_key.len());
-                let mut decoder: ChunkDecoder<CM> = self.new_payload_decoder(&salt).map_err(anyhow::Error::msg)?;
+                let mut decoder = self.new_payload_decoder(&salt).map_err(anyhow::Error::msg)?;
                 let mut packet = decoder.decode_packet(src).map_err(|e| anyhow!(e))?.unwrap();
-                let address = AddressCodec::decode(&mut packet)?;
+                let address = address::decode(&mut packet)?;
                 Ok((packet, address, Session::default()))
             }
         }
@@ -157,7 +165,9 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
         let mut header = Cursor::new(&session_id_packet_id);
         let server_session_id = header.get_u64();
         let packet_id = header.get_u64();
-        let mut packet = udp::new_decoder::<CM>(&self.keys.enc_key, server_session_id, nonce)?.decode_packet(src).map_err(|e| anyhow!(e))?.unwrap();
+        let cipher = unsafe { get_cipher(self.kind, &self.keys.enc_key, server_session_id) };
+        let mut packet = src.split_off(0);
+        cipher.decrypt_in_place(&nonce, b"", &mut packet).map_err(|e| anyhow!(e))?;
         let stream_type = packet.get_u8();
         if stream_type != Mode::Server.to_u8() {
             bail!("invalid socket type, expecting {}, but found {}", Mode::Client.to_u8(), stream_type);
@@ -169,7 +179,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
             packet.advance(padding_length as usize);
         }
         let session = Session::new(client_session_id, server_session_id, packet_id, None);
-        let address = AddressCodec::decode(&mut packet)?;
+        let address = address::decode(&mut packet)?;
         Ok((packet, address, session))
     }
 
@@ -209,7 +219,9 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
             }
         }
         let key = if let Some(ref user) = user { &user.key } else { &self.keys.enc_key };
-        let mut packet = udp::new_decoder::<CM>(key, session_id, nonce)?.decode_packet(src).map_err(|e| anyhow!(e))?.unwrap();
+        let cipher = unsafe { get_cipher(self.kind, key, session_id) };
+        let mut packet = src.split_off(0);
+        cipher.decrypt_in_place(&nonce, b"", &mut packet).map_err(|e| anyhow!(e))?;
         let stream_type = packet.get_u8();
         if stream_type != Mode::Client.to_u8() {
             bail!("invalid socket type, expecting {}, but found {}", Mode::Client.to_u8(), stream_type);
@@ -220,30 +232,29 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
             packet.advance(padding_length as usize);
         }
         let session = Session::new(session_id, 0, packet_id, user);
-        let address = AddressCodec::decode(&mut packet)?;
+        let address = address::decode(&mut packet)?;
         Ok((packet, address, session))
     }
 
-    fn new_payload_decoder(&self, salt: &BytesMut) -> Result<ChunkDecoder<CM>, String> {
+    fn new_payload_decoder(&self, salt: &BytesMut) -> anyhow::Result<ChunkDecoder> {
         if self.kind.is_aead_2022() {
-            super::aead_2022::tcp::new_decoder::<N, CM>(&self.keys.enc_key, salt).map_err(|e| e.to_string())
+            Ok(super::aead_2022::new_decoder(self.kind, &self.keys.enc_key, salt))
         } else {
-            super::aead::new_decoder(&self.keys.enc_key, salt)
+            super::aead::new_decoder(self.kind, &self.keys.enc_key, salt).map_err(|e| anyhow!(e))
         }
     }
 }
 
 pub type SessionPacket<const N: usize> = (BytesMut, Address, Session<N>);
 
-pub struct SessionCodec<const N: usize, CM> {
+pub struct SessionCodec<const N: usize> {
     context: Context<N>,
-    cipher: AEADCipherCodec<N, CM>,
-    method: PhantomData<CM>,
+    cipher: AEADCipherCodec<N>,
 }
 
-impl<const N: usize, CM: CipherMethod + KeyInit> SessionCodec<N, CM> {
-    pub fn new(context: Context<N>, cipher: AEADCipherCodec<N, CM>) -> Self {
-        Self { context, cipher, method: PhantomData }
+impl<const N: usize> SessionCodec<N> {
+    pub fn new(context: Context<N>, cipher: AEADCipherCodec<N>) -> Self {
+        Self { context, cipher }
     }
 
     pub fn encode(&self, (content, address, session): SessionPacket<N>, dst: &mut BytesMut) -> anyhow::Result<()> {
@@ -304,6 +315,37 @@ impl<const N: usize> From<Mode> for Session<N> {
     }
 }
 
+static mut CHCHE: OnceLock<LruCache<CipherKey, CipherMethod>> = OnceLock::new();
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+struct CipherKey {
+    kind: CipherKind,
+    key: usize,
+    session_id: u64,
+}
+
+impl PartialOrd for CipherKey {
+    fn partial_cmp(&self, other: &CipherKey) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CipherKey {
+    fn cmp(&self, other: &CipherKey) -> Ordering {
+        self.session_id.cmp(&other.session_id).then(self.key.cmp(&other.key)).then(self.kind.cmp(&other.kind))
+    }
+}
+
+unsafe fn get_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> &CipherMethod {
+    CHCHE.get_or_init(|| LruCache::with_expiry_duration_and_capacity(Duration::from_secs(30), 102400));
+    let cache = CHCHE.get_mut().expect("empty cipher cache");
+    let key_ptr = key.as_ptr() as usize;
+    cache.entry(CipherKey { kind, key: key_ptr, session_id }).or_insert_with(|| {
+        debug!("[udp] new cache cipher {}|{}|{}", kind, key_ptr, session_id);
+        udp::init_cipher(kind, key, session_id)
+    })
+}
+
 #[cfg(test)]
 mod test {
     use std::net::Ipv4Addr;
@@ -316,11 +358,7 @@ mod test {
     use rand::random;
     use rand::Rng;
 
-    use crate::common::codec::aead::Aes128GcmCipher;
-    use crate::common::codec::aead::Aes256GcmCipher;
     use crate::common::codec::aead::CipherKind;
-    use crate::common::codec::aead::CipherMethod;
-    use crate::common::codec::aead::KeyInit;
     use crate::common::codec::shadowsocks::udp::AEADCipherCodec;
     use crate::common::codec::shadowsocks::udp::Context;
     use crate::common::codec::shadowsocks::udp::Session;
@@ -332,12 +370,12 @@ mod test {
     #[test]
     fn test_udp() -> anyhow::Result<()> {
         fn test_udp(cipher: CipherKind) -> anyhow::Result<()> {
-            fn test_udp<const N: usize, CM: CipherMethod + KeyInit>(cipher: CipherKind) -> anyhow::Result<()> {
+            fn test_udp<const N: usize>(cipher: CipherKind) -> anyhow::Result<()> {
                 let password_len = rand::thread_rng().gen_range(10..=100);
                 let password: String = rand::thread_rng().sample_iter(&Alphanumeric).take(password_len).map(char::from).collect();
                 let codec = AEADCipherCodec::new(cipher, &password).map_err(|e| anyhow!(e))?;
                 let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
-                let codec: SessionCodec<N, CM> = SessionCodec::new(Context::new(Mode::Server, None), codec);
+                let codec: SessionCodec<N> = SessionCodec::new(Context::new(Mode::Server, None), codec);
                 let mut dst = BytesMut::new();
                 let addr = Address::Socket(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random())));
                 codec.encode((expect.as_bytes().into(), addr.clone(), Session::default()), &mut dst)?;
@@ -348,8 +386,8 @@ mod test {
             }
 
             match cipher {
-                CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_udp::<16, Aes128GcmCipher>(cipher),
-                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_udp::<32, Aes256GcmCipher>(cipher),
+                CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_udp::<16>(cipher),
+                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_udp::<32>(cipher),
                 _ => unreachable!(),
             }
         }

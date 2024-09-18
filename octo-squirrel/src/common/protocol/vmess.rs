@@ -1,33 +1,14 @@
 pub mod aead;
-pub mod encoding;
+pub mod auth;
 pub mod header;
 pub mod session;
-use std::io;
-use std::net::Ipv4Addr;
-use std::net::Ipv6Addr;
-use std::net::SocketAddr;
-use std::net::SocketAddrV4;
-use std::net::SocketAddrV6;
-use std::string::FromUtf8Error;
 use std::time::SystemTime;
 use std::time::SystemTimeError;
 use std::time::UNIX_EPOCH;
 
-use aes::cipher::generic_array::GenericArray;
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::Bytes;
-use bytes::BytesMut;
 use crc::Crc;
 use crc::CRC_32_ISO_HDLC;
-use hmac::digest::OutputSizeUser;
-use md5::Digest;
-use md5::Md5;
 use rand::Rng;
-use uuid::Uuid;
-
-use super::address::Address;
-use crate::common::protocol::vmess::header::AddressType;
 
 pub const VERSION: u8 = 1;
 
@@ -44,9 +25,23 @@ pub fn timestamp(delta: i32) -> Result<i64, SystemTimeError> {
     Ok(now()? - range_in_delta as i64)
 }
 
-pub struct AddressCodec;
+pub mod address {
+    use std::io;
+    use std::net::Ipv4Addr;
+    use std::net::Ipv6Addr;
+    use std::net::SocketAddr;
+    use std::net::SocketAddrV4;
+    use std::net::SocketAddrV6;
+    use std::string::FromUtf8Error;
 
-impl AddressCodec {
+    use bytes::Buf;
+    use bytes::BufMut;
+    use bytes::Bytes;
+    use bytes::BytesMut;
+
+    use crate::common::protocol::address::Address;
+    use crate::common::protocol::vmess::header::AddressType;
+
     pub fn write_address_port(address: &Address, buf: &mut BytesMut) -> Result<(), io::Error> {
         match address {
             Address::Domain(host, port) => {
@@ -89,19 +84,24 @@ impl AddressCodec {
     }
 }
 
-pub struct ID;
-impl ID {
+pub mod id {
+    use aes::cipher::generic_array::GenericArray;
+    use hmac::digest::OutputSizeUser;
+    use md5::Digest;
+    use md5::Md5;
+    use uuid::Uuid;
+
     pub fn from_passwords(uuid: Vec<&String>) -> Result<Vec<[u8; 16]>, uuid::Error> {
         let mut res = Vec::with_capacity(uuid.len());
         for uuid in uuid {
-            res.push(Self::from_password(uuid)?);
+            res.push(from_password(uuid)?);
         }
         Ok(res)
     }
 
     pub fn from_password(uuid: &str) -> Result<[u8; 16], uuid::Error> {
         let uuid = Uuid::parse_str(uuid)?;
-        Ok(Self::from_uuid(uuid))
+        Ok(from_uuid(uuid))
     }
 
     pub fn from_uuid(uuid: Uuid) -> [u8; 16] {
@@ -124,17 +124,17 @@ mod test {
     use bytes::Buf;
     use bytes::BytesMut;
 
-    use super::AddressCodec;
-    use super::ID;
+    use super::address;
+    use super::id;
     use crate::common::protocol::address::Address;
 
     #[test]
     fn test_address_codec() -> Result<(), AddrParseError> {
         fn test_address_codec(address: Address) {
             let buf = &mut BytesMut::new();
-            let res = AddressCodec::write_address_port(&address, buf);
+            let res = address::write_address_port(&address, buf);
             if let Ok(()) = res {
-                let res = AddressCodec::read_address_port(&mut buf.split_off(0).freeze());
+                let res = address::read_address_port(&mut buf.split_off(0).freeze());
                 if let Ok(actual) = res {
                     assert_eq!(address, actual);
                 }
@@ -150,7 +150,7 @@ mod test {
 
     #[test]
     fn test_from_password() -> Result<(), uuid::Error> {
-        let id = ID::from_password(&"b831381d-6324-4d53-ad4f-8cda48b30811".to_owned())?;
+        let id = id::from_password(&"b831381d-6324-4d53-ad4f-8cda48b30811".to_owned())?;
         assert_eq!("tQ2RasDOwGeYGvjl84p1jw==", Base64::encode_string(&id));
         Ok(())
     }

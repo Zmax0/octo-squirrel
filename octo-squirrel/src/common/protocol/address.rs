@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::fmt::Formatter;
 use std::io;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -70,7 +71,7 @@ impl ToSocketAddrs for Address {
 }
 
 impl Display for Address {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Address::Domain(host, port) => write!(f, "{}:{}", host, port),
             Address::Socket(addr) => addr.fmt(f),

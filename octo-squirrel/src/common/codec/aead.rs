@@ -1,6 +1,10 @@
 use std::fmt::Display;
+use std::fmt::Formatter;
 use std::mem::size_of;
 
+use aead::Key;
+use aead::KeyInit;
+use aead::KeySizeUser;
 use aes::cipher::Unsigned;
 use aes_gcm::aead::Aead;
 use aes_gcm::aead::Buffer;
@@ -10,84 +14,91 @@ use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::Aes256Gcm;
 use chacha20poly1305::ChaCha20Poly1305;
-use digest::InvalidLength;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub trait CipherMethod: Send {
-    fn encrypt(&self, nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, aead::Error>;
-    fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, aead::Error>;
-    fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) -> Result<(), aead::Error>;
-    fn decrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) -> Result<(), aead::Error>;
-    fn nonce_size(&self) -> usize;
-    fn tag_size(&self) -> usize;
-    fn ciphertext_overhead(&self) -> usize;
-}
-
-pub trait KeyInit: Sized {
-    fn init(key: &[u8]) -> Result<Self, InvalidLength>;
-}
-
-macro_rules! aead_impl {
-    ($name:ident, $cipher:ty) => {
-        pub struct $name {
-            cipher: $cipher,
-        }
-
-        impl $name {
-            pub const NONCE_SIZE: usize = <$cipher as AeadCore>::NonceSize::USIZE;
-            pub const TAG_SIZE: usize = <$cipher as AeadCore>::TagSize::USIZE;
-            pub const CIPHERTEXT_OVERHEAD: usize = <$cipher as AeadCore>::CiphertextOverhead::USIZE;
-
-            pub fn new_from_slice(key: &[u8]) -> Result<Self, InvalidLength> {
-                use aes_gcm::KeyInit;
-                Ok(Self { cipher: <$cipher>::new_from_slice(key)? })
-            }
-        }
-
-        impl CipherMethod for $name {
-            fn encrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Result<Vec<u8>, aead::Error> {
-                self.cipher.encrypt(nonce.into(), Payload { msg, aad })
-            }
-
-            fn decrypt(&self, nonce: &[u8], msg: &[u8], aad: &[u8]) -> Result<Vec<u8>, aead::Error> {
-                self.cipher.decrypt(nonce.into(), Payload { msg, aad })
-            }
-
-            fn encrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) -> Result<(), aead::Error> {
-                self.cipher.encrypt_in_place(nonce.into(), aad, buffer)
-            }
-
-            fn decrypt_in_place(&self, nonce: &[u8], aad: &[u8], buffer: &mut dyn Buffer) -> Result<(), aead::Error> {
-                self.cipher.decrypt_in_place(nonce.into(), aad, buffer)
-            }
-
-            fn nonce_size(&self) -> usize {
-                $name::NONCE_SIZE
-            }
-
-            fn tag_size(&self) -> usize {
-                $name::TAG_SIZE
-            }
-
-            fn ciphertext_overhead(&self) -> usize {
-                $name::CIPHERTEXT_OVERHEAD
-            }
-        }
-
-        impl KeyInit for $name {
-            fn init(key: &[u8]) -> Result<Self, InvalidLength> {
-                $name::new_from_slice(key)
-            }
+macro_rules! method_match_aead {
+    ($self:ident, $trait:ident, $type:ident) => {
+        match $self {
+            Self::Aes128Gcm(_) => <Aes128Gcm as $trait>::$type::USIZE,
+            Self::Aes256Gcm(_) => <Aes256Gcm as $trait>::$type::USIZE,
+            Self::ChaCha20Poly1305(_) => <ChaCha20Poly1305 as $trait>::$type::USIZE,
         }
     };
 }
 
-aead_impl!(Aes128GcmCipher, Aes128Gcm);
-aead_impl!(Aes256GcmCipher, Aes256Gcm);
-aead_impl!(ChaCha20Poly1305Cipher, ChaCha20Poly1305);
+#[allow(clippy::large_enum_variant)]
+pub enum CipherMethod {
+    Aes128Gcm(Aes128Gcm),
+    Aes256Gcm(Aes256Gcm),
+    ChaCha20Poly1305(ChaCha20Poly1305),
+}
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+impl CipherMethod {
+    pub fn new(kind: CipherKind, key: &[u8]) -> Self {
+        match kind {
+            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
+                let key = &key[..<Aes128Gcm as KeySizeUser>::KeySize::USIZE];
+                Self::Aes128Gcm(Aes128Gcm::new(Key::<Aes128Gcm>::from_slice(key)))
+            }
+            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
+                let key = &key[..<Aes256Gcm as KeySizeUser>::KeySize::USIZE];
+                Self::Aes256Gcm(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key)))
+            }
+            CipherKind::ChaCha20Poly1305 => {
+                let key = &key[..<ChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];
+                Self::ChaCha20Poly1305(ChaCha20Poly1305::new(Key::<ChaCha20Poly1305>::from_slice(key)))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn encrypt(&self, nonce: &[u8], plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
+        match self {
+            Self::Aes128Gcm(cipher) => cipher.encrypt(nonce.into(), Payload { msg: plaintext, aad: associated_data }),
+            Self::Aes256Gcm(cipher) => cipher.encrypt(nonce.into(), Payload { msg: plaintext, aad: associated_data }),
+            Self::ChaCha20Poly1305(cipher) => cipher.encrypt(nonce.into(), Payload { msg: plaintext, aad: associated_data }),
+        }
+    }
+
+    pub fn encrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut dyn Buffer) -> Result<(), aead::Error> {
+        match self {
+            Self::Aes128Gcm(cipher) => cipher.encrypt_in_place(nonce.into(), associated_data, plaintext),
+            Self::Aes256Gcm(cipher) => cipher.encrypt_in_place(nonce.into(), associated_data, plaintext),
+            Self::ChaCha20Poly1305(cipher) => cipher.encrypt_in_place(nonce.into(), associated_data, plaintext),
+        }
+    }
+
+    pub fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
+        match self {
+            Self::Aes128Gcm(cipher) => cipher.decrypt(nonce.into(), Payload { msg: ciphertext, aad: associated_data }),
+            Self::Aes256Gcm(cipher) => cipher.decrypt(nonce.into(), Payload { msg: ciphertext, aad: associated_data }),
+            Self::ChaCha20Poly1305(cipher) => cipher.decrypt(nonce.into(), Payload { msg: ciphertext, aad: associated_data }),
+        }
+    }
+
+    pub fn decrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut dyn Buffer) -> Result<(), aead::Error> {
+        match self {
+            Self::Aes128Gcm(cipher) => cipher.decrypt_in_place(nonce.into(), associated_data, ciphertext),
+            Self::Aes256Gcm(cipher) => cipher.decrypt_in_place(nonce.into(), associated_data, ciphertext),
+            Self::ChaCha20Poly1305(cipher) => cipher.decrypt_in_place(nonce.into(), associated_data, ciphertext),
+        }
+    }
+
+    pub const fn nonce_size(&self) -> usize {
+        method_match_aead!(self, AeadCore, NonceSize)
+    }
+
+    pub const fn tag_size(&self) -> usize {
+        method_match_aead!(self, AeadCore, TagSize)
+    }
+
+    pub const fn ciphertext_overhead(&self) -> usize {
+        method_match_aead!(self, AeadCore, CiphertextOverhead)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CipherKind {
     #[serde(rename = "aes-128-gcm")]
     Aes128Gcm,
@@ -103,46 +114,37 @@ pub enum CipherKind {
     Unknown,
 }
 
-macro_rules! match_method_const {
-    ($self:ident, $const:ident) => {
+macro_rules! kind_match_aead {
+    ($self:ident, $trait:ident, $type:ident) => {
         match $self {
-            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Aes128GcmCipher::$const,
-            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Aes256GcmCipher::$const,
-            CipherKind::ChaCha20Poly1305 => ChaCha20Poly1305Cipher::$const,
+            Self::Aes128Gcm | Self::Aead2022Blake3Aes128Gcm => <Aes128Gcm as $trait>::$type::USIZE,
+            Self::Aes256Gcm | Self::Aead2022Blake3Aes256Gcm => <Aes256Gcm as $trait>::$type::USIZE,
+            Self::ChaCha20Poly1305 => <ChaCha20Poly1305 as $trait>::$type::USIZE,
             _ => unreachable!(),
         }
     };
 }
 
 impl CipherKind {
-    pub fn to_cipher_method(&self, key: &[u8]) -> Result<Box<dyn CipherMethod>, InvalidLength> {
-        match self {
-            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => Ok(Box::new(Aes128GcmCipher::new_from_slice(key)?)),
-            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Ok(Box::new(Aes256GcmCipher::new_from_slice(key)?)),
-            CipherKind::ChaCha20Poly1305 => Ok(Box::new(ChaCha20Poly1305Cipher::new_from_slice(key)?)),
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn is_aead_2022(&self) -> bool {
+    pub const fn is_aead_2022(&self) -> bool {
         matches!(self, CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm)
     }
 
-    pub fn support_eih(&self) -> bool {
+    pub const fn support_eih(&self) -> bool {
         self.is_aead_2022()
     }
 
-    pub fn tag_size(&self) -> usize {
-        match_method_const!(self, TAG_SIZE)
+    pub const fn tag_size(&self) -> usize {
+        kind_match_aead!(self, AeadCore, TagSize)
     }
 
-    pub fn ciphertext_overhead(&self) -> usize {
-        match_method_const!(self, CIPHERTEXT_OVERHEAD)
+    pub const fn ciphertext_overhead(&self) -> usize {
+        kind_match_aead!(self, AeadCore, CiphertextOverhead)
     }
 }
 
 impl Display for CipherKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             CipherKind::Aes128Gcm => write!(f, "aes-128-gcm"),
             CipherKind::Aes256Gcm => write!(f, "aes-256-gcm"),
@@ -179,26 +181,26 @@ impl CountingNonceGenerator {
 }
 
 impl CountingNonceGenerator {
-    pub fn generate(&mut self, nonce: &mut [u8]) -> Vec<u8> {
+    pub fn generate<'a>(&mut self, nonce: &'a mut [u8]) -> &'a [u8] {
         nonce[..size_of::<u16>()].copy_from_slice(&self.count.to_be_bytes());
         self.count = self.count.overflowing_add(1).0;
-        nonce[..self.nonce_size].to_vec()
+        &nonce[..self.nonce_size]
     }
 }
 
 impl Display for CountingNonceGenerator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "count={}", self.count)
     }
 }
 
 pub struct IncreasingNonceGenerator {
-    nonce: Vec<u8>,
+    nonce: [u8; 12],
 }
 
 impl IncreasingNonceGenerator {
     pub fn init() -> Self {
-        Self { nonce: vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff] }
+        Self { nonce: [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff] }
     }
 
     pub fn generate(&mut self) -> &[u8] {
@@ -231,7 +233,7 @@ mod test {
 
     #[test]
     fn test_generate_increasing_nonce() {
-        let nonce = vec![0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let nonce = [0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let mut generator: IncreasingNonceGenerator = IncreasingNonceGenerator { nonce };
         assert_eq!(generator.generate(), [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     }
@@ -244,10 +246,12 @@ mod test {
     #[test]
     fn test_generate_counting_nonce() {
         let mut nonce: [u8; 16] = [0; 16];
-        let mut generator = CountingNonceGenerator::new(12);
-        let mut generated = Vec::new();
+        const NONCE_SIZE: usize = 12;
+        let mut generator = CountingNonceGenerator::new(NONCE_SIZE);
+        let mut generated = [0; NONCE_SIZE];
         for _ in 0..65536 {
-            generated = generator.generate(&mut nonce);
+            let res = generator.generate(&mut nonce);
+            generated.copy_from_slice(res);
         }
         assert_eq!("//8AAAAAAAAAAAAA", base64ct::Base64::encode_string(&generated[..]));
         assert_eq!("//8AAAAAAAAAAAAAAAAAAA==", base64ct::Base64::encode_string(&nonce));

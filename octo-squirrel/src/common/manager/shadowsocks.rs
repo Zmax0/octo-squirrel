@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::fmt::Formatter;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -88,7 +89,7 @@ impl<const N: usize> Hash for ServerUser<N> {
 }
 
 impl<const N: usize> Display for ServerUser<N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "N:{}, K:{:?}, IH:{:?}", self.name, ByteStr::new(&self.key), ByteStr::new(&self.identity_hash))
     }
 }

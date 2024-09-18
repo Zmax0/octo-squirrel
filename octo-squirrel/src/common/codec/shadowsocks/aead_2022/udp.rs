@@ -6,46 +6,17 @@ use aes::Block;
 use anyhow::bail;
 use byte_string::ByteStr;
 use bytes::BytesMut;
-use digest::InvalidLength;
 use log::trace;
 
 use crate::common::codec::aead::CipherKind;
 use crate::common::codec::aead::CipherMethod;
-use crate::common::codec::aead::KeyInit;
-use crate::common::codec::shadowsocks::Authenticator;
-use crate::common::codec::shadowsocks::ChunkDecoder;
-use crate::common::codec::shadowsocks::ChunkEncoder;
-use crate::common::codec::shadowsocks::ChunkSizeParser;
 use crate::common::codec::shadowsocks::Keys;
-use crate::common::codec::shadowsocks::NonceGenerator;
 
 pub fn nonce_length(kind: CipherKind) -> Result<usize, String> {
     match kind {
         CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Ok(0),
         _ => Err(format!("{:?} is not an AEAD 2022 cipher", kind)),
     }
-}
-
-pub fn new_encoder<CM>(key: &[u8], session_id: u64, nonce: [u8; 12]) -> Result<ChunkEncoder<CM>, InvalidLength>
-where
-    CM: CipherMethod + KeyInit,
-{
-    let key = session_sub_key(key, session_id);
-    let auth = Authenticator::new(CM::init(&key)?, NonceGenerator::Static(Box::new(nonce)));
-    Ok(ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Empty))
-}
-
-pub fn new_decoder<CM>(key: &[u8], session_id: u64, nonce: [u8; 12]) -> Result<ChunkDecoder<CM>, InvalidLength>
-where
-    CM: CipherMethod + KeyInit,
-{
-    let key = session_sub_key(key, session_id);
-    let auth = Authenticator::new(CM::init(&key)?, NonceGenerator::Static(Box::new(nonce)));
-    Ok(ChunkDecoder::new(auth, ChunkSizeParser::Empty))
-}
-
-fn session_sub_key(key: &[u8], session_id: u64) -> [u8; 32] {
-    super::session_sub_key(key, &session_id.to_be_bytes())
 }
 
 pub fn aes_encrypt_in_place(kind: CipherKind, key: &[u8], header: &mut [u8]) -> anyhow::Result<()> {
@@ -109,4 +80,9 @@ fn make_eih(kind: CipherKind, ipsk: &[u8], ipskn: &[u8], session_id_packet_id: &
     let res = aes_encrypt_in_place(kind, ipsk, identity_header);
     trace!("client EIH:{:?}, hash:{:?}", ByteStr::new(identity_header), ByteStr::new(plain_text));
     res
+}
+
+pub fn init_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> CipherMethod {
+    let key = super::session_sub_key(key, &session_id.to_be_bytes());
+    CipherMethod::new(kind, &key)
 }

@@ -4,6 +4,7 @@ pub mod tcp;
 pub mod udp;
 
 use std::fmt::Display;
+use std::fmt::Formatter;
 use std::mem::size_of;
 
 use ::aead::Buffer;
@@ -17,35 +18,20 @@ use log::trace;
 use super::aead::CipherKind;
 use super::aead::CipherMethod;
 use super::aead::IncreasingNonceGenerator;
-use super::aead::KeyInit;
-
-enum NonceGenerator {
-    Increasing(IncreasingNonceGenerator),
-    Static(Box<[u8]>),
-}
-
-impl NonceGenerator {
-    pub fn generate(&mut self) -> &[u8] {
-        match self {
-            NonceGenerator::Increasing(ref mut inner) => inner.generate(),
-            NonceGenerator::Static(nonce) => nonce,
-        }
-    }
-}
 
 pub enum ChunkSizeParser {
     Auth,
     Empty,
 }
 
-pub struct Authenticator<CM> {
-    method: CM,
-    nonce_generator: NonceGenerator,
+pub struct Authenticator {
+    method: CipherMethod,
+    nonce_generator: IncreasingNonceGenerator,
 }
 
-impl<CM: CipherMethod + KeyInit> Authenticator<CM> {
-    fn new(method: CM, nonce_generator: NonceGenerator) -> Self {
-        Self { method, nonce_generator }
+impl Authenticator {
+    fn new(method: CipherMethod) -> Self {
+        Self { method, nonce_generator: IncreasingNonceGenerator::init() }
     }
 
     fn size_bytes(&self) -> usize {
@@ -73,14 +59,14 @@ impl<CM: CipherMethod + KeyInit> Authenticator<CM> {
     }
 }
 
-pub struct ChunkEncoder<CM> {
+pub struct ChunkEncoder {
     payload_limit: usize,
-    auth: Authenticator<CM>,
+    auth: Authenticator,
     chunk: ChunkSizeParser,
 }
 
-impl<CM: CipherMethod + KeyInit> ChunkEncoder<CM> {
-    fn new(payload_limit: usize, auth: Authenticator<CM>, chunk: ChunkSizeParser) -> Self {
+impl ChunkEncoder {
+    fn new(payload_limit: usize, auth: Authenticator, chunk: ChunkSizeParser) -> Self {
         Self { payload_limit, auth, chunk }
     }
 
@@ -124,14 +110,14 @@ impl<CM: CipherMethod + KeyInit> ChunkEncoder<CM> {
     }
 }
 
-pub struct ChunkDecoder<CM> {
+pub struct ChunkDecoder {
     payload_length: Option<usize>,
-    auth: Authenticator<CM>,
+    auth: Authenticator,
     chunk: ChunkSizeParser,
 }
 
-impl<CM: CipherMethod + KeyInit> ChunkDecoder<CM> {
-    fn new(auth: Authenticator<CM>, chunk: ChunkSizeParser) -> Self {
+impl ChunkDecoder {
+    fn new(auth: Authenticator, chunk: ChunkSizeParser) -> Self {
         Self { payload_length: None, auth, chunk }
     }
 
@@ -194,7 +180,7 @@ impl<const N: usize> Keys<N> {
 }
 
 impl<const N: usize> Display for Keys<N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "EK: {}, IKS: {:#?}", Base64::encode_string(&self.enc_key), self.identity_keys)
     }
 }

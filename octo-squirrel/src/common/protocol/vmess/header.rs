@@ -1,4 +1,4 @@
-use super::ID;
+use super::id;
 use super::VERSION;
 use crate::common::codec::aead::CipherKind;
 use crate::common::protocol::address::Address;
@@ -77,13 +77,13 @@ impl From<CipherKind> for SecurityType {
 impl From<u8> for SecurityType {
     fn from(value: u8) -> Self {
         match value {
-            1 => SecurityType::Legacy,
-            2 => SecurityType::Auto,
-            3 => SecurityType::Aes128Gcm,
-            4 => SecurityType::Chacha20Poly1305,
-            5 => SecurityType::None,
-            6 => SecurityType::Zero,
-            _ => SecurityType::Unknown,
+            1 => Self::Legacy,
+            2 => Self::Auto,
+            3 => Self::Aes128Gcm,
+            4 => Self::Chacha20Poly1305,
+            5 => Self::None,
+            6 => Self::Zero,
+            _ => Self::Unknown,
         }
     }
 }
@@ -109,7 +109,7 @@ impl RequestHeader {
             option: vec![RequestOption::ChunkStream, RequestOption::ChunkMasking, RequestOption::GlobalPadding, RequestOption::AuthenticatedLength],
             security,
             address,
-            id: ID::from_password(uuid)?,
+            id: id::from_password(uuid)?,
         })
     }
 }

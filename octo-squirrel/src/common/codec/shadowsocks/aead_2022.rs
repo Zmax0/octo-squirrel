@@ -11,7 +11,13 @@ use bytes::Buf;
 use bytes::BytesMut;
 use rand::Rng;
 
+use super::Authenticator;
+use super::ChunkDecoder;
+use super::ChunkEncoder;
+use super::ChunkSizeParser;
 use super::Keys;
+use crate::common::codec::aead::CipherKind;
+use crate::common::codec::aead::CipherMethod;
 
 const SERVER_STREAM_TIMESTAMP_MAX_DIFF: u64 = 30;
 const MIN_PADDING_LENGTH: u16 = 0;
@@ -54,6 +60,18 @@ pub fn password_to_keys<const N: usize>(password: &str) -> Result<Keys<N>, base6
     }
     let enc_key = identity_keys.remove(identity_keys.len() - 1);
     Ok(Keys::new(enc_key, identity_keys))
+}
+
+pub fn new_encoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkEncoder {
+    let key = session_sub_key(key, salt);
+    let auth = Authenticator::new(CipherMethod::new(kind, &key));
+    ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth)
+}
+
+pub fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkDecoder {
+    let key = session_sub_key(key, salt);
+    let auth = Authenticator::new(CipherMethod::new(kind, &key));
+    ChunkDecoder::new(auth, ChunkSizeParser::Auth)
 }
 
 #[cfg(test)]

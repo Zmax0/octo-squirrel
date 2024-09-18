@@ -13,11 +13,7 @@ use log::info;
 use log::trace;
 use log::warn;
 use lru_time_cache::LruCache;
-use octo_squirrel::common::codec::aead::Aes128GcmCipher;
-use octo_squirrel::common::codec::aead::Aes256GcmCipher;
 use octo_squirrel::common::codec::aead::CipherKind;
-use octo_squirrel::common::codec::aead::CipherMethod;
-use octo_squirrel::common::codec::aead::KeyInit;
 use octo_squirrel::common::codec::shadowsocks::udp::Session;
 use octo_squirrel::common::codec::shadowsocks::udp::SessionCodec;
 use octo_squirrel::common::manager::packet_window::PacketWindowFilter;
@@ -49,7 +45,7 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
                 user_manager.add_user(ServerUser::from_user(user).map_err(|e| anyhow!(e))?);
             }
             let user_manager = Arc::new(user_manager);
-            tokio::join!(startup_udp::<16, Aes128GcmCipher>(config, &user_manager), startup_tcp::<16, Aes128GcmCipher>(config, &user_manager))
+            tokio::join!(startup_udp::<16>(config, &user_manager), startup_tcp::<16>(config, &user_manager))
         }
         CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
             let mut user_manager: ServerUserManager<32> = ServerUserManager::new();
@@ -57,7 +53,7 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
                 user_manager.add_user(ServerUser::from_user(user).map_err(|e| anyhow!(e))?);
             }
             let user_manager = Arc::new(user_manager);
-            tokio::join!(startup_udp::<32, Aes256GcmCipher>(config, &user_manager), startup_tcp::<32, Aes256GcmCipher>(config, &user_manager))
+            tokio::join!(startup_udp::<32>(config, &user_manager), startup_tcp::<32>(config, &user_manager))
         }
         _ => unreachable!(),
     };
@@ -69,19 +65,16 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
     }
 }
 
-async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'static>(
-    config: &ServerConfig,
-    user_manager: &Arc<ServerUserManager<N>>,
-) -> anyhow::Result<()> {
+async fn startup_tcp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
     info!("Tcp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
     let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
     match (&config.ssl, &config.ws) {
         (None, ws_config) => {
             while let Ok((inbound, _)) = listener.accept().await {
                 if ws_config.is_some() {
-                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, tcp::new_codec::<N, CM>(config, user_manager.clone())?));
+                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, tcp::new_codec::<N>(config, user_manager.clone())?));
                 } else {
-                    tokio::spawn(template::tcp::relay(inbound, tcp::new_codec::<N, CM>(config, user_manager.clone())?));
+                    tokio::spawn(template::tcp::relay(inbound, tcp::new_codec::<N>(config, user_manager.clone())?));
                 }
             }
         }
@@ -92,14 +85,11 @@ async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'stati
             let tls_acceptor = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
             while let Ok((inbound, _)) = listener.accept().await {
                 let tls = tls_acceptor.clone();
-                let codec = tcp::new_codec::<N, CM>(config, user_manager.clone())?;
+                let codec = tcp::new_codec::<N>(config, user_manager.clone())?;
                 match tls.accept(inbound).await {
                     Ok(inbound) => {
                         if ws_config.is_some() {
-                            tokio::spawn(template::tcp::accept_websocket_then_replay(
-                                inbound,
-                                tcp::new_codec::<N, CM>(config, user_manager.clone())?,
-                            ));
+                            tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, tcp::new_codec::<N>(config, user_manager.clone())?));
                         } else {
                             tokio::spawn(template::tcp::relay(inbound, codec));
                         }
@@ -112,11 +102,8 @@ async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'stati
     Ok(())
 }
 
-async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send + Sync + 'static>(
-    config: &ServerConfig,
-    user_manager: &Arc<ServerUserManager<N>>,
-) -> anyhow::Result<()> {
-    let codec = udp::new_codec::<N, CM>(config, user_manager.clone())?;
+async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
+    let codec = udp::new_codec::<N>(config, user_manager.clone())?;
     let inbound = UdpSocket::bind(format!("{}:{}", config.host, config.port)).await?;
     let (tx, mut rx) = mpsc::channel::<(BytesMut, Address, SocketAddr, Session<N>)>(1024);
     let ttl = Duration::from_secs(300);
@@ -149,7 +136,7 @@ async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send +
                 match client_msg {
                     Ok((len, client_addr)) => {
                         let mut src = BytesMut::from(&buf[..len]);
-                        match SessionCodec::<N, CM>::decode(&codec, &mut src) {
+                        match SessionCodec::<N>::decode(&codec, &mut src) {
                             Ok(Some((content, peer_addr, session))) => {
                                 let key = session.client_session_id;
                                 if let Some(assoc) = net_map.get_mut(&key) {
@@ -271,10 +258,7 @@ mod udp {
     use octo_squirrel::common::codec::shadowsocks::udp::SessionCodec;
 
     use super::*;
-    pub fn new_codec<const N: usize, CM: CipherMethod + KeyInit>(
-        config: &ServerConfig,
-        user_manager: Arc<ServerUserManager<N>>,
-    ) -> anyhow::Result<SessionCodec<N, CM>> {
+    pub fn new_codec<const N: usize>(config: &ServerConfig, user_manager: Arc<ServerUserManager<N>>) -> anyhow::Result<SessionCodec<N>> {
         let context = Context::new(Mode::Server, Some(user_manager));
         let cipher = AEADCipherCodec::new(config.cipher, &config.password).map_err(|e| anyhow!(e))?;
         Ok(SessionCodec::new(context, cipher))
@@ -290,16 +274,13 @@ mod tcp {
 
     use super::*;
 
-    pub fn new_codec<const N: usize, CM: CipherMethod + KeyInit>(
-        config: &ServerConfig,
-        user_manager: Arc<ServerUserManager<N>>,
-    ) -> Result<PayloadCodec<N, CM>> {
+    pub fn new_codec<const N: usize>(config: &ServerConfig, user_manager: Arc<ServerUserManager<N>>) -> Result<PayloadCodec<N>> {
         PayloadCodec::new(Arc::new(Context::default()), config, Mode::Server, None, Some(user_manager))
     }
 
-    pub struct PayloadCodec<const N: usize, CM> {
+    pub struct PayloadCodec<const N: usize> {
         session: Session<N>,
-        cipher: AEADCipherCodec<N, CM>,
+        cipher: AEADCipherCodec<N>,
         state: State,
     }
 
@@ -308,7 +289,7 @@ mod tcp {
         Body,
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> PayloadCodec<N, CM> {
+    impl<const N: usize> PayloadCodec<N> {
         pub fn new(
             context: Arc<Context>,
             config: &ServerConfig,
@@ -321,7 +302,7 @@ mod tcp {
         }
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<BytesMut> for PayloadCodec<N, CM> {
+    impl<const N: usize> Encoder<BytesMut> for PayloadCodec<N> {
         type Error = anyhow::Error;
 
         fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
@@ -329,7 +310,7 @@ mod tcp {
         }
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for PayloadCodec<N, CM> {
+    impl<const N: usize> Decoder for PayloadCodec<N> {
         type Item = Message;
 
         type Error = anyhow::Error;
