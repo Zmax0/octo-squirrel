@@ -23,7 +23,8 @@ impl Encoder<Box<dyn Socks5Message>> for Socks5ClientEncoder {
     type Error = anyhow::Error;
 
     fn encode(&mut self, mut item: Box<dyn Socks5Message>, dst: &mut bytes::BytesMut) -> Result<()> {
-        item.encode(dst)
+        item.encode(dst);
+        Ok(())
     }
 }
 
@@ -33,7 +34,8 @@ impl Encoder<Box<dyn Socks5Message>> for Socks5ServerEncoder {
     type Error = anyhow::Error;
 
     fn encode(&mut self, mut item: Box<dyn Socks5Message>, dst: &mut bytes::BytesMut) -> Result<()> {
-        item.encode(dst)
+        item.encode(dst);
+        Ok(())
     }
 }
 
@@ -105,7 +107,7 @@ impl Decoder for Socks5CommandResponseDecoder {
         if VERSION != version {
             bail!("unsupported version: {}", version);
         }
-        let command_status = Socks5CommandStatus::new(src.get_u8())?;
+        let command_status = Socks5CommandStatus::try_from(src.get_u8())?;
         src.advance(1); // Reserved
         let addr = AddressCodec::decode(src)?;
         Ok(Some(Socks5CommandResponse::new(command_status, addr)))
@@ -140,7 +142,7 @@ impl Encoder<(BytesMut, Address)> for Socks5UdpCodec {
 
     fn encode(&mut self, item: (BytesMut, Address), dst: &mut BytesMut) -> Result<(), Self::Error> {
         dst.extend_from_slice(&[0, 0, 0]); // Fragment
-        AddressCodec::encode(&item.1, dst)?;
+        AddressCodec::encode(&item.1, dst);
         dst.extend_from_slice(&item.0);
         Ok(())
     }

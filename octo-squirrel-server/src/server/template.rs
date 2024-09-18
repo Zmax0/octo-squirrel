@@ -66,24 +66,24 @@ pub mod tcp {
             Some(Ok(Message::ConnectTcp(msg, addr))) => {
                 if let Ok(resolved_addr) = addr.to_socket_addr() {
                     match TcpStream::connect(resolved_addr).await {
-                        Err(e) => error!("[tcp-tcp] connect failed: peer={}/{}; error={}", addr, resolved_addr, e),
+                        Err(e) => error!("[*-tcp] connect failed: peer={}/{}; error={}", addr, resolved_addr, e),
                         Ok(outbound) => {
                             let res = relay_tcp_bidirectional(&mut inbound_sink, &mut inbound_stream, outbound, Message::RelayTcp(msg)).await;
-                            info!("[tcp-tcp] relay completed: peer={}/{}: {:?}", addr, resolved_addr, res);
+                            info!("[*-tcp] relay completed: peer={}/{}: {:?}", addr, resolved_addr, res);
                         }
                     }
                 } else {
-                    error!("[tcp-tcp] DNS resolve failed: peer={addr}");
+                    error!("[*-tcp] DNS resolve failed: peer={addr}");
                 }
             }
             Some(Ok(Message::RelayUdp(msg, addr))) => match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await {
-                Err(e) => error!("[tcp-udp] socket bind failed; error={}", e),
+                Err(e) => error!("[*-udp] socket bind failed; error={}", e),
                 Ok(outbound) => {
                     let res = relay_udp_bidirectional(&mut inbound_sink, &mut inbound_stream, outbound, Message::RelayUdp(msg, addr)).await;
-                    info!("[tcp-udp] relay completed: {:?}", res);
+                    info!("[*-udp] relay completed: {:?}", res);
                 }
             },
-            Some(Ok(Message::RelayTcp(_))) => error!("[tcp-tcp] expect a connect message for the first time"),
+            Some(Ok(Message::RelayTcp(_))) => error!("[*-tcp] expect a connect message for the first time"),
             Some(Err(e)) => error!("[tcp] decode failed; error={e}"),
             None => (),
         }

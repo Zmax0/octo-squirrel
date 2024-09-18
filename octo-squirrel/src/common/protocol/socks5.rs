@@ -14,14 +14,16 @@ pub enum Socks5CommandStatus {
     Failure,
 }
 
-impl Socks5CommandStatus {
-    pub fn new(byte: u8) -> Result<Self> {
-        if Self::Success as u8 == byte {
+impl TryFrom<u8> for Socks5CommandStatus {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if Self::Success as u8 == value {
             Ok(Self::Success)
-        } else if Self::Failure as u8 == byte {
+        } else if Self::Failure as u8 == value {
             Ok(Self::Failure)
         } else {
-            bail!("unsupported command status: {}", byte);
+            bail!("unsupported command status: {}", value);
         }
     }
 }
@@ -33,16 +35,18 @@ pub enum Socks5AddressType {
     Ipv6 = 4,
 }
 
-impl Socks5AddressType {
-    pub fn new(byte: u8) -> Result<Self> {
-        if Self::Ipv4 as u8 == byte {
+impl TryFrom<u8> for Socks5AddressType {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if Self::Ipv4 as u8 == value {
             Ok(Self::Ipv4)
-        } else if Self::Domain as u8 == byte {
+        } else if Self::Domain as u8 == value {
             Ok(Self::Domain)
-        } else if Self::Ipv6 as u8 == byte {
+        } else if Self::Ipv6 as u8 == value {
             Ok(Self::Ipv6)
         } else {
-            bail!("unsupported address type: {}", byte);
+            bail!("unsupported address type: {}", value);
         }
     }
 }

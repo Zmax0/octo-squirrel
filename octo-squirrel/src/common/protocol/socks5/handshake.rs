@@ -1,30 +1,24 @@
-use std::net::SocketAddr;
+pub mod client {
+    use std::net::SocketAddr;
 
-use anyhow::bail;
-use anyhow::Result;
-use futures::FutureExt;
-use futures::SinkExt;
-use futures::StreamExt;
-use tokio::net::TcpStream;
-use tokio_util::codec::FramedRead;
-use tokio_util::codec::FramedWrite;
+    use anyhow::bail;
+    use anyhow::Result;
+    use futures::FutureExt;
+    use futures::SinkExt;
+    use futures::StreamExt;
+    use tokio::net::TcpStream;
+    use tokio_util::codec::FramedRead;
+    use tokio_util::codec::FramedWrite;
 
-use super::codec::Socks5ClientEncoder;
-use super::codec::Socks5CommandRequestDecoder;
-use super::codec::Socks5CommandResponseDecoder;
-use super::codec::Socks5InitialRequestDecoder;
-use super::codec::Socks5InitialResponseDecoder;
-use super::codec::Socks5ServerEncoder;
-use super::message::Socks5CommandRequest;
-use super::message::Socks5CommandResponse;
-use super::message::Socks5InitialRequest;
-use super::message::Socks5InitialResponse;
-use super::Socks5CommandType;
-use crate::common::protocol::socks5::Socks5AuthMethod;
+    use crate::common::protocol::socks5::codec::Socks5ClientEncoder;
+    use crate::common::protocol::socks5::codec::Socks5CommandResponseDecoder;
+    use crate::common::protocol::socks5::codec::Socks5InitialResponseDecoder;
+    use crate::common::protocol::socks5::message::Socks5CommandRequest;
+    use crate::common::protocol::socks5::message::Socks5CommandResponse;
+    use crate::common::protocol::socks5::message::Socks5InitialRequest;
+    use crate::common::protocol::socks5::Socks5AuthMethod;
+    use crate::common::protocol::socks5::Socks5CommandType;
 
-pub struct ClientHandShake;
-
-impl ClientHandShake {
     pub async fn no_auth(command_type: Socks5CommandType, proxy_addr: SocketAddr, dst_addr: SocketAddr) -> Result<Socks5CommandResponse> {
         let mut stream = TcpStream::connect(proxy_addr).await?;
         let (rh, wh) = stream.split();
@@ -42,9 +36,23 @@ impl ClientHandShake {
     }
 }
 
-pub struct ServerHandShake;
+pub mod server {
+    use anyhow::Result;
+    use futures::FutureExt;
+    use futures::SinkExt;
+    use futures::StreamExt;
+    use tokio::net::TcpStream;
+    use tokio_util::codec::FramedRead;
+    use tokio_util::codec::FramedWrite;
 
-impl ServerHandShake {
+    use crate::common::protocol::socks5::codec::Socks5CommandRequestDecoder;
+    use crate::common::protocol::socks5::codec::Socks5InitialRequestDecoder;
+    use crate::common::protocol::socks5::codec::Socks5ServerEncoder;
+    use crate::common::protocol::socks5::message::Socks5CommandRequest;
+    use crate::common::protocol::socks5::message::Socks5CommandResponse;
+    use crate::common::protocol::socks5::message::Socks5InitialResponse;
+    use crate::common::protocol::socks5::Socks5AuthMethod;
+
     pub async fn no_auth(stream: &mut TcpStream, response: Socks5CommandResponse) -> Result<Socks5CommandRequest> {
         let (rh, wh) = stream.split();
         let mut reader = FramedRead::new(rh, Socks5InitialRequestDecoder);

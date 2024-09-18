@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
 use std::vec;
 
-#[derive(PartialEq, PartialOrd, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Address {
     Domain(String, u16),
     Socket(SocketAddr),
@@ -19,6 +19,12 @@ impl Address {
             }
             Address::Socket(addr) => Ok(*addr),
         }
+    }
+}
+
+impl PartialOrd for Address {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 

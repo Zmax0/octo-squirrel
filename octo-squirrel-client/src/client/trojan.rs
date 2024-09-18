@@ -49,7 +49,7 @@ pub(super) mod tcp {
                 dst.extend_from_slice(&self.key);
                 dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
-                AddressCodec::encode(&self.address, dst)?;
+                AddressCodec::encode(&self.address, dst);
                 dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
@@ -170,12 +170,12 @@ pub(super) mod udp {
                 dst.extend_from_slice(&self.key);
                 dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
-                AddressCodec::encode(&self.address, dst)?;
+                AddressCodec::encode(&self.address, dst);
                 dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
             let buffer = &mut BytesMut::new();
-            AddressCodec::encode(&item.1, buffer)?;
+            AddressCodec::encode(&item.1, buffer);
             buffer.put_u16(item.0.len() as u16);
             buffer.extend_from_slice(&trojan::CR_LF);
             buffer.put(item.0);

@@ -67,7 +67,6 @@ where
             } else {
                 error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
             }
-            Ok::<(), anyhow::Error>(())
         });
     }
 }
@@ -84,7 +83,7 @@ where
     NewCodec: FnOnce(&Address, &ServerConfig) -> Result<Codec> + Copy,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
-    info!("[tcp] connect {}, peer={}, local={}", &config.protocol, request, &src);
+    info!("[tcp] accept {}, peer={}, local={}", &config.protocol, request, &src);
     let local_client = Framed::new(inbound, BytesCodec);
     let codec = new_codec(&request, config)?;
     let server_addr = format!("{}:{}", config.host, config.port);

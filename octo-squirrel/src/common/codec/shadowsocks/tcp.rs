@@ -96,7 +96,7 @@ where
         match session.mode {
             Mode::Client => {
                 let mut temp = BytesMut::new();
-                AddressCodec::encode(session.address.as_ref().unwrap(), &mut temp)?;
+                AddressCodec::encode(session.address.as_ref().unwrap(), &mut temp);
                 let is_aead_2022 = self.kind.is_aead_2022();
                 if is_aead_2022 {
                     let padding = super::aead_2022::next_padding_length(&msg);

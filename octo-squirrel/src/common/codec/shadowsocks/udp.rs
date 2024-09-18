@@ -46,7 +46,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
                 Dice::fill_bytes(salt);
                 dst.put(&salt[..]);
                 let mut temp = BytesMut::with_capacity(AddressCodec::length(address) + item.remaining());
-                AddressCodec::encode(address, &mut temp)?;
+                AddressCodec::encode(address, &mut temp);
                 temp.put(item);
                 let mut encoder: ChunkEncoder<CM> = self.new_encoder(salt).map_err(anyhow::Error::msg)?;
                 encoder.encode_packet(temp, dst).map_err(|e| anyhow!(e))
@@ -74,7 +74,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
         temp.put_u64(super::aead_2022::now()?);
         temp.put_u16(padding_length);
         temp.put(&Dice::roll_bytes(padding_length as usize)[..]);
-        AddressCodec::encode(address, &mut temp)?;
+        AddressCodec::encode(address, &mut temp);
         temp.put(item);
         let mut header = temp.split_to(16);
         let mut nonce: [u8; 12] = [0; 12];
@@ -101,7 +101,7 @@ impl<const N: usize, CM: CipherMethod + KeyInit> AEADCipherCodec<N, CM> {
         temp.put_u64(session.client_session_id);
         temp.put_u16(padding_length);
         temp.put(&Dice::roll_bytes(padding_length as usize)[..]);
-        AddressCodec::encode(address, &mut temp)?;
+        AddressCodec::encode(address, &mut temp);
         temp.put(item);
         let key = if let Some(user) = &session.user {
             trace!("encrypt with identity {}", user);
