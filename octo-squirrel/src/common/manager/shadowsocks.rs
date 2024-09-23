@@ -65,8 +65,12 @@ impl<const N: usize> ServerUser<N> {
     pub fn identity_hash(&self) -> [u8; 16] {
         self.identity_hash
     }
+}
 
-    pub fn from_user(value: &User) -> Result<Self, base64ct::Error> {
+impl<const N: usize> TryFrom<&User> for ServerUser<N> {
+    type Error = base64ct::Error;
+
+    fn try_from(value: &User) -> Result<Self, Self::Error> {
         let mut key = [0; N];
         let mut identity_hash = [0; 16];
         Base64::decode(&value.password, &mut key)?;

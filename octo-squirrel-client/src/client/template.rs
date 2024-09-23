@@ -4,6 +4,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -51,43 +52,61 @@ use tokio_websockets::ClientBuilder;
 
 use super::handshake;
 
-pub async fn transfer_tcp<NewCodec, Codec>(listener: TcpListener, config: &ServerConfig, new_codec: NewCodec)
-where
-    NewCodec: FnOnce(&Address, &ServerConfig) -> Result<Codec> + Copy + Send + 'static,
+pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
+    listener: TcpListener,
+    config: &ServerConfig,
+    new_context: NewContext,
+    new_codec: NewCodec,
+) where
+    NewContext: FnOnce(&ServerConfig) -> Result<Context> + 'static,
+    Context: Clone + Send + 'static,
+    NewCodec: FnOnce(&Address, Context) -> Result<Codec> + Copy + Send + 'static,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
-    while let Ok((mut inbound, src)) = listener.accept().await {
-        let config = config.clone();
-        tokio::spawn(async move {
-            let handshake = handshake::get_request_addr(&mut inbound).await;
-            if let Ok(request) = handshake {
-                if let Err(e) = try_transfer_tcp(inbound, src, request, &config, new_codec).await {
-                    error!("[tcp] transfer failed; error={}", e);
-                }
-            } else {
-                error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
+    let server_addr: &'static str = Box::leak::<'static>(format!("{}:{}", config.host, config.port).into_boxed_str());
+    let context = new_context(config);
+    let config = Arc::new(config.clone());
+    match context {
+        Ok(context) => {
+            while let Ok((mut inbound, src)) = listener.accept().await {
+                let context = context.clone();
+                let config = config.clone();
+                tokio::spawn(async move {
+                    let handshake = handshake::get_request_addr(&mut inbound).await;
+                    if let Ok(request) = handshake {
+                        info!("[tcp] accept {}, peer={}, local={}", config.protocol, request, &src);
+                        match try_transfer_tcp(inbound, server_addr, &request, config.ssl.as_ref(), config.ws.as_ref(), context, new_codec).await {
+                            Ok(res) => info!("[tcp] relay complete, local={}, server={}, peer={}, {:?}", &src, &server_addr, request, res),
+                            Err(e) => error!("[tcp] transfer failed; error={}", e),
+                        }
+                    } else {
+                        error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
+                    }
+                });
             }
-        });
+        }
+        Err(e) => error!("create client context failed; error={e}"),
     }
 }
 
 #[inline]
-async fn try_transfer_tcp<NewCodec, Codec>(
+pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
     inbound: TcpStream,
-    src: SocketAddr,
-    request: Address,
-    config: &ServerConfig,
+    server_addr: &'static str,
+    peer_addr: &Address,
+    ssl: Option<&SslConfig>,
+    ws: Option<&WebSocketConfig>,
+    context: Context,
     new_codec: NewCodec,
-) -> Result<()>
+) -> Result<relay::Result>
 where
-    NewCodec: FnOnce(&Address, &ServerConfig) -> Result<Codec> + Copy,
+    NewCodec: FnOnce(&Address, Context) -> Result<Codec> + Copy,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
-    info!("[tcp] accept {}, peer={}, local={}", &config.protocol, request, &src);
     let local_client = Framed::new(inbound, BytesCodec);
-    let codec = new_codec(&request, config)?;
-    let server_addr = format!("{}:{}", config.host, config.port);
-    let res = match (&config.ssl, &config.ws) {
+    let codec = new_codec(peer_addr, context)?;
+    // let server_addr: String = format!("{}:{}", config.host, config.port);
+    Ok(match (ssl, ws) {
         (None, None) => {
             let outbound = TcpStream::connect(&server_addr).await?;
             let client_server = codec.framed(outbound);
@@ -105,9 +124,7 @@ where
             let client_server = new_wss_outbound(&server_addr, codec, ssl_config, ws_config).await?;
             relay_tcp(local_client, client_server).await
         }
-    };
-    info!("[tcp] relay complete, local={}, server={}, peer={}, {:?}", &src, &server_addr, request, res);
-    Ok(())
+    })
 }
 
 async fn relay_tcp<I, O>(local_client: I, client_server: O) -> relay::Result
@@ -146,26 +163,30 @@ where
     type Future = Future;
     type Output = Future::Output;
 }
-pub async fn transfer_udp<OutRecv, OutSend, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv>(
+
+pub async fn transfer_udp<Context, NewContext, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv, OutRecv, OutSend>(
     inbound: UdpSocket,
-    config: &ServerConfig,
+    config: ServerConfig,
+    new_context: NewContext,
     new_key: NewKey,
     new_out: NewOut,
     to_inbound_recv: ToInRecv,
     to_outbound_send: ToOutSend,
 ) -> Result<()>
 where
-    OutRecv: Send + Sync + 'static,
-    Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
+    NewContext: FnOnce(ServerConfig) -> Result<Context>,
     NewKey: FnOnce(SocketAddr, &Address) -> Key + Copy,
     Key: Ord + Clone + Debug + Send + Sync + 'static,
-    NewOut: for<'a, 'b> AsyncP3G2<SocketAddr, &'a Address, &'b ServerConfig, Out, OutRecv, Output = Result<Out, anyhow::Error>> + Copy,
+    NewOut: for<'a> AsyncP3G2<SocketAddr, &'a Address, &'a Context, Out, OutRecv, Output = Result<Out, anyhow::Error>> + Copy,
+    Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
     ToOutSend: FnOnce((BytesMut, &Address), SocketAddr) -> OutSend + Copy,
     ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
+    OutRecv: Send + Sync + 'static,
 {
     use std::net::ToSocketAddrs;
 
     let server_addr = format!("{}:{}", config.host, config.port).to_socket_addrs()?.next().ok_or(anyhow!("server address is not available"))?;
+    let context = new_context(config)?;
     // client->local|inbound, local->client|inbound
     let (mut client_local, mut local_client) = UdpFramed::new(inbound, Socks5UdpCodec).split();
     let ttl = Duration::from_secs(600);
@@ -190,7 +211,7 @@ where
                     let target = target.clone();
                     debug!("[udp] new binding; key={:?}", &key);
                     // client->server|outbound, server->client|outbound
-                    let (client_server, mut server_client) = new_out(server_addr, &target, config).await?.split();
+                    let (client_server, mut server_client) = new_out(server_addr, &target, &context).await?.split();
                     let _client_local_tx = client_local_tx.clone();
                     let _key = key.clone();
                     let relay_task = tokio::spawn(async move {

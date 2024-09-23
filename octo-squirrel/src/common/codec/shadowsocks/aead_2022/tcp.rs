@@ -12,7 +12,6 @@ use crate::common::codec::aead::CipherKind;
 use crate::common::codec::shadowsocks::tcp::Identity;
 use crate::common::codec::shadowsocks::Authenticator;
 use crate::common::codec::shadowsocks::ChunkDecoder;
-use crate::common::codec::shadowsocks::Keys;
 use crate::common::crypto::Aes128EcbNoPadding;
 use crate::common::crypto::Aes256EcbNoPadding;
 use crate::common::manager::shadowsocks::ServerUserManager;
@@ -62,9 +61,9 @@ pub fn new_decoder_with_eih<const N: usize>(
     }
 }
 
-pub fn with_eih<const N: usize>(kind: &CipherKind, keys: &Keys<N>, salt: &[u8], dst: &mut BytesMut) {
+pub fn with_eih<const N: usize>(kind: &CipherKind, key: &[u8], identity_keys: &[[u8; N]], salt: &[u8], dst: &mut BytesMut) {
     let mut sub_key: Option<[u8; blake3::OUT_LEN]> = None;
-    for ipsk in keys.identity_keys.iter() {
+    for ipsk in identity_keys.iter() {
         if let Some(sub_key) = sub_key {
             make_eih(kind, &sub_key, ipsk, dst)
         }
@@ -72,7 +71,7 @@ pub fn with_eih<const N: usize>(kind: &CipherKind, keys: &Keys<N>, salt: &[u8], 
         sub_key = Some(blake3::derive_key("shadowsocks 2022 identity subkey", &key_material))
     }
     if let Some(sub_key) = sub_key {
-        make_eih(kind, &sub_key, &keys.enc_key, dst)
+        make_eih(kind, &sub_key, key, dst)
     }
 }
 
@@ -98,18 +97,18 @@ mod test {
 
     use super::with_eih;
     use crate::common::codec::aead::CipherKind;
-    use crate::common::codec::shadowsocks::aead_2022::password_to_keys;
+    use crate::common::protocol::shadowsocks::aead_2022::password_to_keys;
 
     #[test]
     fn test() {
         let ipsk = "leWhlhIIhjHhGeaGVpqpRA==";
         let upsk = "BomScdlR6tXdKxm4FyZg9g==";
-        let keys = password_to_keys::<16>(&format!("{}:{}", ipsk, upsk)).unwrap();
+        let (key, identity_keys) = password_to_keys::<16>(&format!("{}:{}", ipsk, upsk)).unwrap();
         let salt = Base64::decode_vec("/xyg1YnI2gNuMydqgt8MgbfT0zDMougbi64SbDsVn1Q=").unwrap();
         let dst = &mut BytesMut::new();
-        with_eih(&CipherKind::Aead2022Blake3Aes256Gcm, &keys, &salt, dst);
-        assert_eq!(upsk, Base64::encode_string(&keys.enc_key));
-        assert_eq!(ipsk, Base64::encode_string(&keys.identity_keys[0]));
+        with_eih(&CipherKind::Aead2022Blake3Aes256Gcm, &key, &identity_keys, &salt, dst);
+        assert_eq!(upsk, Base64::encode_string(&key));
+        assert_eq!(ipsk, Base64::encode_string(&identity_keys[0]));
         assert_eq!("jGIxVuv1qqwcBYak0kGGaA==", Base64::encode_string(dst));
     }
 }

@@ -220,7 +220,7 @@ mod test {
 
     use super::CipherKind;
     use super::CountingNonceGenerator;
-    use crate::common::codec::aead::IncreasingNonceGenerator;
+    use super::IncreasingNonceGenerator;
 
     #[test]
     fn test_json_serialize() {

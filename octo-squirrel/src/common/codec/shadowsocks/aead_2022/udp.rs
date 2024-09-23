@@ -10,7 +10,6 @@ use log::trace;
 
 use crate::common::codec::aead::CipherKind;
 use crate::common::codec::aead::CipherMethod;
-use crate::common::codec::shadowsocks::Keys;
 
 pub fn nonce_length(kind: CipherKind) -> Result<usize, String> {
     match kind {
@@ -57,13 +56,20 @@ pub fn aes_decrypt_in_place(kind: CipherKind, key: &[u8], buf: &mut [u8]) -> any
     }
 }
 
-pub fn with_eih<const N: usize>(kind: CipherKind, keys: &Keys<N>, session_id_packet_id: &[u8], dst: &mut BytesMut) -> anyhow::Result<()> {
-    for i in 0..keys.identity_keys.len() {
+pub fn with_eih<const N: usize>(
+    kind: CipherKind,
+    key: &[u8],
+    identity_keys: &[[u8; N]],
+    session_id_packet_id: &[u8],
+    dst: &mut BytesMut,
+) -> anyhow::Result<()> {
+    let len = identity_keys.len();
+    for i in 0..len {
         let mut identity_header = [0; 16];
-        if i != keys.identity_keys.len() - 1 {
-            make_eih(kind, &keys.identity_keys[i], &keys.identity_keys[i + 1], session_id_packet_id, &mut identity_header)?;
+        if i != len - 1 {
+            make_eih(kind, &identity_keys[i], &identity_keys[i + 1], session_id_packet_id, &mut identity_header)?;
         } else {
-            make_eih(kind, &keys.identity_keys[i], &keys.enc_key, session_id_packet_id, &mut identity_header)?;
+            make_eih(kind, &identity_keys[i], key, session_id_packet_id, &mut identity_header)?;
         }
         dst.extend_from_slice(&identity_header);
     }

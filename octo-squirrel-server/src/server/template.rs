@@ -29,8 +29,8 @@ pub enum Message {
 
 pub mod tcp {
     use futures::future;
+    use octo_squirrel::common::relay;
     use octo_squirrel::common::relay::End;
-    use octo_squirrel::common::relay::{self};
 
     use super::*;
 

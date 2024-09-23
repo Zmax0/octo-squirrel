@@ -19,11 +19,9 @@ async fn main() -> anyhow::Result<()> {
         info!("Listening UDP on: {}", socket.local_addr()?);
         tokio::spawn(client::transfer_udp(socket, current.clone()));
     }
-    if current.transport.contains(&Transport::TCP) {
-        let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
-        let listener = TcpListener::bind(listen_addr).await?;
-        info!("Listening TCP on: {}", listener.local_addr()?);
-        client::transfer_tcp(listener, current).await;
-    }
+    let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);
+    let listener = TcpListener::bind(listen_addr).await?;
+    info!("Listening TCP on: {}", listener.local_addr()?);
+    client::transfer_tcp(listener, current).await;
     Ok(())
 }

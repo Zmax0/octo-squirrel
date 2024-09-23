@@ -5,13 +5,13 @@ enum CodecState {
 
 pub(super) mod tcp {
     use bytes::BufMut;
+    use bytes::Bytes;
     use bytes::BytesMut;
     use octo_squirrel::common::protocol::address::Address;
     use octo_squirrel::common::protocol::socks5::address;
     use octo_squirrel::common::protocol::socks5::Socks5CommandType;
     use octo_squirrel::common::protocol::trojan;
     use octo_squirrel::common::util::hex;
-    use octo_squirrel::config::ServerConfig;
     use sha2::Digest;
     use sha2::Sha224;
     use tokio_util::codec::Decoder;
@@ -19,8 +19,8 @@ pub(super) mod tcp {
 
     use super::CodecState;
 
-    pub fn new_codec(addr: &Address, config: &ServerConfig) -> anyhow::Result<ClientCodec> {
-        Ok(ClientCodec::new(config.password.as_bytes(), Socks5CommandType::Connect as u8, addr.clone()))
+    pub fn new_codec(addr: &Address, password: Bytes) -> anyhow::Result<ClientCodec> {
+        Ok(ClientCodec::new(&password, Socks5CommandType::Connect as u8, addr.clone()))
     }
 
     pub struct ClientCodec {

@@ -1,21 +1,16 @@
-mod aead;
-mod aead_2022;
+pub mod aead;
+pub mod aead_2022;
 pub mod tcp;
 pub mod udp;
 
-use std::fmt::Display;
-use std::fmt::Formatter;
 use std::mem::size_of;
 
 use ::aead::Buffer;
-use base64ct::Base64;
-use base64ct::Encoding;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use log::trace;
 
-use super::aead::CipherKind;
 use super::aead::CipherMethod;
 use super::aead::IncreasingNonceGenerator;
 
@@ -110,38 +105,51 @@ impl ChunkEncoder {
     }
 }
 
+enum DecodeState {
+    Length,
+    Payload(usize),
+}
+
 pub struct ChunkDecoder {
-    payload_length: Option<usize>,
     auth: Authenticator,
     chunk: ChunkSizeParser,
+    state: DecodeState,
 }
 
 impl ChunkDecoder {
     fn new(auth: Authenticator, chunk: ChunkSizeParser) -> Self {
-        Self { payload_length: None, auth, chunk }
+        Self { auth, chunk, state: DecodeState::Length }
     }
 
-    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<BytesMut>, ::aead::Error> {
+    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<BytesMut, ::aead::Error> {
         let mut opening = src.split_off(0);
         self.auth.open(&mut opening)?;
-        Ok(Some(opening))
+        Ok(opening)
     }
 
     fn decode_payload(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
-        let size_bytes = self.size_bytes();
-        while src.remaining() >= if self.payload_length.is_none() { size_bytes } else { self.payload_length.unwrap() } {
-            if let Some(payload_length) = self.payload_length {
-                let mut payload_btyes = src.split_to(payload_length);
-                self.auth.open(&mut payload_btyes)?;
-                dst.put(payload_btyes);
-                self.payload_length = None;
-            } else {
-                let payload_length = self.decode_size(&mut src.split_to(size_bytes))?;
-                trace!("Decode payload; payload length={}", payload_length);
-                self.payload_length = Some(payload_length);
+        loop {
+            match self.state {
+                DecodeState::Length => {
+                    let size_bytes = self.size_bytes();
+                    if src.remaining() < size_bytes {
+                        return Ok(());
+                    }
+                    let len = self.decode_size(&mut src.split_to(size_bytes))?;
+                    trace!("Decode payload; payload length={}", len);
+                    self.state = DecodeState::Payload(len);
+                }
+                DecodeState::Payload(len) => {
+                    if src.remaining() < len {
+                        return Ok(());
+                    }
+                    let mut payload_btyes = src.split_to(len);
+                    self.auth.open(&mut payload_btyes)?;
+                    dst.put(payload_btyes);
+                    self.state = DecodeState::Length;
+                }
             }
         }
-        Ok(())
     }
 
     fn size_bytes(&self) -> usize {
@@ -156,31 +164,5 @@ impl ChunkDecoder {
             ChunkSizeParser::Auth => self.auth.decode_size(data),
             ChunkSizeParser::Empty => Ok(data.len()),
         }
-    }
-}
-
-struct Keys<const N: usize> {
-    enc_key: [u8; N],
-    identity_keys: Vec<[u8; N]>,
-}
-
-impl<const N: usize> Keys<N> {
-    fn new(enc_key: [u8; N], identity_keys: Vec<[u8; N]>) -> Self {
-        Self { enc_key, identity_keys }
-    }
-
-    fn from(kind: CipherKind, password: &str) -> Result<Keys<N>, base64ct::Error> {
-        if kind.is_aead_2022() {
-            aead_2022::password_to_keys(password)
-        } else {
-            let enc_key = aead::openssl_bytes_to_key(password.as_bytes());
-            Ok(Keys { enc_key, identity_keys: Vec::with_capacity(0) })
-        }
-    }
-}
-
-impl<const N: usize> Display for Keys<N> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "EK: {}, IKS: {:#?}", Base64::encode_string(&self.enc_key), self.identity_keys)
     }
 }
