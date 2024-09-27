@@ -9,7 +9,7 @@ edition = "2021"
 octo-squirrel = { path = "../octo-squirrel", features = ["client", "server"] }
 octo-squirrel-client = { path = "../octo-squirrel-client"}
 octo-squirrel-server = { path = "../octo-squirrel-server"}
-anyhow = "1.0.88"
+anyhow = "1.0.89"
 console-subscriber = "0.4.0"
 futures = "0.3.30"
 log = "0.4.22"

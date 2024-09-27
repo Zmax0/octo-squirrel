@@ -8,8 +8,8 @@ edition = "2021"
 [dependencies]
 octo-squirrel = { path = "../octo-squirrel", features = ["server"] }
 aes-gcm = "0.10.3"
-anyhow = "1.0.88"
-bytes = "1.7.1"
+anyhow = "1.0.89"
+bytes = "1.7.2"
 futures = "0.3.30"
 futures-util = { version = "=0.3.30", features = ["unstable", "bilock"] }
 log = "0.4.22"

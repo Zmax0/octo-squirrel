@@ -3,7 +3,7 @@ use std::fs;
 use bytes::BytesMut;
 use log::error;
 use log::info;
-use octo_squirrel::common::protocol::Protocols;
+use octo_squirrel::common::protocol::Protocol;
 use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpListener;
 use tokio_native_tls::native_tls;
@@ -18,16 +18,17 @@ mod vmess;
 
 pub async fn startup(config: ServerConfig) {
     match config.protocol {
-        Protocols::Shadowsocks => shadowsocks::startup(&config).await,
-        Protocols::VMess => startup_tcp(&config, vmess::new_codec).await,
-        Protocols::Trojan => startup_tcp(&config, trojan::new_codec).await,
+        Protocol::Shadowsocks => shadowsocks::startup(&config).await,
+        Protocol::VMess => startup_tcp(&config, &config, vmess::new_codec).await,
+        Protocol::Trojan => startup_tcp(&config, &config, trojan::new_codec).await,
     }
     .unwrap_or_else(|e| error!("Startup {} failed; error={}", config.protocol, e))
 }
 
-async fn startup_tcp<NewCodec, Codec>(config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
+async fn startup_tcp<Context, NewCodec, Codec>(context: Context, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
 where
-    NewCodec: FnOnce(&ServerConfig) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
+    Context: Clone,
+    NewCodec: FnOnce(Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = template::Message, Error = anyhow::Error> + Unpin + Send + 'static,
 {
     let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
@@ -35,9 +36,9 @@ where
         (None, ws_config) => {
             while let Ok((inbound, _)) = listener.accept().await {
                 if ws_config.is_some() {
-                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(config)?));
+                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.clone())?));
                 } else {
-                    tokio::spawn(template::tcp::relay(inbound, new_codec(config)?));
+                    tokio::spawn(template::tcp::relay(inbound, new_codec(context.clone())?));
                 }
             }
         }
@@ -48,11 +49,11 @@ where
             let tls_acceptor = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
             while let Ok((inbound, _)) = listener.accept().await {
                 let tls = tls_acceptor.clone();
-                let codec = new_codec(config)?;
+                let codec = new_codec(context.clone())?;
                 match tls.accept(inbound).await {
                     Ok(inbound) => {
                         if ws_config.is_some() {
-                            tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(config)?));
+                            tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.clone())?));
                         } else {
                             tokio::spawn(template::tcp::relay(inbound, codec));
                         }

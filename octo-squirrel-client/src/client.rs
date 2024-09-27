@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use log::error;
 use octo_squirrel::common::codec::aead::CipherKind;
-use octo_squirrel::common::protocol::Protocols;
+use octo_squirrel::common::protocol::Protocol::*;
 use octo_squirrel::config::ServerConfig;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
@@ -16,7 +16,7 @@ mod vmess;
 
 pub async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) {
     match current.protocol {
-        Protocols::Shadowsocks => match current.cipher {
+        Shadowsocks => match current.cipher {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
                 template::transfer_tcp(
                     listener,
@@ -37,14 +37,14 @@ pub async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) {
             }
             _ => unreachable!(),
         },
-        Protocols::VMess => template::transfer_tcp(listener, current, |c| Ok((c.cipher, Arc::new(c.password.clone()))), vmess::tcp::new_codec).await,
-        Protocols::Trojan => template::transfer_tcp(listener, current, |c| Ok(Bytes::from(c.password.clone())), trojan::tcp::new_codec).await,
+        VMess => template::transfer_tcp(listener, current, |c| Ok((c.cipher, Arc::new(c.password.clone()))), vmess::tcp::new_codec).await,
+        Trojan => template::transfer_tcp(listener, current, |c| Ok(Bytes::from(c.password.clone())), trojan::tcp::new_codec).await,
     }
 }
 
 pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
     match (current.protocol, &current.ssl, &current.ws) {
-        (Protocols::Shadowsocks, _, _) => match current.cipher {
+        (Shadowsocks, _, _) => match current.cipher {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
                 template::transfer_udp(
                     socket,
@@ -71,7 +71,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             }
             _ => unreachable!(),
         },
-        (Protocols::VMess, None, None) => {
+        (VMess, None, None) => {
             template::transfer_udp(
                 socket,
                 current,
@@ -83,7 +83,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             )
             .await
         }
-        (Protocols::VMess, None, Some(_)) => {
+        (VMess, None, Some(_)) => {
             template::transfer_udp(
                 socket,
                 current,
@@ -95,7 +95,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             )
             .await
         }
-        (Protocols::VMess, Some(_), None) => {
+        (VMess, Some(_), None) => {
             template::transfer_udp(
                 socket,
                 current,
@@ -107,7 +107,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             )
             .await
         }
-        (Protocols::VMess, Some(_), Some(_)) => {
+        (VMess, Some(_), Some(_)) => {
             template::transfer_udp(
                 socket,
                 current,
@@ -119,7 +119,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             )
             .await
         }
-        (Protocols::Trojan, _, None) => {
+        (Trojan, _, None) => {
             template::transfer_udp(
                 socket,
                 current,
@@ -131,7 +131,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             )
             .await
         }
-        (Protocols::Trojan, _, Some(_)) => {
+        (Trojan, _, Some(_)) => {
             template::transfer_udp(
                 socket,
                 current,

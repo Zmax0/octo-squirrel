@@ -1,4 +1,3 @@
-use std::fs;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
@@ -27,15 +26,12 @@ use octo_squirrel::config::ServerConfig;
 use tcp::PayloadCodec;
 use tcp::ServerContext;
 use template::Message;
-use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio::time;
-use tokio_native_tls::native_tls;
-use tokio_native_tls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
@@ -70,42 +66,8 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
 }
 
 async fn startup_tcp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
-    info!("Tcp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
-    let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
-    let context = ServerContext::new(config, user_manager.clone())?;
-    match (&config.ssl, &config.ws) {
-        (None, ws_config) => {
-            while let Ok((inbound, _)) = listener.accept().await {
-                let context = context.clone();
-                if ws_config.is_some() {
-                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, PayloadCodec::from(context)));
-                } else {
-                    tokio::spawn(template::tcp::relay(inbound, PayloadCodec::from(context)));
-                }
-            }
-        }
-        (Some(ssl_config), ws_config) => {
-            let pem = fs::read(ssl_config.certificate_file.as_str())?;
-            let key = fs::read(ssl_config.key_file.as_str())?;
-            let identity = native_tls::Identity::from_pkcs8(&pem, &key)?;
-            let tls_acceptor = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
-            while let Ok((inbound, _)) = listener.accept().await {
-                let context = context.clone();
-                let tls = tls_acceptor.clone();
-                match tls.accept(inbound).await {
-                    Ok(inbound) => {
-                        if ws_config.is_some() {
-                            tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, PayloadCodec::from(context)));
-                        } else {
-                            tokio::spawn(template::tcp::relay(inbound, PayloadCodec::from(context)));
-                        }
-                    }
-                    Err(e) => error!("[tcp] tls handshake failed: {}", e),
-                }
-            }
-        }
-    }
-    Ok(())
+    let context = ServerContext::init(config, user_manager.clone())?;
+    super::startup_tcp(context, config, |c| Ok(PayloadCodec::from(c))).await
 }
 
 async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
@@ -284,13 +246,10 @@ mod tcp {
     use super::*;
 
     #[derive(Clone)]
-    pub struct ServerContext<const N: usize> {
-        kind: CipherKind,
-        context: Arc<Context<N>>,
-    }
+    pub struct ServerContext<const N: usize>(Arc<Context<N>>);
 
     impl<const N: usize> ServerContext<N> {
-        pub fn new(config: &ServerConfig, user_manager: Arc<ServerUserManager<N>>) -> Result<Self> {
+        pub fn init(config: &ServerConfig, user_manager: Arc<ServerUserManager<N>>) -> Result<Self> {
             let kind = config.cipher;
             let (key, identity_keys) = if kind.is_aead_2022() {
                 aead_2022::password_to_keys(&config.password).map_err(|e| anyhow!(e))?
@@ -298,8 +257,8 @@ mod tcp {
                 let key = aead::openssl_bytes_to_key(config.password.as_bytes());
                 (key, Vec::with_capacity(0))
             };
-            let context = Arc::new(Context::new(key, identity_keys, Some(user_manager)));
-            Ok(Self { kind, context })
+            let context = Arc::new(Context::new(key, identity_keys, config.cipher, Some(user_manager)));
+            Ok(Self(context))
         }
     }
 
@@ -316,9 +275,9 @@ mod tcp {
     }
 
     impl<const N: usize> PayloadCodec<N> {
-        pub fn new(context: Arc<Context<N>>, kind: CipherKind, mode: Mode, address: Option<Address>) -> Self {
+        pub fn new(context: Arc<Context<N>>, mode: Mode, address: Option<Address>) -> Self {
             let session = Session::new(mode, Identity::default(), address);
-            Self { context, session, cipher: AEADCipherCodec::new(kind), state: State::Header }
+            Self { context, session, cipher: AEADCipherCodec::default(), state: State::Header }
         }
     }
 
@@ -358,7 +317,7 @@ mod tcp {
 
     impl<const N: usize> From<ServerContext<N>> for PayloadCodec<N> {
         fn from(value: ServerContext<N>) -> Self {
-            Self::new(value.context, value.kind, Mode::Server, None)
+            Self::new(value.0, Mode::Server, None)
         }
     }
 }

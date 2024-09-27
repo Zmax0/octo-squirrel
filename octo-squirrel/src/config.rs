@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::common::codec::aead::CipherKind;
 use crate::common::network::PacketEncoding;
 use crate::common::network::Transport;
-use crate::common::protocol::Protocols;
+use crate::common::protocol::Protocol;
 use crate::log::Logger;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +22,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub password: String,
-    pub protocol: Protocols,
+    pub protocol: Protocol,
     #[serde(default)]
     pub cipher: CipherKind,
     #[serde(default)]
@@ -107,7 +107,7 @@ mod test {
     use crate::common::codec::aead::CipherKind;
     use crate::common::network::PacketEncoding;
     use crate::common::network::Transport;
-    use crate::common::protocol::Protocols;
+    use crate::common::protocol::Protocol;
     use crate::config::ClientConfig;
 
     #[test]
@@ -145,7 +145,7 @@ mod test {
         assert_eq!(server_host, current.host);
         assert_eq!(server_port, current.port);
         assert_eq!(CipherKind::ChaCha20Poly1305, current.cipher);
-        assert_eq!(Protocols::VMess, current.protocol);
+        assert_eq!(Protocol::VMess, current.protocol);
         assert_eq!(vec![Transport::TCP, Transport::UDP], current.transport);
         assert_eq!(PacketEncoding::None, current.packet_encoding);
         assert!(current.ssl.is_some());

@@ -4,7 +4,6 @@ pub(super) mod tcp {
     use anyhow::anyhow;
     use anyhow::Result;
     use bytes::BytesMut;
-    use octo_squirrel::common::codec::aead::CipherKind;
     use octo_squirrel::common::codec::shadowsocks::tcp::AEADCipherCodec;
     use octo_squirrel::common::codec::shadowsocks::tcp::Context;
     use octo_squirrel::common::codec::shadowsocks::tcp::Identity;
@@ -18,10 +17,7 @@ pub(super) mod tcp {
     use tokio_util::codec::Encoder;
 
     #[derive(Clone)]
-    pub struct ClientContext<const N: usize> {
-        kind: CipherKind,
-        context: Arc<Context<N>>,
-    }
+    pub struct ClientContext<const N: usize>(Arc<Context<N>>);
 
     impl<const N: usize> TryFrom<&ServerConfig> for ClientContext<N> {
         type Error = anyhow::Error;
@@ -34,13 +30,13 @@ pub(super) mod tcp {
                 let key = aead::openssl_bytes_to_key(value.password.as_bytes());
                 (key, Vec::with_capacity(0))
             };
-            let context = Arc::new(Context::new(key, identity_keys, None));
-            Ok(Self { kind, context })
+            let context = Arc::new(Context::new(key, identity_keys, value.cipher, None));
+            Ok(Self(context))
         }
     }
 
     pub fn new_payload_codec<const N: usize>(addr: &Address, config: ClientContext<N>) -> anyhow::Result<PayloadCodec<N>> {
-        Ok(PayloadCodec::new(config.context, config.kind, Mode::Client, Some(addr.clone())))
+        Ok(PayloadCodec::new(config.0, Mode::Client, Some(addr.clone())))
     }
 
     pub struct PayloadCodec<const N: usize> {
@@ -50,9 +46,9 @@ pub(super) mod tcp {
     }
 
     impl<const N: usize> PayloadCodec<N> {
-        pub fn new(context: Arc<Context<N>>, kind: CipherKind, mode: Mode, address: Option<Address>) -> Self {
+        pub fn new(context: Arc<Context<N>>, mode: Mode, address: Option<Address>) -> Self {
             let session = Session::new(mode, Identity::default(), address);
-            Self { context, session, cipher: AEADCipherCodec::new(kind) }
+            Self { context, session, cipher: AEADCipherCodec::default() }
         }
     }
 
