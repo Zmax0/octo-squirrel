@@ -26,7 +26,8 @@ use octo_squirrel::config::ServerConfig;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::template::Message;
+use super::template::message::Inbound;
+use super::template::message::Outbound;
 
 pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerAeadCodec> {
     ServerAeadCodec::try_from(config)
@@ -67,18 +68,18 @@ impl ServerAeadCodec {
         header: &mut RequestHeader,
         session: &mut ServerSession,
         decoder: &mut AEADBodyCodec,
-    ) -> anyhow::Result<Option<Message>> {
+    ) -> anyhow::Result<Option<Outbound>> {
         match header.command {
             RequestCommand::TCP => {
                 if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::ConnectTcp(msg, header.address.clone())))
+                    Ok(Some(Outbound::ConnectTcp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
             }
             RequestCommand::UDP => {
                 if let Some(msg) = decoder.decode_packet(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::RelayUdp(msg, header.address.clone())))
+                    Ok(Some(Outbound::RelayUdp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
@@ -91,18 +92,18 @@ impl ServerAeadCodec {
         header: &mut RequestHeader,
         session: &mut ServerSession,
         decoder: &mut AEADBodyCodec,
-    ) -> anyhow::Result<Option<Message>> {
+    ) -> anyhow::Result<Option<Outbound>> {
         match header.command {
             RequestCommand::TCP => {
                 if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::RelayTcp(msg)))
+                    Ok(Some(Outbound::RelayTcp(msg)))
                 } else {
                     Ok(None)
                 }
             }
             RequestCommand::UDP => {
                 if let Some(msg) = decoder.decode_packet(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::RelayUdp(msg, header.address.clone())))
+                    Ok(Some(Outbound::RelayUdp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
@@ -111,10 +112,10 @@ impl ServerAeadCodec {
     }
 }
 
-impl Encoder<BytesMut> for ServerAeadCodec {
+impl Encoder<Inbound> for ServerAeadCodec {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: Inbound, dst: &mut BytesMut) -> Result<(), Self::Error> {
         if let DecodeState::Ready(ref request_header, ref mut session, _) = self.decode_state {
             match self.encode_state {
                 EncodeState::Init => {
@@ -134,11 +135,11 @@ impl Encoder<BytesMut> for ServerAeadCodec {
                     let payload_len_iv: [u8; NONCE_SIZE] = kdf::kdfn(&session.response_body_iv, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
                     dst.extend_from_slice(&cipher.encrypt(&payload_len_iv.into(), Payload { msg: &header, aad: b"" }).map_err(|e| anyhow!(e))?);
                     let mut encoder = AEADBodyCodec::encoder(request_header, session)?;
-                    let res = Self::encode(item, dst, request_header, session, &mut encoder);
+                    let res = Self::encode(item.into(), dst, request_header, session, &mut encoder);
                     self.encode_state = EncodeState::Ready(Box::new(encoder));
                     res
                 }
-                EncodeState::Ready(ref mut encoder) => Self::encode(item, dst, request_header, session, encoder),
+                EncodeState::Ready(ref mut encoder) => Self::encode(item.into(), dst, request_header, session, encoder),
             }
         } else {
             bail!("decode state is not ready")
@@ -147,7 +148,7 @@ impl Encoder<BytesMut> for ServerAeadCodec {
 }
 
 impl Decoder for ServerAeadCodec {
-    type Item = Message;
+    type Item = Outbound;
 
     type Error = anyhow::Error;
 

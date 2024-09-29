@@ -129,8 +129,8 @@ where
 
 async fn relay_tcp<I, O>(local_client: I, client_server: O) -> relay::Result
 where
-    I: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = anyhow::Result<BytesMut>>,
-    O: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = anyhow::Result<BytesMut>>,
+    I: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = Result<BytesMut>>,
+    O: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = Result<BytesMut>>,
 {
     let (mut c_l, mut l_c) = local_client.split();
     let (mut c_s, mut s_c) = client_server.split();
@@ -150,14 +150,14 @@ where
     }
 }
 
-pub trait AsyncP3G2<P1, P2, P3, G1, G2>: std::ops::FnOnce(P1, P2, P3) -> <Self as AsyncP3G2<P1, P2, P3, G1, G2>>::Future {
+pub trait AsyncP3G2<P1, P2, P3, G1, G2>: FnOnce(P1, P2, P3) -> <Self as AsyncP3G2<P1, P2, P3, G1, G2>>::Future {
     type Future: Future<Output = <Self as AsyncP3G2<P1, P2, P3, G1, G2>>::Output>;
     type Output;
 }
 
 impl<P1, P2, P3, G1, G2, Fn, Future> AsyncP3G2<P1, P2, P3, G1, G2> for Fn
 where
-    Fn: std::ops::FnOnce(P1, P2, P3) -> Future,
+    Fn: FnOnce(P1, P2, P3) -> Future,
     Future: core::future::Future,
 {
     type Future = Future;

@@ -53,7 +53,7 @@ pub(super) mod tcp {
                 dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
-            dst.put(item);
+            dst.extend_from_slice(&item);
             Ok(())
         }
     }
@@ -178,8 +178,8 @@ pub(super) mod udp {
             address::encode(&item.1, buffer);
             buffer.put_u16(item.0.len() as u16);
             buffer.extend_from_slice(&trojan::CR_LF);
-            buffer.put(item.0);
-            dst.put(buffer);
+            buffer.extend_from_slice(&item.0);
+            dst.extend_from_slice(buffer);
             Ok(())
         }
     }

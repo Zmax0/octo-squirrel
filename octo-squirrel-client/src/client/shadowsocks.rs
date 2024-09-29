@@ -35,7 +35,7 @@ pub(super) mod tcp {
         }
     }
 
-    pub fn new_payload_codec<const N: usize>(addr: &Address, config: ClientContext<N>) -> anyhow::Result<PayloadCodec<N>> {
+    pub fn new_payload_codec<const N: usize>(addr: &Address, config: ClientContext<N>) -> Result<PayloadCodec<N>> {
         Ok(PayloadCodec::new(config.0, Mode::Client, Some(addr.clone())))
     }
 
@@ -56,7 +56,7 @@ pub(super) mod tcp {
         type Error = anyhow::Error;
 
         fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
-            self.cipher.encode(&self.context, &mut self.session, item, dst)
+            self.cipher.encode(&self.context, &self.session, item, dst)
         }
     }
 

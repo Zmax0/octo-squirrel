@@ -75,7 +75,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                Result::Ok,
+                Ok,
                 vmess::udp::new_key,
                 vmess::udp::new_plain_outbound,
                 vmess::udp::to_inbound_recv,
@@ -87,7 +87,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                Result::Ok,
+                Ok,
                 vmess::udp::new_key,
                 vmess::udp::new_ws_outbound,
                 vmess::udp::to_inbound_recv,
@@ -99,7 +99,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                Result::Ok,
+                Ok,
                 vmess::udp::new_key,
                 vmess::udp::new_tls_outbound,
                 vmess::udp::to_inbound_recv,
@@ -111,7 +111,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                Result::Ok,
+                Ok,
                 vmess::udp::new_key,
                 vmess::udp::new_wss_outbound,
                 vmess::udp::to_inbound_recv,
@@ -123,7 +123,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                Result::Ok,
+                Ok,
                 trojan::udp::new_key,
                 trojan::udp::new_tls_outbound,
                 trojan::udp::to_inbound_recv,
@@ -135,7 +135,7 @@ pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                Result::Ok,
+                Ok,
                 trojan::udp::new_key,
                 trojan::udp::new_wss_outbound,
                 trojan::udp::to_inbound_recv,

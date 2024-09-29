@@ -44,10 +44,10 @@ impl<const N: usize> AEADCipherCodec<N> {
             (false, _) => {
                 let salt = &mut [0; N];
                 dice::fill_bytes(salt);
-                dst.put(&salt[..]);
+                dst.extend_from_slice(&salt[..]);
                 let mut temp = BytesMut::with_capacity(address::length(address) + item.remaining());
                 address::encode(address, &mut temp);
-                temp.put(item);
+                temp.extend_from_slice(&item);
                 let mut encoder = self.new_encoder(context.key, salt)?;
                 encoder.encode_packet(temp, dst).map_err(|e| anyhow!(e))
             }
@@ -62,7 +62,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         item: BytesMut,
         dst: &mut BytesMut,
     ) -> anyhow::Result<()> {
-        let padding_length = super::aead_2022::next_padding_length(&item);
+        let padding_length = aead_2022::next_padding_length(&item);
         let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
         let tag_size = self.kind.tag_size();
         let require_eih = self.kind.support_eih() && !context.identity_keys.is_empty();
@@ -75,20 +75,20 @@ impl<const N: usize> AEADCipherCodec<N> {
         if require_eih {
             let mut session_id_packet_id = [0; 16];
             session_id_packet_id.copy_from_slice(&temp[nonce_length..]);
-            aead_2022::udp::with_eih(self.kind, context.key, context.identity_keys, &session_id_packet_id, &mut temp)?
+            udp::with_eih(self.kind, context.key, context.identity_keys, &session_id_packet_id, &mut temp)?
         }
         temp.put_u8(Mode::Client.to_u8());
-        temp.put_u64(super::aead_2022::now()?);
+        temp.put_u64(aead_2022::now()?);
         temp.put_u16(padding_length);
-        temp.put(&dice::roll_bytes(padding_length as usize)[..]);
+        temp.extend_from_slice(&dice::roll_bytes(padding_length as usize));
         address::encode(address, &mut temp);
-        temp.put(item);
+        temp.extend_from_slice(&item);
         let mut header = temp.split_to(16);
         let mut nonce: [u8; 12] = [0; 12];
         nonce.copy_from_slice(&header[4..16]);
         let key = if context.identity_keys.is_empty() { context.key } else { &context.identity_keys[0] };
         udp::aes_encrypt_in_place(self.kind, key, &mut header)?;
-        dst.put(header);
+        dst.extend_from_slice(&header);
         if eih_len > 0 {
             dst.extend_from_slice(&temp.split_to(eih_len))
         }
@@ -106,7 +106,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         item: BytesMut,
         dst: &mut BytesMut,
     ) -> anyhow::Result<()> {
-        let padding_length = super::aead_2022::next_padding_length(&item);
+        let padding_length = aead_2022::next_padding_length(&item);
         let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
         let mut temp = BytesMut::with_capacity(
             nonce_length + 8 + 8 + 1 + 8 + 8 + 2 + padding_length as usize + address::length(address) + item.remaining() + self.kind.tag_size(),
@@ -114,12 +114,12 @@ impl<const N: usize> AEADCipherCodec<N> {
         temp.put_u64(session.server_session_id);
         temp.put_u64(session.packet_id);
         temp.put_u8(Mode::Server.to_u8());
-        temp.put_u64(super::aead_2022::now()?);
+        temp.put_u64(aead_2022::now()?);
         temp.put_u64(session.client_session_id);
         temp.put_u16(padding_length);
-        temp.put(&dice::roll_bytes(padding_length as usize)[..]);
+        temp.extend_from_slice(&dice::roll_bytes(padding_length as usize));
         address::encode(address, &mut temp);
-        temp.put(item);
+        temp.extend_from_slice(&item);
         let key = if let Some(user) = &session.user {
             trace!("encrypt with identity {}", user);
             &user.key
@@ -130,7 +130,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         let mut nonce: [u8; 12] = [0; 12];
         nonce.copy_from_slice(&header[4..16]);
         udp::aes_encrypt_in_place(self.kind, key, &mut header)?;
-        dst.put(header);
+        dst.extend_from_slice(&header);
         let cipher = unsafe { get_cipher(self.kind, key, session.server_session_id) };
         cipher.encrypt_in_place(&nonce, b"", &mut temp).map_err(|e| anyhow!(e))?;
         dst.extend_from_slice(&temp);
@@ -139,7 +139,7 @@ impl<const N: usize> AEADCipherCodec<N> {
 
     fn new_encoder(&self, key: &[u8], salt: &[u8]) -> anyhow::Result<ChunkEncoder> {
         if self.kind.is_aead_2022() {
-            Ok(super::aead_2022::new_encoder(self.kind, key, salt))
+            Ok(aead_2022::new_encoder(self.kind, key, salt))
         } else {
             super::aead::new_encoder(self.kind, key, salt).map_err(|e| anyhow!(e))
         }
@@ -184,7 +184,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         if stream_type != Mode::Server.to_u8() {
             bail!("invalid socket type, expecting {}, but found {}", Mode::Client.to_u8(), stream_type);
         }
-        super::aead_2022::validate_timestamp(packet.get_u64()).map_err(anyhow::Error::msg)?;
+        aead_2022::validate_timestamp(packet.get_u64()).map_err(anyhow::Error::msg)?;
         let client_session_id = packet.get_u64();
         let padding_length = packet.get_u16();
         if padding_length > 0 {
@@ -238,7 +238,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         if stream_type != Mode::Client.to_u8() {
             bail!("invalid socket type, expecting {}, but found {}", Mode::Client.to_u8(), stream_type);
         }
-        super::aead_2022::validate_timestamp(packet.get_u64()).map_err(anyhow::Error::msg)?;
+        aead_2022::validate_timestamp(packet.get_u64()).map_err(anyhow::Error::msg)?;
         let padding_length = packet.get_u16();
         if padding_length > 0 {
             packet.advance(padding_length as usize);
@@ -250,7 +250,7 @@ impl<const N: usize> AEADCipherCodec<N> {
 
     fn new_payload_decoder(&self, key: &[u8], salt: &BytesMut) -> anyhow::Result<ChunkDecoder> {
         if self.kind.is_aead_2022() {
-            Ok(super::aead_2022::new_decoder(self.kind, key, salt))
+            Ok(aead_2022::new_decoder(self.kind, key, salt))
         } else {
             super::aead::new_decoder(self.kind, key, salt).map_err(|e| anyhow!(e))
         }
@@ -391,8 +391,7 @@ mod test {
     fn test_udp() -> anyhow::Result<()> {
         fn test_udp(cipher: CipherKind) -> anyhow::Result<()> {
             fn test_udp<const N: usize>(cipher: CipherKind) -> anyhow::Result<()> {
-                let password_len = rand::thread_rng().gen_range(10..=100);
-                let password: String = rand::thread_rng().sample_iter(&Alphanumeric).take(password_len).map(char::from).collect();
+                let password: String = rand::thread_rng().sample_iter(&Alphanumeric).take(N).map(char::from).collect();
                 let codec = AEADCipherCodec::new(cipher).map_err(|e| anyhow!(e))?;
                 let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
                 let keys = password_to_keys(&password).map_err(|e| anyhow!(e))?;

@@ -23,9 +23,9 @@ pub fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> Result<ChunkDec
 
 fn hkdfsha1(ikm: &[u8], salt: &[u8]) -> Result<Vec<u8>, InvalidLength> {
     let hk = Hkdf::<Sha1>::new(Some(salt), ikm);
-    let okm = &mut vec![0; salt.len()];
-    hk.expand(b"ss-subkey", okm)?;
-    Ok(okm.to_vec())
+    let mut okm = vec![0; salt.len()];
+    hk.expand(b"ss-subkey", &mut okm)?;
+    Ok(okm)
 }
 
 fn new_auth(kind: CipherKind, key: &[u8]) -> Authenticator {

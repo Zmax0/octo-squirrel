@@ -96,10 +96,10 @@ struct HmacCreator<'a> {
 
 impl HmacCreator<'_> {
     fn create(&self) -> Box<dyn Hash> {
-        return if let Some(parent) = self.parent.as_ref() {
+        if let Some(parent) = self.parent.as_ref() {
             Box::new(Hmac::new(parent.create().as_ref(), self.value))
         } else {
             Box::new(Hmac::new(&Sha256::new(), self.value))
-        };
+        }
     }
 }

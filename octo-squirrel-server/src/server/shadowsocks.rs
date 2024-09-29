@@ -25,7 +25,7 @@ use octo_squirrel::common::protocol::shadowsocks::Mode;
 use octo_squirrel::config::ServerConfig;
 use tcp::PayloadCodec;
 use tcp::ServerContext;
-use template::Message;
+use template::message::Outbound;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
@@ -241,7 +241,7 @@ mod tcp {
     use octo_squirrel::common::codec::shadowsocks::tcp::Identity;
     use octo_squirrel::common::codec::shadowsocks::tcp::Session;
     use octo_squirrel::common::protocol::shadowsocks::aead;
-    use octo_squirrel::common::protocol::shadowsocks::aead_2022;
+    use template::message::Inbound;
 
     use super::*;
 
@@ -252,7 +252,7 @@ mod tcp {
         pub fn init(config: &ServerConfig, user_manager: Arc<ServerUserManager<N>>) -> Result<Self> {
             let kind = config.cipher;
             let (key, identity_keys) = if kind.is_aead_2022() {
-                aead_2022::password_to_keys(&config.password).map_err(|e| anyhow!(e))?
+                password_to_keys(&config.password).map_err(|e| anyhow!(e))?
             } else {
                 let key = aead::openssl_bytes_to_key(config.password.as_bytes());
                 (key, Vec::with_capacity(0))
@@ -281,16 +281,16 @@ mod tcp {
         }
     }
 
-    impl<const N: usize> Encoder<BytesMut> for PayloadCodec<N> {
+    impl<const N: usize> Encoder<Inbound> for PayloadCodec<N> {
         type Error = anyhow::Error;
 
-        fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
-            self.cipher.encode(&self.context, &mut self.session, item, dst)
+        fn encode(&mut self, item: Inbound, dst: &mut BytesMut) -> Result<()> {
+            self.cipher.encode(&self.context, &self.session, item.into(), dst)
         }
     }
 
     impl<const N: usize> Decoder for PayloadCodec<N> {
-        type Item = Message;
+        type Item = Outbound;
 
         type Error = anyhow::Error;
 
@@ -299,14 +299,14 @@ mod tcp {
                 State::Header => {
                     if let (Some(dst), Some(addr)) = (self.cipher.decode(&self.context, &mut self.session, src)?, self.session.address.as_ref()) {
                         self.state = State::Body;
-                        Ok(Some(Message::ConnectTcp(dst, addr.clone())))
+                        Ok(Some(Outbound::ConnectTcp(dst, addr.clone())))
                     } else {
                         Ok(None)
                     }
                 }
                 State::Body => {
                     if let Some(dst) = self.cipher.decode(&self.context, &mut self.session, src)? {
-                        Ok(Some(Message::RelayTcp(dst)))
+                        Ok(Some(Outbound::RelayTcp(dst)))
                     } else {
                         Ok(None)
                     }

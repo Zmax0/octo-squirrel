@@ -1,6 +1,5 @@
 use std::fs;
 
-use bytes::BytesMut;
 use log::error;
 use log::info;
 use octo_squirrel::common::protocol::Protocol;
@@ -29,7 +28,11 @@ async fn startup_tcp<Context, NewCodec, Codec>(context: Context, config: &Server
 where
     Context: Clone,
     NewCodec: FnOnce(Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
-    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = template::Message, Error = anyhow::Error> + Unpin + Send + 'static,
+    Codec: Encoder<template::message::Inbound, Error = anyhow::Error>
+        + Decoder<Item = template::message::Outbound, Error = anyhow::Error>
+        + Unpin
+        + Send
+        + 'static,
 {
     let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
     match (&config.ssl, &config.ws) {

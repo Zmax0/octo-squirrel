@@ -11,7 +11,6 @@ use std::task::Poll;
 
 use anyhow::anyhow;
 use anyhow::Result;
-use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use futures::Sink;
@@ -46,8 +45,7 @@ impl Encoder<Bytes> for BytesCodec {
     type Error = anyhow::Error;
 
     fn encode(&mut self, data: Bytes, buf: &mut BytesMut) -> Result<()> {
-        buf.reserve(data.len());
-        buf.put(data);
+        buf.extend_from_slice(&data);
         Ok(())
     }
 }
@@ -56,8 +54,7 @@ impl Encoder<BytesMut> for BytesCodec {
     type Error = anyhow::Error;
 
     fn encode(&mut self, data: BytesMut, buf: &mut BytesMut) -> Result<()> {
-        buf.reserve(data.len());
-        buf.put(data);
+        buf.extend_from_slice(&data);
         Ok(())
     }
 }
@@ -88,7 +85,7 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    type Item = anyhow::Result<D>;
+    type Item = Result<D>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match ready!(self.stream.poll_next_unpin(cx)) {

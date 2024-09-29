@@ -156,12 +156,6 @@ impl Display for CipherKind {
     }
 }
 
-#[derive(PartialEq, Eq)]
-pub enum PaddingLengthGenerator {
-    Empty,
-    Shake,
-}
-
 pub enum BytesGenerator {
     Counting(CountingNonceGenerator),
     Increasing(IncreasingNonceGenerator),

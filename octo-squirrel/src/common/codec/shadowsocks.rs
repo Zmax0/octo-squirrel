@@ -7,7 +7,6 @@ use std::mem::size_of;
 
 use ::aead::Buffer;
 use bytes::Buf;
-use bytes::BufMut;
 use bytes::BytesMut;
 use log::trace;
 
@@ -73,7 +72,7 @@ impl ChunkEncoder {
         dst.extend_from_slice(&encrypted_size_bytes);
         let mut payload_bytes = src.split_to(encrypted_size);
         self.auth.seal(&mut payload_bytes)?;
-        dst.put(payload_bytes);
+        dst.extend_from_slice(&payload_bytes);
         Ok(())
     }
 
@@ -86,7 +85,7 @@ impl ChunkEncoder {
 
     fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
         self.auth.seal(&mut src)?;
-        dst.put(src);
+        dst.extend_from_slice(&src);
         Ok(())
     }
 
@@ -143,9 +142,10 @@ impl ChunkDecoder {
                     if src.remaining() < len {
                         return Ok(());
                     }
+                    dst.reserve(len);
                     let mut payload_btyes = src.split_to(len);
                     self.auth.open(&mut payload_btyes)?;
-                    dst.put(payload_btyes);
+                    dst.extend_from_slice(&payload_btyes);
                     self.state = DecodeState::Length;
                 }
             }

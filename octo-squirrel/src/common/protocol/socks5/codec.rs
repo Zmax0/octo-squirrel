@@ -22,7 +22,7 @@ pub struct Socks5ClientEncoder;
 impl Encoder<Box<dyn Socks5Message>> for Socks5ClientEncoder {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, mut item: Box<dyn Socks5Message>, dst: &mut bytes::BytesMut) -> Result<()> {
+    fn encode(&mut self, mut item: Box<dyn Socks5Message>, dst: &mut BytesMut) -> Result<()> {
         item.encode(dst);
         Ok(())
     }
@@ -33,7 +33,7 @@ pub struct Socks5ServerEncoder;
 impl Encoder<Box<dyn Socks5Message>> for Socks5ServerEncoder {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, mut item: Box<dyn Socks5Message>, dst: &mut bytes::BytesMut) -> Result<()> {
+    fn encode(&mut self, mut item: Box<dyn Socks5Message>, dst: &mut BytesMut) -> Result<()> {
         item.encode(dst);
         Ok(())
     }
@@ -46,7 +46,7 @@ impl Decoder for Socks5InitialRequestDecoder {
 
     type Error = anyhow::Error;
 
-    fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
         let version = src.get_u8();
         if VERSION != version {
             bail!("unsupported version: {}", version);
@@ -67,7 +67,7 @@ impl Decoder for Socks5CommandRequestDecoder {
 
     type Error = anyhow::Error;
 
-    fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
         let version = src.get_u8();
         if VERSION != version {
             bail!("unsupported version: {}", version);
@@ -86,7 +86,7 @@ impl Decoder for Socks5InitialResponseDecoder {
 
     type Error = anyhow::Error;
 
-    fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let version = src.get_u8();
         if VERSION != version {
             bail!("unsupported version: {}", version);
@@ -102,7 +102,7 @@ impl Decoder for Socks5CommandResponseDecoder {
 
     type Error = anyhow::Error;
 
-    fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
         let version = src.get_u8();
         if VERSION != version {
             bail!("unsupported version: {}", version);
