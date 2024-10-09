@@ -4,15 +4,15 @@ pub(super) mod tcp {
     use anyhow::anyhow;
     use anyhow::Result;
     use bytes::BytesMut;
-    use octo_squirrel::common::codec::shadowsocks::tcp::AEADCipherCodec;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Context;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Identity;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Session;
-    use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::shadowsocks::aead;
-    use octo_squirrel::common::protocol::shadowsocks::aead_2022;
-    use octo_squirrel::common::protocol::shadowsocks::Mode;
+    use octo_squirrel::codec::shadowsocks::tcp::AEADCipherCodec;
+    use octo_squirrel::codec::shadowsocks::tcp::Context;
+    use octo_squirrel::codec::shadowsocks::tcp::Identity;
+    use octo_squirrel::codec::shadowsocks::tcp::Session;
     use octo_squirrel::config::ServerConfig;
+    use octo_squirrel::protocol::address::Address;
+    use octo_squirrel::protocol::shadowsocks::aead;
+    use octo_squirrel::protocol::shadowsocks::aead_2022;
+    use octo_squirrel::protocol::shadowsocks::Mode;
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
@@ -77,17 +77,19 @@ pub(super) mod udp {
     use std::net::SocketAddrV4;
 
     use anyhow::anyhow;
+    use anyhow::bail;
     use bytes::BytesMut;
-    use octo_squirrel::common::codec::aead::CipherKind;
-    use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
-    use octo_squirrel::common::codec::shadowsocks::udp::Context;
-    use octo_squirrel::common::codec::shadowsocks::udp::Session;
-    use octo_squirrel::common::codec::shadowsocks::udp::SessionCodec;
-    use octo_squirrel::common::codec::DatagramPacket;
-    use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::shadowsocks::aead_2022::password_to_keys;
-    use octo_squirrel::common::protocol::shadowsocks::Mode;
+    use octo_squirrel::codec::aead::CipherKind;
+    use octo_squirrel::codec::shadowsocks::udp::AEADCipherCodec;
+    use octo_squirrel::codec::shadowsocks::udp::Context;
+    use octo_squirrel::codec::shadowsocks::udp::Session;
+    use octo_squirrel::codec::shadowsocks::udp::SessionCodec;
+    use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::config::ServerConfig;
+    use octo_squirrel::manager::packet_window::PacketWindowFilter;
+    use octo_squirrel::protocol::address::Address;
+    use octo_squirrel::protocol::shadowsocks::aead_2022::password_to_keys;
+    use octo_squirrel::protocol::shadowsocks::Mode;
     use tokio::net::UdpSocket;
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
@@ -114,7 +116,7 @@ pub(super) mod udp {
         _: &Address,
         client: &Client<'a, N>,
     ) -> anyhow::Result<UdpFramed<DatagramPacketCodec<'a, N>>> {
-        let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
+        let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await?;
         let outbound_framed = UdpFramed::new(
             outbound,
             DatagramPacketCodec::new(SessionCodec::new(
@@ -125,8 +127,8 @@ pub(super) mod udp {
         Ok(outbound_framed)
     }
 
-    pub fn new_key(from: SocketAddr, to: &Address) -> (SocketAddr, Address) {
-        (from, to.clone())
+    pub fn new_key(from: SocketAddr, _: &Address) -> SocketAddr {
+        from
     }
 
     pub fn to_outbound_send(item: (BytesMut, &Address), proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
@@ -140,13 +142,14 @@ pub(super) mod udp {
     }
 
     pub struct DatagramPacketCodec<'a, const N: usize> {
-        session: Session<N>,
         codec: SessionCodec<'a, N>,
+        session: Session<N>,
+        filter: PacketWindowFilter,
     }
 
     impl<const N: usize> DatagramPacketCodec<'_, N> {
         pub fn new(codec: SessionCodec<N>) -> DatagramPacketCodec<'_, N> {
-            DatagramPacketCodec { session: Session::from(Mode::Client), codec }
+            DatagramPacketCodec { codec, session: Session::from(Mode::Client), filter: PacketWindowFilter::default() }
         }
     }
 
@@ -154,6 +157,7 @@ pub(super) mod udp {
         type Error = anyhow::Error;
 
         fn encode(&mut self, (content, addr): DatagramPacket, dst: &mut BytesMut) -> anyhow::Result<()> {
+            self.session.increase_packet_id();
             self.codec.encode((content, addr, self.session.clone()), dst)
         }
     }
@@ -169,7 +173,10 @@ pub(super) mod udp {
             } else {
                 match self.codec.decode(src)? {
                     Some((content, addr, session)) => {
-                        self.session = session;
+                        if !self.filter.validate_packet_id(session.packet_id, u64::MAX) {
+                            bail!("[udp] packet_id out of window; session={}", session)
+                        }
+                        self.session.server_session_id = session.server_session_id;
                         Ok(Some((content, addr)))
                     }
                     None => Ok(None),

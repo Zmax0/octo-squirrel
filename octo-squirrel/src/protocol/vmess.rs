@@ -39,8 +39,8 @@ pub mod address {
     use bytes::Bytes;
     use bytes::BytesMut;
 
-    use crate::common::protocol::address::Address;
-    use crate::common::protocol::vmess::header::AddressType;
+    use crate::protocol::address::Address;
+    use crate::protocol::vmess::header::AddressType;
 
     pub fn write_address_port(address: &Address, buf: &mut BytesMut) -> Result<(), io::Error> {
         match address {
@@ -126,7 +126,7 @@ mod test {
 
     use super::address;
     use super::id;
-    use crate::common::protocol::address::Address;
+    use crate::protocol::address::Address;
 
     #[test]
     fn test_address_codec() -> Result<(), AddrParseError> {

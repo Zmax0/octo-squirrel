@@ -15,7 +15,7 @@ use rand::random;
 
 use super::auth_id;
 use super::kdf;
-use crate::common::protocol::vmess::timestamp;
+use crate::protocol::vmess::timestamp;
 
 const NONCE_SIZE: usize = <Aes128Gcm as AeadCore>::NonceSize::USIZE;
 const TAG_SIZE: usize = <Aes128Gcm as AeadCore>::TagSize::USIZE;

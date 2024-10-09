@@ -11,11 +11,11 @@ use std::io::BufReader;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::common::codec::aead::CipherKind;
-use crate::common::network::PacketEncoding;
-use crate::common::network::Transport;
-use crate::common::protocol::Protocol;
+use crate::codec::aead::CipherKind;
 use crate::log::Logger;
+use crate::network::PacketEncoding;
+use crate::network::Transport;
+use crate::protocol::Protocol;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -104,11 +104,11 @@ mod test {
     use rand::Rng;
     use serde_json::json;
 
-    use crate::common::codec::aead::CipherKind;
-    use crate::common::network::PacketEncoding;
-    use crate::common::network::Transport;
-    use crate::common::protocol::Protocol;
+    use crate::codec::aead::CipherKind;
     use crate::config::ClientConfig;
+    use crate::network::PacketEncoding;
+    use crate::network::Transport;
+    use crate::protocol::Protocol;
 
     #[test]
     fn test_config_serialize() {

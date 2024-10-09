@@ -40,7 +40,7 @@ mod test {
     use base64ct::Encoding;
 
     use super::Aes128EcbNoPadding;
-    use crate::common::crypto::Aes256EcbNoPadding;
+    use crate::crypto::Aes256EcbNoPadding;
 
     #[test]
     fn test_aes_128() {

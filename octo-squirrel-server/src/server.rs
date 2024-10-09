@@ -2,8 +2,8 @@ use std::fs;
 
 use log::error;
 use log::info;
-use octo_squirrel::common::protocol::Protocol;
 use octo_squirrel::config::ServerConfig;
+use octo_squirrel::protocol::Protocol;
 use tokio::net::TcpListener;
 use tokio_native_tls::native_tls;
 use tokio_native_tls::TlsAcceptor;

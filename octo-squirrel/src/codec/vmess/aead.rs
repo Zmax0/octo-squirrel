@@ -15,16 +15,16 @@ use rand::Rng;
 use sha3::Shake128;
 use sha3::Shake128ReaderCore;
 
-use crate::common::codec::aead::CipherKind;
-use crate::common::codec::aead::CipherMethod;
-use crate::common::codec::aead::CountingNonceGenerator;
-use crate::common::codec::chunk::PlainSizeParser;
-use crate::common::protocol::vmess::aead::kdf;
-use crate::common::protocol::vmess::auth;
-use crate::common::protocol::vmess::header::RequestHeader;
-use crate::common::protocol::vmess::header::RequestOption;
-use crate::common::protocol::vmess::header::SecurityType;
-use crate::common::protocol::vmess::session::Session;
+use crate::codec::aead::CipherKind;
+use crate::codec::aead::CipherMethod;
+use crate::codec::aead::CountingNonceGenerator;
+use crate::codec::chunk::PlainSizeParser;
+use crate::protocol::vmess::aead::kdf;
+use crate::protocol::vmess::auth;
+use crate::protocol::vmess::header::RequestHeader;
+use crate::protocol::vmess::header::RequestOption;
+use crate::protocol::vmess::header::SecurityType;
+use crate::protocol::vmess::session::Session;
 
 const AUTH_LEN: &[u8] = b"auth_len";
 
@@ -291,14 +291,14 @@ mod test {
     use rand::random;
     use rand::Rng;
 
-    use crate::common::codec::vmess::aead::AEADBodyCodec;
-    use crate::common::codec::vmess::aead::ShakeSizeParser;
-    use crate::common::protocol::address::Address;
-    use crate::common::protocol::vmess::header::*;
-    use crate::common::protocol::vmess::id;
-    use crate::common::protocol::vmess::session::ClientSession;
-    use crate::common::protocol::vmess::session::ServerSession;
-    use crate::common::protocol::vmess::VERSION;
+    use crate::codec::vmess::aead::AEADBodyCodec;
+    use crate::codec::vmess::aead::ShakeSizeParser;
+    use crate::protocol::address::Address;
+    use crate::protocol::vmess::header::*;
+    use crate::protocol::vmess::id;
+    use crate::protocol::vmess::session::ClientSession;
+    use crate::protocol::vmess::session::ServerSession;
+    use crate::protocol::vmess::VERSION;
 
     #[test]
     fn test_share_size_parser() {

@@ -10,7 +10,7 @@ use bytes::BufMut;
 use bytes::BytesMut;
 
 use super::Socks5AddressType;
-use crate::common::protocol::address::Address;
+use crate::protocol::address::Address;
 
 pub fn encode(addr: &Address, dst: &mut BytesMut) {
     match addr {

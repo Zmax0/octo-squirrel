@@ -8,14 +8,14 @@ use bytes::BytesMut;
 use log::trace;
 
 use super::now;
-use crate::common::codec::aead::CipherKind;
-use crate::common::codec::shadowsocks::tcp::Identity;
-use crate::common::codec::shadowsocks::Authenticator;
-use crate::common::codec::shadowsocks::ChunkDecoder;
-use crate::common::crypto::Aes128EcbNoPadding;
-use crate::common::crypto::Aes256EcbNoPadding;
-use crate::common::manager::shadowsocks::ServerUserManager;
-use crate::common::protocol::shadowsocks::Mode;
+use crate::codec::aead::CipherKind;
+use crate::codec::shadowsocks::tcp::Identity;
+use crate::codec::shadowsocks::Authenticator;
+use crate::codec::shadowsocks::ChunkDecoder;
+use crate::crypto::Aes128EcbNoPadding;
+use crate::crypto::Aes256EcbNoPadding;
+use crate::manager::shadowsocks::ServerUserManager;
+use crate::protocol::shadowsocks::Mode;
 
 pub fn new_header(auth: &mut Authenticator, msg: &mut BytesMut, stream_type: &Mode, request_salt: Option<&[u8]>) -> anyhow::Result<(Bytes, Bytes)> {
     let mut salt_len = 0;
@@ -96,8 +96,8 @@ mod test {
     use bytes::BytesMut;
 
     use super::with_eih;
-    use crate::common::codec::aead::CipherKind;
-    use crate::common::protocol::shadowsocks::aead_2022::password_to_keys;
+    use crate::codec::aead::CipherKind;
+    use crate::protocol::shadowsocks::aead_2022::password_to_keys;
 
     #[test]
     fn test() {

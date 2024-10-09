@@ -10,14 +10,14 @@ pub mod client {
     use tokio_util::codec::FramedRead;
     use tokio_util::codec::FramedWrite;
 
-    use crate::common::protocol::socks5::codec::Socks5ClientEncoder;
-    use crate::common::protocol::socks5::codec::Socks5CommandResponseDecoder;
-    use crate::common::protocol::socks5::codec::Socks5InitialResponseDecoder;
-    use crate::common::protocol::socks5::message::Socks5CommandRequest;
-    use crate::common::protocol::socks5::message::Socks5CommandResponse;
-    use crate::common::protocol::socks5::message::Socks5InitialRequest;
-    use crate::common::protocol::socks5::Socks5AuthMethod;
-    use crate::common::protocol::socks5::Socks5CommandType;
+    use crate::protocol::socks5::codec::Socks5ClientEncoder;
+    use crate::protocol::socks5::codec::Socks5CommandResponseDecoder;
+    use crate::protocol::socks5::codec::Socks5InitialResponseDecoder;
+    use crate::protocol::socks5::message::Socks5CommandRequest;
+    use crate::protocol::socks5::message::Socks5CommandResponse;
+    use crate::protocol::socks5::message::Socks5InitialRequest;
+    use crate::protocol::socks5::Socks5AuthMethod;
+    use crate::protocol::socks5::Socks5CommandType;
 
     pub async fn no_auth(command_type: Socks5CommandType, proxy_addr: SocketAddr, dst_addr: SocketAddr) -> Result<Socks5CommandResponse> {
         let mut stream = TcpStream::connect(proxy_addr).await?;
@@ -45,13 +45,13 @@ pub mod server {
     use tokio_util::codec::FramedRead;
     use tokio_util::codec::FramedWrite;
 
-    use crate::common::protocol::socks5::codec::Socks5CommandRequestDecoder;
-    use crate::common::protocol::socks5::codec::Socks5InitialRequestDecoder;
-    use crate::common::protocol::socks5::codec::Socks5ServerEncoder;
-    use crate::common::protocol::socks5::message::Socks5CommandRequest;
-    use crate::common::protocol::socks5::message::Socks5CommandResponse;
-    use crate::common::protocol::socks5::message::Socks5InitialResponse;
-    use crate::common::protocol::socks5::Socks5AuthMethod;
+    use crate::protocol::socks5::codec::Socks5CommandRequestDecoder;
+    use crate::protocol::socks5::codec::Socks5InitialRequestDecoder;
+    use crate::protocol::socks5::codec::Socks5ServerEncoder;
+    use crate::protocol::socks5::message::Socks5CommandRequest;
+    use crate::protocol::socks5::message::Socks5CommandResponse;
+    use crate::protocol::socks5::message::Socks5InitialResponse;
+    use crate::protocol::socks5::Socks5AuthMethod;
 
     pub async fn no_auth(stream: &mut TcpStream, response: Socks5CommandResponse) -> Result<Socks5CommandRequest> {
         let (rh, wh) = stream.split();

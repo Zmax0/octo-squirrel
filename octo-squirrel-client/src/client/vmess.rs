@@ -15,16 +15,16 @@ use bytes::BufMut;
 use bytes::BytesMut;
 use log::debug;
 use log::info;
-use octo_squirrel::common::codec::vmess::aead::AEADBodyCodec;
-use octo_squirrel::common::protocol::vmess::address;
-use octo_squirrel::common::protocol::vmess::aead::*;
-use octo_squirrel::common::protocol::vmess::header::RequestCommand;
-use octo_squirrel::common::protocol::vmess::header::RequestHeader;
-use octo_squirrel::common::protocol::vmess::header::RequestOption;
-use octo_squirrel::common::protocol::vmess::session::ClientSession;
-use octo_squirrel::common::protocol::vmess::VERSION;
-use octo_squirrel::common::util::dice;
-use octo_squirrel::common::util::fnv;
+use octo_squirrel::codec::vmess::aead::AEADBodyCodec;
+use octo_squirrel::protocol::vmess::address;
+use octo_squirrel::protocol::vmess::aead::*;
+use octo_squirrel::protocol::vmess::header::RequestCommand;
+use octo_squirrel::protocol::vmess::header::RequestHeader;
+use octo_squirrel::protocol::vmess::header::RequestOption;
+use octo_squirrel::protocol::vmess::session::ClientSession;
+use octo_squirrel::protocol::vmess::VERSION;
+use octo_squirrel::util::dice;
+use octo_squirrel::util::fnv;
 use rand::Rng;
 use tokio::net::TcpStream;
 use tokio_util::codec::Decoder;
@@ -135,11 +135,11 @@ impl Decoder for ClientAEADCodec {
 pub(super) mod tcp {
     use std::sync::Arc;
 
-    use octo_squirrel::common::codec::aead::CipherKind;
-    use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::vmess::header::RequestCommand;
-    use octo_squirrel::common::protocol::vmess::header::RequestHeader;
-    use octo_squirrel::common::protocol::vmess::header::SecurityType;
+    use octo_squirrel::codec::aead::CipherKind;
+    use octo_squirrel::protocol::address::Address;
+    use octo_squirrel::protocol::vmess::header::RequestCommand;
+    use octo_squirrel::protocol::vmess::header::RequestHeader;
+    use octo_squirrel::protocol::vmess::header::SecurityType;
 
     use super::ClientAEADCodec;
 
@@ -156,14 +156,14 @@ pub(super) mod udp {
     use anyhow::anyhow;
     use anyhow::Result;
     use bytes::BytesMut;
-    use octo_squirrel::common::codec::aead::CipherKind;
-    use octo_squirrel::common::codec::DatagramPacket;
-    use octo_squirrel::common::codec::WebSocketFramed;
-    use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::vmess::header::RequestCommand;
-    use octo_squirrel::common::protocol::vmess::header::RequestHeader;
-    use octo_squirrel::common::protocol::vmess::header::SecurityType;
+    use octo_squirrel::codec::aead::CipherKind;
+    use octo_squirrel::codec::DatagramPacket;
+    use octo_squirrel::codec::WebSocketFramed;
     use octo_squirrel::config::ServerConfig;
+    use octo_squirrel::protocol::address::Address;
+    use octo_squirrel::protocol::vmess::header::RequestCommand;
+    use octo_squirrel::protocol::vmess::header::RequestHeader;
+    use octo_squirrel::protocol::vmess::header::SecurityType;
     use tokio::net::TcpStream;
     use tokio_native_tls::TlsStream;
     use tokio_util::codec::Framed;

@@ -7,8 +7,8 @@ use futures::Stream;
 use futures::StreamExt;
 use log::error;
 use log::info;
-use octo_squirrel::common::codec::BytesCodec;
-use octo_squirrel::common::codec::WebSocketFramed;
+use octo_squirrel::codec::BytesCodec;
+use octo_squirrel::codec::WebSocketFramed;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
@@ -23,7 +23,7 @@ pub(super) mod message {
 
     use anyhow::bail;
     use bytes::BytesMut;
-    use octo_squirrel::common::protocol::address::Address;
+    use octo_squirrel::protocol::address::Address;
 
     pub enum Outbound {
         ConnectTcp(BytesMut, Address),
@@ -86,8 +86,8 @@ pub(super) mod tcp {
     use futures::future;
     use message::Inbound;
     use message::Outbound;
-    use octo_squirrel::common::relay;
-    use octo_squirrel::common::relay::End;
+    use octo_squirrel::relay;
+    use octo_squirrel::relay::End;
 
     use super::*;
 
@@ -133,7 +133,7 @@ pub(super) mod tcp {
                     error!("[*-tcp] DNS resolve failed: peer={addr}");
                 }
             }
-            Some(Ok(Outbound::RelayUdp(msg, addr))) => match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await {
+            Some(Ok(Outbound::RelayUdp(msg, addr))) => match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await {
                 Err(e) => error!("[*-udp] socket bind failed; error={}", e),
                 Ok(outbound) => {
                     let res = relay_udp_bidirectional(&mut inbound_sink, &mut inbound_stream, outbound, Outbound::RelayUdp(msg, addr)).await;

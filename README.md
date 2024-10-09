@@ -12,6 +12,8 @@ A network tool for improved privacy and security.
 
 ### Transport
 
+Only support IPv4 at this time.
+
 | Local-Peer | Client-Server | Shadowsocks | VMess | Trojan |
 |:----------:|:-------------:|:-----------:|:-----:|:------:|
 |   `tcp`    |     `tcp`     |      ✔      |   ✔   |   ✔    |

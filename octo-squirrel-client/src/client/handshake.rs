@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use anyhow::bail;
-use octo_squirrel::common::protocol::address::Address;
-use octo_squirrel::common::protocol::socks::SocksVersion;
-use octo_squirrel::common::protocol::socks5;
-use octo_squirrel::common::protocol::socks5::message::Socks5CommandResponse;
-use octo_squirrel::common::protocol::socks5::Socks5CommandStatus;
+use octo_squirrel::protocol::address::Address;
+use octo_squirrel::protocol::socks::SocksVersion;
+use octo_squirrel::protocol::socks5;
+use octo_squirrel::protocol::socks5::message::Socks5CommandResponse;
+use octo_squirrel::protocol::socks5::Socks5CommandStatus;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;

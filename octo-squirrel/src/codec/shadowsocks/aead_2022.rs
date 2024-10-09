@@ -13,8 +13,8 @@ use super::Authenticator;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
 use super::ChunkSizeParser;
-use crate::common::codec::aead::CipherKind;
-use crate::common::codec::aead::CipherMethod;
+use crate::codec::aead::CipherKind;
+use crate::codec::aead::CipherMethod;
 
 const SERVER_STREAM_TIMESTAMP_MAX_DIFF: u64 = 30;
 const MIN_PADDING_LENGTH: u16 = 0;

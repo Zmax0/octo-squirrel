@@ -4,5 +4,5 @@ members = [
     "octo-squirrel",
     "octo-squirrel-client",
     "octo-squirrel-server",
-    "octo-squirrel-test"
+    "test"
 ]

@@ -7,22 +7,24 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::bail;
 use bytes::BytesMut;
+use log::debug;
 use log::error;
 use log::info;
 use log::trace;
 use log::warn;
 use lru_time_cache::LruCache;
-use octo_squirrel::common::codec::aead::CipherKind;
-use octo_squirrel::common::codec::shadowsocks::udp::Context;
-use octo_squirrel::common::codec::shadowsocks::udp::Session;
-use octo_squirrel::common::codec::shadowsocks::udp::SessionCodec;
-use octo_squirrel::common::manager::packet_window::PacketWindowFilter;
-use octo_squirrel::common::manager::shadowsocks::ServerUser;
-use octo_squirrel::common::manager::shadowsocks::ServerUserManager;
-use octo_squirrel::common::protocol::address::Address;
-use octo_squirrel::common::protocol::shadowsocks::aead_2022::password_to_keys;
-use octo_squirrel::common::protocol::shadowsocks::Mode;
+use octo_squirrel::codec::aead::CipherKind;
+use octo_squirrel::codec::shadowsocks::udp::Context;
+use octo_squirrel::codec::shadowsocks::udp::Session;
+use octo_squirrel::codec::shadowsocks::udp::SessionCodec;
 use octo_squirrel::config::ServerConfig;
+use octo_squirrel::manager::packet_window::PacketWindowFilter;
+use octo_squirrel::manager::shadowsocks::ServerUser;
+use octo_squirrel::manager::shadowsocks::ServerUserManager;
+use octo_squirrel::protocol::address::Address;
+use octo_squirrel::protocol::shadowsocks::aead_2022::password_to_keys;
+use octo_squirrel::protocol::shadowsocks::Mode;
+use rand::random;
 use tcp::PayloadCodec;
 use tcp::ServerContext;
 use template::message::Outbound;
@@ -110,10 +112,10 @@ async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<S
                             Ok(Some((content, peer_addr, session))) => {
                                 let key = session.client_session_id;
                                 if let Some(assoc) = net_map.get_mut(&key) {
-                                    assoc.try_send(content).await?
+                                    assoc.try_send((content, peer_addr, session)).await?
                                 } else {
-                                    let assoc = UdpAssociateContext::create(session, client_addr, peer_addr, tx.clone()).await?;
-                                    assoc.try_send(content).await?;
+                                    let assoc = UdpAssociateContext::create(&session, client_addr, tx.clone()).await?;
+                                    assoc.try_send((content, peer_addr, session)).await?;
                                     net_map.insert(key, assoc);
                                 }
                             }
@@ -123,7 +125,6 @@ async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<S
                     }
                     Err(e) => {
                         error!("[udp] client closed; error={e}");
-                        break;
                     }
                 }
             }
@@ -135,11 +136,11 @@ async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<S
 
 struct UdpAssociate<const N: usize> {
     task: JoinHandle<()>,
-    sender: Sender<BytesMut>,
+    sender: Sender<(BytesMut, Address, Session<N>)>,
 }
 
 impl<const N: usize> UdpAssociate<N> {
-    async fn try_send(&self, msg: BytesMut) -> Result<(), mpsc::error::SendError<BytesMut>> {
+    async fn try_send(&self, msg: (BytesMut, Address, Session<N>)) -> Result<(), mpsc::error::SendError<(BytesMut, Address, Session<N>)>> {
         self.sender.send(msg).await
     }
 }
@@ -152,63 +153,93 @@ impl<const N: usize> Drop for UdpAssociate<N> {
 }
 
 struct UdpAssociateContext<const N: usize> {
-    session: Session<N>,
+    client_session_id: u64,
+    client_session_filter: PacketWindowFilter,
     client_addr: SocketAddr,
-    peer_addr: Address,
     inbound: Sender<(BytesMut, Address, SocketAddr, Session<N>)>,
     outbound: UdpSocket,
-    filter: PacketWindowFilter,
+    server_session_id: u64,
+    server_packet_id: u64,
+    user: Option<Arc<ServerUser<N>>>,
 }
 
 impl<const N: usize> UdpAssociateContext<N> {
     async fn create(
-        session: Session<N>,
+        client_session: &Session<N>,
         client_addr: SocketAddr,
-        peer_addr: Address,
         inbound: Sender<(BytesMut, Address, SocketAddr, Session<N>)>,
     ) -> anyhow::Result<UdpAssociate<N>> {
         let (sender, receiver) = mpsc::channel(1024);
 
-        let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
-        outbound.connect(&peer_addr.to_socket_addr()?).await?;
-        let mut assoc = Self { session, client_addr, peer_addr, inbound, outbound, filter: PacketWindowFilter::new() };
+        let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await?;
+        let mut assoc = Self {
+            client_session_id: client_session.client_session_id,
+            client_session_filter: PacketWindowFilter::new(),
+            client_addr,
+            inbound,
+            outbound,
+            server_session_id: random(),
+            server_packet_id: 0,
+            user: client_session.user.clone(),
+        };
         let task = tokio::spawn(async move { assoc.relay(receiver).await });
         Ok(UdpAssociate { task, sender })
     }
 
-    async fn relay(&mut self, mut receiver: Receiver<BytesMut>) {
+    async fn relay(&mut self, mut receiver: Receiver<(BytesMut, Address, Session<N>)>) {
         let mut buf = [0; 0x10000];
         loop {
             tokio::select! {
-                peer_msg = self.outbound.recv(&mut buf) => {
+                peer_msg = self.outbound.recv_from(&mut buf) => {
                     match peer_msg {
-                        Ok(len) => {
+                        Ok((len, peer_addr)) => {
                             let content = BytesMut::from(&buf[..len]);
-                            if let Err(e) = self.inbound.send((content, self.peer_addr.clone(), self.client_addr, self.session.clone())).await {
+                            self.server_packet_id = match self.server_packet_id.checked_add(1) {
+                                Some(id) => id,
+                                None => {
+                                    warn!("[udp] server packet id overflowed; client={}, peer={}", self.client_addr, peer_addr);
+                                    break;
+                                }
+                            };
+                            let session = Session::new(
+                                self.client_session_id,
+                                self.server_session_id,
+                                self.server_packet_id,
+                                self.user.clone(),
+                            );
+                            debug!("[udp] send to client; session={}", session);
+                            if let Err(e) = self.inbound.send((content, peer_addr.into(), self.client_addr, session)).await {
                                 warn!("[udp] p_s_c channel closed; error={e}");
                             }
                         },
                         Err(e) => {
-                            error!("[udp] recv peer failed; client={}, peer={}, error={}", self.client_addr, self.peer_addr, e);
+                            error!("[udp] recv peer failed; client={}, error={}", self.client_addr, e);
                             break;
                         }
                     }
                 },
                 client_msg = receiver.recv() => {
                     match client_msg {
-                        Some(item) => {
-                            if !self.validate_packet_id() {
-                                error!("[udp] packet_id {} out of window; client={}, peer={}", self.session.packet_id, self.client_addr, self.peer_addr);
+                        Some((content, peer_addr, session)) => {
+                            debug!("[udp] recv from client; session={}", session);
+                            let resolved_addr = match peer_addr.to_socket_addr() {
+                                Ok(addr) => addr,
+                                Err(e) => {
+                                    error!("[udp] DNS resolve failed; peer={peer_addr}, error={e}");
+                                    break;
+                                },
+                            };
+                            if !self.validate_packet_id(session.packet_id) {
+                                error!("[udp] packet_id {} out of window; client={}, peer={}", session.packet_id, self.client_addr, peer_addr);
                                 break;
                             }
-                            self.session.increase_packet_id();
-                            if let Err(e) = self.outbound.send(&item).await {
-                                error!("[udp] send peer failed; client={}, peer={}, error={}", self.client_addr, self.peer_addr, e);
+                            if let Err(e) = self.outbound.send_to(&content, resolved_addr).await {
+                                error!("[udp] send peer failed; client={}, peer={}/{}, error={}", self.client_addr, peer_addr, resolved_addr, e);
                                 break;
                             }
                         }
                         None => {
-                            trace!("[udp] c_s_p channel closed; peer={}", self.peer_addr);
+                            trace!("[udp] c_s_p channel closed; client={}", self.client_addr);
                             break;
                         }
                     }
@@ -217,15 +248,15 @@ impl<const N: usize> UdpAssociateContext<N> {
         }
     }
 
-    fn validate_packet_id(&mut self) -> bool {
-        self.filter.validate_packet_id(self.session.packet_id, u64::MAX)
+    fn validate_packet_id(&mut self, packet_id: u64) -> bool {
+        self.client_session_filter.validate_packet_id(packet_id, u64::MAX)
     }
 }
 
 mod udp {
-    use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
-    use octo_squirrel::common::codec::shadowsocks::udp::Context;
-    use octo_squirrel::common::codec::shadowsocks::udp::SessionCodec;
+    use octo_squirrel::codec::shadowsocks::udp::AEADCipherCodec;
+    use octo_squirrel::codec::shadowsocks::udp::Context;
+    use octo_squirrel::codec::shadowsocks::udp::SessionCodec;
 
     use super::*;
     pub fn new_codec<'a, const N: usize>(config: &ServerConfig, context: Context<'a, N>) -> anyhow::Result<SessionCodec<'a, N>> {
@@ -236,11 +267,11 @@ mod udp {
 
 mod tcp {
     use anyhow::Result;
-    use octo_squirrel::common::codec::shadowsocks::tcp::AEADCipherCodec;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Context;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Identity;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Session;
-    use octo_squirrel::common::protocol::shadowsocks::aead;
+    use octo_squirrel::codec::shadowsocks::tcp::AEADCipherCodec;
+    use octo_squirrel::codec::shadowsocks::tcp::Context;
+    use octo_squirrel::codec::shadowsocks::tcp::Identity;
+    use octo_squirrel::codec::shadowsocks::tcp::Session;
+    use octo_squirrel::protocol::shadowsocks::aead;
     use template::message::Inbound;
 
     use super::*;

@@ -8,8 +8,8 @@ use byte_string::ByteStr;
 use bytes::BytesMut;
 use log::trace;
 
-use crate::common::codec::aead::CipherKind;
-use crate::common::codec::aead::CipherMethod;
+use crate::codec::aead::CipherKind;
+use crate::codec::aead::CipherMethod;
 
 pub fn nonce_length(kind: CipherKind) -> Result<usize, String> {
     match kind {

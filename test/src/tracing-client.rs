@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 use std::net::SocketAddrV4;
 
 use log::info;
-use octo_squirrel::common::network::Transport;
+use octo_squirrel::network::Transport;
 use octo_squirrel_client::client;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;

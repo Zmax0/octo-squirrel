@@ -5,7 +5,7 @@ use super::Socks5AuthMethod;
 use super::Socks5CommandStatus;
 use super::Socks5CommandType;
 use super::VERSION;
-use crate::common::protocol::address::Address;
+use crate::protocol::address::Address;
 
 pub trait Socks5Message: Send + Sync {
     fn encode(&mut self, dst: &mut bytes::BytesMut);

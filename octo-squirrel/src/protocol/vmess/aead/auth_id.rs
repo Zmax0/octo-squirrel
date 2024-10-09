@@ -5,8 +5,8 @@ use bytes::BytesMut;
 use rand::random;
 
 use super::kdf;
-use crate::common::crypto::Aes128EcbNoPadding;
-use crate::common::protocol::vmess;
+use crate::crypto::Aes128EcbNoPadding;
+use crate::protocol::vmess;
 
 pub fn create(key: &[u8], time: i64) -> [u8; 16] {
     let mut auth_id = [0; 16];

@@ -8,8 +8,8 @@ mod test {
     use base64ct::Encoding;
 
     use super::auth_id;
-    use crate::common::protocol::vmess::aead::kdf;
-    use crate::common::protocol::vmess::now;
+    use crate::protocol::vmess::aead::kdf;
+    use crate::protocol::vmess::now;
 
     #[test]
     fn test_kdf() {

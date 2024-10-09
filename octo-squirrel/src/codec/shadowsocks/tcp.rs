@@ -18,13 +18,13 @@ use rand::Rng;
 use super::aead_2022;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
-use crate::common::codec::aead::CipherKind;
-use crate::common::manager::shadowsocks::ServerUser;
-use crate::common::manager::shadowsocks::ServerUserManager;
-use crate::common::protocol::address::Address;
-use crate::common::protocol::shadowsocks::Mode;
-use crate::common::protocol::socks5::address;
-use crate::common::util::dice;
+use crate::codec::aead::CipherKind;
+use crate::manager::shadowsocks::ServerUser;
+use crate::manager::shadowsocks::ServerUserManager;
+use crate::protocol::address::Address;
+use crate::protocol::shadowsocks::Mode;
+use crate::protocol::socks5::address;
+use crate::util::dice;
 
 pub struct Context<const N: usize> {
     key: [u8; N],
@@ -283,14 +283,14 @@ mod test {
     use rand::distributions::Alphanumeric;
     use rand::Rng;
 
-    use crate::common::codec::aead::CipherKind;
-    use crate::common::codec::shadowsocks::tcp::AEADCipherCodec;
-    use crate::common::codec::shadowsocks::tcp::Context;
-    use crate::common::codec::shadowsocks::tcp::Identity;
-    use crate::common::codec::shadowsocks::tcp::Session;
-    use crate::common::protocol::address::Address;
-    use crate::common::protocol::shadowsocks::aead_2022::password_to_keys;
-    use crate::common::protocol::shadowsocks::Mode;
+    use crate::codec::aead::CipherKind;
+    use crate::codec::shadowsocks::tcp::AEADCipherCodec;
+    use crate::codec::shadowsocks::tcp::Context;
+    use crate::codec::shadowsocks::tcp::Identity;
+    use crate::codec::shadowsocks::tcp::Session;
+    use crate::protocol::address::Address;
+    use crate::protocol::shadowsocks::aead_2022::password_to_keys;
+    use crate::protocol::shadowsocks::Mode;
 
     const KINDS: [CipherKind; 3] = [CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
 

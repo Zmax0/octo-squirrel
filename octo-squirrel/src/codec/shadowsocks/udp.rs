@@ -1,4 +1,6 @@
 use std::cmp::Ordering;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -18,15 +20,15 @@ use rand::random;
 use super::aead_2022;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
-use crate::common::codec::aead::CipherKind;
-use crate::common::codec::aead::CipherMethod;
-use crate::common::codec::shadowsocks::aead_2022::udp;
-use crate::common::manager::shadowsocks::ServerUser;
-use crate::common::manager::shadowsocks::ServerUserManager;
-use crate::common::protocol::address::Address;
-use crate::common::protocol::shadowsocks::Mode;
-use crate::common::protocol::socks5::address;
-use crate::common::util::dice;
+use crate::codec::aead::CipherKind;
+use crate::codec::aead::CipherMethod;
+use crate::codec::shadowsocks::aead_2022::udp;
+use crate::manager::shadowsocks::ServerUser;
+use crate::manager::shadowsocks::ServerUserManager;
+use crate::protocol::address::Address;
+use crate::protocol::shadowsocks::Mode;
+use crate::protocol::socks5::address;
+use crate::util::dice;
 
 pub struct AEADCipherCodec<const N: usize> {
     kind: CipherKind,
@@ -243,7 +245,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         if padding_length > 0 {
             packet.advance(padding_length as usize);
         }
-        let session = Session::new(session_id, random(), packet_id, user);
+        let session = Session::new(session_id, 0, packet_id, user);
         let address = address::decode(&mut packet)?;
         Ok((packet, address, session))
     }
@@ -322,6 +324,19 @@ impl<const N: usize> Session<N> {
     }
 }
 
+impl<const N: usize> Display for Session<N> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "C:{}, S:{}, P:{}, U:{}",
+            self.client_session_id,
+            self.server_session_id,
+            self.packet_id,
+            self.user.as_ref().map(|u| u.name.as_str()).unwrap_or("")
+        )
+    }
+}
+
 impl<const N: usize> From<Mode> for Session<N> {
     fn from(value: Mode) -> Self {
         let mut client_session_id = 0;
@@ -330,7 +345,7 @@ impl<const N: usize> From<Mode> for Session<N> {
             Mode::Client => client_session_id = random(),
             Mode::Server => server_session_id = random(),
         }
-        Self { packet_id: 1, client_session_id, server_session_id, user: None }
+        Self { packet_id: 0, client_session_id, server_session_id, user: None }
     }
 }
 
@@ -377,14 +392,14 @@ mod test {
     use rand::random;
     use rand::Rng;
 
-    use crate::common::codec::aead::CipherKind;
-    use crate::common::codec::shadowsocks::udp::AEADCipherCodec;
-    use crate::common::codec::shadowsocks::udp::Context;
-    use crate::common::codec::shadowsocks::udp::Session;
-    use crate::common::codec::shadowsocks::udp::SessionCodec;
-    use crate::common::protocol::address::Address;
-    use crate::common::protocol::shadowsocks::aead_2022::password_to_keys;
-    use crate::common::protocol::shadowsocks::Mode;
+    use crate::codec::aead::CipherKind;
+    use crate::codec::shadowsocks::udp::AEADCipherCodec;
+    use crate::codec::shadowsocks::udp::Context;
+    use crate::codec::shadowsocks::udp::Session;
+    use crate::codec::shadowsocks::udp::SessionCodec;
+    use crate::protocol::address::Address;
+    use crate::protocol::shadowsocks::aead_2022::password_to_keys;
+    use crate::protocol::shadowsocks::Mode;
 
     const KINDS: [CipherKind; 3] = [CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
     #[test]

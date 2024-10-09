@@ -1,7 +1,7 @@
 use super::id;
 use super::VERSION;
-use crate::common::codec::aead::CipherKind;
-use crate::common::protocol::address::Address;
+use crate::codec::aead::CipherKind;
+use crate::protocol::address::Address;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum AddressType {

@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use log::error;
-use octo_squirrel::common::codec::aead::CipherKind;
-use octo_squirrel::common::protocol::Protocol::*;
+use octo_squirrel::codec::aead::CipherKind;
 use octo_squirrel::config::ServerConfig;
+use octo_squirrel::protocol::Protocol::*;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
 
