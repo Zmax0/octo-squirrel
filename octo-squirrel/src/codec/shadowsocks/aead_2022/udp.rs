@@ -80,9 +80,7 @@ fn make_eih(kind: CipherKind, ipsk: &[u8], ipskn: &[u8], session_id_packet_id: &
     let hash = blake3::hash(ipskn);
     let plain_text = &hash.as_bytes()[..16];
     identity_header.copy_from_slice(plain_text);
-    for i in 0..16 {
-        identity_header[i] ^= session_id_packet_id[i];
-    }
+    identity_header.iter_mut().zip(session_id_packet_id).for_each(|(l, r)| *l ^= r);
     let res = aes_encrypt_in_place(kind, ipsk, identity_header);
     trace!("client EIH:{:?}, hash:{:?}", ByteStr::new(identity_header), ByteStr::new(plain_text));
     res

@@ -41,6 +41,12 @@ pub struct ServerConfig {
     pub user: Vec<User>,
 }
 
+impl AsRef<ServerConfig> for ServerConfig {
+    fn as_ref(&self) -> &ServerConfig {
+        self
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub port: u16,

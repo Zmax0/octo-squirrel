@@ -26,8 +26,8 @@ use octo_squirrel::util::fnv;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::template::message::Inbound;
-use super::template::message::Outbound;
+use super::template::message::InboundIn;
+use super::template::message::OutboundIn;
 
 pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerAeadCodec> {
     ServerAeadCodec::try_from(config)
@@ -68,18 +68,18 @@ impl ServerAeadCodec {
         header: &mut RequestHeader,
         session: &mut ServerSession,
         decoder: &mut AEADBodyCodec,
-    ) -> anyhow::Result<Option<Outbound>> {
+    ) -> anyhow::Result<Option<InboundIn>> {
         match header.command {
             RequestCommand::TCP => {
                 if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Outbound::ConnectTcp(msg, header.address.clone())))
+                    Ok(Some(InboundIn::ConnectTcp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
             }
             RequestCommand::UDP => {
                 if let Some(msg) = decoder.decode_packet(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Outbound::RelayUdp(msg, header.address.clone())))
+                    Ok(Some(InboundIn::RelayUdp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
@@ -92,18 +92,18 @@ impl ServerAeadCodec {
         header: &mut RequestHeader,
         session: &mut ServerSession,
         decoder: &mut AEADBodyCodec,
-    ) -> anyhow::Result<Option<Outbound>> {
+    ) -> anyhow::Result<Option<InboundIn>> {
         match header.command {
             RequestCommand::TCP => {
                 if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Outbound::RelayTcp(msg)))
+                    Ok(Some(InboundIn::RelayTcp(msg)))
                 } else {
                     Ok(None)
                 }
             }
             RequestCommand::UDP => {
                 if let Some(msg) = decoder.decode_packet(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Outbound::RelayUdp(msg, header.address.clone())))
+                    Ok(Some(InboundIn::RelayUdp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
@@ -112,10 +112,10 @@ impl ServerAeadCodec {
     }
 }
 
-impl Encoder<Inbound> for ServerAeadCodec {
+impl Encoder<OutboundIn> for ServerAeadCodec {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, item: Inbound, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: OutboundIn, dst: &mut BytesMut) -> Result<(), Self::Error> {
         if let DecodeState::Ready(ref request_header, ref mut session, _) = self.decode_state {
             match self.encode_state {
                 EncodeState::Init => {
@@ -148,7 +148,7 @@ impl Encoder<Inbound> for ServerAeadCodec {
 }
 
 impl Decoder for ServerAeadCodec {
-    type Item = Outbound;
+    type Item = InboundIn;
 
     type Error = anyhow::Error;
 

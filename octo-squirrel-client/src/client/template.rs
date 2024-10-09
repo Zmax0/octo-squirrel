@@ -100,7 +100,7 @@ pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
     new_codec: NewCodec,
 ) -> Result<relay::Result>
 where
-    NewCodec: FnOnce(&Address, Context) -> Result<Codec> + Copy,
+    NewCodec: FnOnce(&Address, Context) -> Result<Codec>,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
     let local_client = Framed::new(inbound, BytesCodec);

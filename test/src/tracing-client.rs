@@ -11,7 +11,7 @@ use tokio::net::UdpSocket;
 async fn main() -> anyhow::Result<()> {
     console_subscriber::init();
     let config = octo_squirrel::config::init_client()?;
-    octo_squirrel::log::init(&config.logger)?;
+    octo_squirrel::log::init(config.logger.level())?;
     let current = config.get_current().expect("Empty proxy server.");
     if current.transport.contains(&Transport::UDP) {
         let listen_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port);

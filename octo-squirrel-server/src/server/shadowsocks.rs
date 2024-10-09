@@ -27,7 +27,7 @@ use octo_squirrel::protocol::shadowsocks::Mode;
 use rand::random;
 use tcp::PayloadCodec;
 use tcp::ServerContext;
-use template::message::Outbound;
+use template::message::InboundIn;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
@@ -180,7 +180,7 @@ impl<const N: usize> UdpAssociateContext<N> {
             outbound,
             server_session_id: random(),
             server_packet_id: 0,
-            user: client_session.user.clone(),
+            user: None,
         };
         let task = tokio::spawn(async move { assoc.relay(receiver).await });
         Ok(UdpAssociate { task, sender })
@@ -233,6 +233,7 @@ impl<const N: usize> UdpAssociateContext<N> {
                                 error!("[udp] packet_id {} out of window; client={}, peer={}", session.packet_id, self.client_addr, peer_addr);
                                 break;
                             }
+                            self.user.clone_from(&session.user);
                             if let Err(e) = self.outbound.send_to(&content, resolved_addr).await {
                                 error!("[udp] send peer failed; client={}, peer={}/{}, error={}", self.client_addr, peer_addr, resolved_addr, e);
                                 break;
@@ -272,7 +273,7 @@ mod tcp {
     use octo_squirrel::codec::shadowsocks::tcp::Identity;
     use octo_squirrel::codec::shadowsocks::tcp::Session;
     use octo_squirrel::protocol::shadowsocks::aead;
-    use template::message::Inbound;
+    use template::message::OutboundIn;
 
     use super::*;
 
@@ -290,6 +291,12 @@ mod tcp {
             };
             let context = Arc::new(Context::new(key, identity_keys, config.cipher, Some(user_manager)));
             Ok(Self(context))
+        }
+    }
+
+    impl<const N: usize> AsRef<ServerContext<N>> for ServerContext<N> {
+        fn as_ref(&self) -> &ServerContext<N> {
+            self
         }
     }
 
@@ -312,16 +319,16 @@ mod tcp {
         }
     }
 
-    impl<const N: usize> Encoder<Inbound> for PayloadCodec<N> {
+    impl<const N: usize> Encoder<OutboundIn> for PayloadCodec<N> {
         type Error = anyhow::Error;
 
-        fn encode(&mut self, item: Inbound, dst: &mut BytesMut) -> Result<()> {
+        fn encode(&mut self, item: OutboundIn, dst: &mut BytesMut) -> Result<()> {
             self.cipher.encode(&self.context, &self.session, item.into(), dst)
         }
     }
 
     impl<const N: usize> Decoder for PayloadCodec<N> {
-        type Item = Outbound;
+        type Item = InboundIn;
 
         type Error = anyhow::Error;
 
@@ -330,14 +337,14 @@ mod tcp {
                 State::Header => {
                     if let (Some(dst), Some(addr)) = (self.cipher.decode(&self.context, &mut self.session, src)?, self.session.address.as_ref()) {
                         self.state = State::Body;
-                        Ok(Some(Outbound::ConnectTcp(dst, addr.clone())))
+                        Ok(Some(InboundIn::ConnectTcp(dst, addr.clone())))
                     } else {
                         Ok(None)
                     }
                 }
                 State::Body => {
                     if let Some(dst) = self.cipher.decode(&self.context, &mut self.session, src)? {
-                        Ok(Some(Outbound::RelayTcp(dst)))
+                        Ok(Some(InboundIn::RelayTcp(dst)))
                     } else {
                         Ok(None)
                     }
@@ -346,9 +353,9 @@ mod tcp {
         }
     }
 
-    impl<const N: usize> From<ServerContext<N>> for PayloadCodec<N> {
-        fn from(value: ServerContext<N>) -> Self {
-            Self::new(value.0, Mode::Server, None)
+    impl<const N: usize> From<&ServerContext<N>> for PayloadCodec<N> {
+        fn from(value: &ServerContext<N>) -> Self {
+            Self::new(value.0.clone(), Mode::Server, None)
         }
     }
 }

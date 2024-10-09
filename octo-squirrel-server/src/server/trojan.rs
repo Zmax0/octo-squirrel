@@ -14,8 +14,8 @@ use sha2::Sha224;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::template::message::Inbound;
-use super::template::message::Outbound;
+use super::template::message::InboundIn;
+use super::template::message::OutboundIn;
 
 enum CodecState {
     Header,
@@ -36,16 +36,16 @@ pub struct ServerCodec {
 }
 
 impl ServerCodec {
-    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<Outbound>, anyhow::Error> {
+    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<Option<InboundIn>, anyhow::Error> {
         let peer_addr = address::decode(src)?;
         let len = src.get_u16();
         src.advance(trojan::CR_LF.len());
-        Ok(Some(Outbound::RelayUdp(src.split_to(len as usize), peer_addr)))
+        Ok(Some(InboundIn::RelayUdp(src.split_to(len as usize), peer_addr)))
     }
 }
 
 impl Decoder for ServerCodec {
-    type Item = Outbound;
+    type Item = InboundIn;
 
     type Error = anyhow::Error;
 
@@ -71,7 +71,7 @@ impl Decoder for ServerCodec {
                     Socks5CommandType::Connect => {
                         self.state = CodecState::Tcp;
                         let remaining = src.remaining();
-                        Ok(Some(Outbound::ConnectTcp(src.split_to(remaining), address)))
+                        Ok(Some(InboundIn::ConnectTcp(src.split_to(remaining), address)))
                     }
                     Socks5CommandType::UdpAssociate => {
                         self.state = CodecState::Udp;
@@ -85,7 +85,7 @@ impl Decoder for ServerCodec {
                     Ok(None)
                 } else {
                     let len = src.len();
-                    Ok(Some(Outbound::RelayTcp(src.split_to(len))))
+                    Ok(Some(InboundIn::RelayTcp(src.split_to(len))))
                 }
             }
             CodecState::Udp => self.decode_packet(src),
@@ -93,16 +93,16 @@ impl Decoder for ServerCodec {
     }
 }
 
-impl Encoder<Inbound> for ServerCodec {
+impl Encoder<OutboundIn> for ServerCodec {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, item: Inbound, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: OutboundIn, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
-            Inbound::RelayTcp(item) => {
+            OutboundIn::Tcp(item) => {
                 dst.extend_from_slice(&item);
                 Ok(())
             }
-            Inbound::RelayUdp((content, addr)) => {
+            OutboundIn::Udp((content, addr)) => {
                 address::encode(&addr.into(), dst);
                 dst.put_u16(content.len() as u16);
                 dst.extend_from_slice(&trojan::CR_LF);

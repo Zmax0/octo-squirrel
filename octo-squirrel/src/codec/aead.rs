@@ -194,7 +194,7 @@ pub struct IncreasingNonceGenerator {
 
 impl IncreasingNonceGenerator {
     pub fn init() -> Self {
-        Self { nonce: [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff] }
+        Self { nonce: [u8::MAX; 12] }
     }
 
     pub fn generate(&mut self) -> &[u8] {
@@ -217,24 +217,25 @@ mod test {
     use super::IncreasingNonceGenerator;
 
     #[test]
-    fn test_json_serialize() {
+    fn test_json_serialize() -> serde_json::error::Result<()> {
         let vec = vec![CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
-        let str = serde_json::to_string(&vec).unwrap();
+        let str = serde_json::to_string(&vec)?;
         assert_eq!("[\"aes-128-gcm\",\"aes-256-gcm\",\"chacha20-poly1305\"]", str);
-        let ciphers: Vec<CipherKind> = serde_json::from_str(str.as_str()).unwrap();
+        let ciphers: Vec<CipherKind> = serde_json::from_str(str.as_str())?;
         assert_eq!(vec, ciphers);
+        Ok(())
     }
 
     #[test]
     fn test_generate_increasing_nonce() {
         let nonce = [0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let mut generator: IncreasingNonceGenerator = IncreasingNonceGenerator { nonce };
+        let mut generator = IncreasingNonceGenerator { nonce };
         assert_eq!(generator.generate(), [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     }
 
     #[test]
     fn test_generate_initial_aead_nonce() {
-        assert_eq!(IncreasingNonceGenerator::init().generate(), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        assert_eq!(IncreasingNonceGenerator::init().generate(), [0; 12])
     }
 
     #[test]

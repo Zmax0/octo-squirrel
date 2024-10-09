@@ -24,12 +24,12 @@ pub async fn startup(config: ServerConfig) {
     .unwrap_or_else(|e| error!("Startup {} failed; error={}", config.protocol, e))
 }
 
-async fn startup_tcp<Context, NewCodec, Codec>(context: Context, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
+async fn startup_tcp<RefContext, Context, NewCodec, Codec>(context: RefContext, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
 where
-    Context: Clone,
-    NewCodec: FnOnce(Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
-    Codec: Encoder<template::message::Inbound, Error = anyhow::Error>
-        + Decoder<Item = template::message::Outbound, Error = anyhow::Error>
+    RefContext: AsRef<Context>,
+    NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
+    Codec: Encoder<template::message::OutboundIn, Error = anyhow::Error>
+        + Decoder<Item = template::message::InboundIn, Error = anyhow::Error>
         + Unpin
         + Send
         + 'static,
@@ -39,9 +39,9 @@ where
         (None, ws_config) => {
             while let Ok((inbound, _)) = listener.accept().await {
                 if ws_config.is_some() {
-                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.clone())?));
+                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.as_ref())?));
                 } else {
-                    tokio::spawn(template::tcp::relay(inbound, new_codec(context.clone())?));
+                    tokio::spawn(template::tcp::relay(inbound, new_codec(context.as_ref())?));
                 }
             }
         }
@@ -52,11 +52,11 @@ where
             let tls_acceptor = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
             while let Ok((inbound, _)) = listener.accept().await {
                 let tls = tls_acceptor.clone();
-                let codec = new_codec(context.clone())?;
+                let codec = new_codec(context.as_ref())?;
                 match tls.accept(inbound).await {
                     Ok(inbound) => {
                         if ws_config.is_some() {
-                            tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.clone())?));
+                            tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.as_ref())?));
                         } else {
                             tokio::spawn(template::tcp::relay(inbound, codec));
                         }

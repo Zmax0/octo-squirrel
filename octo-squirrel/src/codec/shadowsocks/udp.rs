@@ -222,9 +222,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             src.copy_to_slice(&mut eih);
             trace!("server EIH {:?}, session_id_packet_id: {},{}", ByteStr::new(&eih), session_id, packet_id);
             udp::aes_decrypt_in_place(self.kind, context.key, &mut eih)?;
-            for i in 0..16 {
-                eih[i] ^= session_id_packet_id[i];
-            }
+            eih.iter_mut().zip(session_id_packet_id).for_each(|(l, r)| *l ^= r);
             if let Some(_user) = user_manager.unwrap().clone_user_by_hash(&eih) {
                 trace!("{} chosen by EIH", _user);
                 user = Some(_user);
