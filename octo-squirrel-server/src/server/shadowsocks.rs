@@ -1,4 +1,3 @@
-use std::fs;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
@@ -8,34 +7,33 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::bail;
 use bytes::BytesMut;
+use log::debug;
 use log::error;
 use log::info;
 use log::trace;
 use log::warn;
 use lru_time_cache::LruCache;
-use octo_squirrel::common::codec::aead::Aes128GcmCipher;
-use octo_squirrel::common::codec::aead::Aes256GcmCipher;
-use octo_squirrel::common::codec::aead::CipherKind;
-use octo_squirrel::common::codec::aead::CipherMethod;
-use octo_squirrel::common::codec::aead::KeyInit;
-use octo_squirrel::common::codec::shadowsocks::udp::Session;
-use octo_squirrel::common::codec::shadowsocks::udp::SessionPacketCodec;
-use octo_squirrel::common::manager::packet_window::PacketWindowFilter;
-use octo_squirrel::common::manager::shadowsocks::ServerUser;
-use octo_squirrel::common::manager::shadowsocks::ServerUserManager;
-use octo_squirrel::common::protocol::address::Address;
-use octo_squirrel::common::protocol::shadowsocks::Mode;
+use octo_squirrel::codec::aead::CipherKind;
+use octo_squirrel::codec::shadowsocks::udp::Context;
+use octo_squirrel::codec::shadowsocks::udp::Session;
+use octo_squirrel::codec::shadowsocks::udp::SessionCodec;
 use octo_squirrel::config::ServerConfig;
-use template::Message;
-use tokio::net::TcpListener;
+use octo_squirrel::manager::packet_window::PacketWindowFilter;
+use octo_squirrel::manager::shadowsocks::ServerUser;
+use octo_squirrel::manager::shadowsocks::ServerUserManager;
+use octo_squirrel::protocol::address::Address;
+use octo_squirrel::protocol::shadowsocks::aead_2022::password_to_keys;
+use octo_squirrel::protocol::shadowsocks::Mode;
+use rand::random;
+use tcp::PayloadCodec;
+use tcp::ServerContext;
+use template::message::InboundIn;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio::time;
-use tokio_native_tls::native_tls;
-use tokio_native_tls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
@@ -46,18 +44,18 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
         CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
             let mut user_manager: ServerUserManager<16> = ServerUserManager::new();
             for user in config.user.iter() {
-                user_manager.add_user(ServerUser::from_user(user).map_err(|e| anyhow!(e))?);
+                user_manager.add_user(ServerUser::try_from(user).map_err(|e| anyhow!(e))?);
             }
             let user_manager = Arc::new(user_manager);
-            tokio::join!(startup_udp::<16, Aes128GcmCipher>(config, &user_manager), startup_tcp::<16, Aes128GcmCipher>(config, &user_manager))
+            tokio::join!(startup_udp::<16>(config, &user_manager), startup_tcp::<16>(config, &user_manager))
         }
         CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
             let mut user_manager: ServerUserManager<32> = ServerUserManager::new();
             for user in config.user.iter() {
-                user_manager.add_user(ServerUser::from_user(user).map_err(|e| anyhow!(e))?);
+                user_manager.add_user(ServerUser::try_from(user).map_err(|e| anyhow!(e))?);
             }
             let user_manager = Arc::new(user_manager);
-            tokio::join!(startup_udp::<32, Aes256GcmCipher>(config, &user_manager), startup_tcp::<32, Aes256GcmCipher>(config, &user_manager))
+            tokio::join!(startup_udp::<32>(config, &user_manager), startup_tcp::<32>(config, &user_manager))
         }
         _ => unreachable!(),
     };
@@ -69,57 +67,18 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
     }
 }
 
-async fn startup_tcp<const N: usize, CM: CipherMethod + KeyInit + Unpin + 'static>(
-    config: &ServerConfig,
-    user_manager: &Arc<ServerUserManager<N>>,
-) -> anyhow::Result<()> {
-    info!("Tcp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
-    let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
-    match (&config.ssl, &config.ws) {
-        (None, ws_config) => {
-            while let Ok((inbound, _)) = listener.accept().await {
-                if ws_config.is_some() {
-                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, tcp::new_codec::<N, CM>(config, user_manager.clone())?));
-                } else {
-                    tokio::spawn(template::tcp::relay(inbound, tcp::new_codec::<N, CM>(config, user_manager.clone())?));
-                }
-            }
-        }
-        (Some(ssl_config), ws_config) => {
-            let pem = fs::read(ssl_config.certificate_file.as_str())?;
-            let key = fs::read(ssl_config.key_file.as_str())?;
-            let identity = native_tls::Identity::from_pkcs8(&pem, &key)?;
-            let tls_acceptor = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
-            while let Ok((inbound, _)) = listener.accept().await {
-                let tls = tls_acceptor.clone();
-                let codec = tcp::new_codec::<N, CM>(config, user_manager.clone())?;
-                match tls.accept(inbound).await {
-                    Ok(inbound) => {
-                        if ws_config.is_some() {
-                            tokio::spawn(template::tcp::accept_websocket_then_replay(
-                                inbound,
-                                tcp::new_codec::<N, CM>(config, user_manager.clone())?,
-                            ));
-                        } else {
-                            tokio::spawn(template::tcp::relay(inbound, codec));
-                        }
-                    }
-                    Err(e) => error!("[tcp] tls handshake failed: {}", e),
-                }
-            }
-        }
-    }
-    Ok(())
+async fn startup_tcp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
+    let context = ServerContext::init(config, user_manager.clone())?;
+    super::startup_tcp(context, config, |c| Ok(PayloadCodec::from(c))).await
 }
 
-async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send + Sync + 'static>(
-    config: &ServerConfig,
-    user_manager: &Arc<ServerUserManager<N>>,
-) -> anyhow::Result<()> {
-    let codec = udp::new_codec::<N, CM>(config, user_manager.clone())?;
+async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
+    let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
+    let context = Context::new(Mode::Server, Some(user_manager.clone()), &key, &identity_keys);
+    let codec = udp::new_codec::<N>(config, context)?;
     let inbound = UdpSocket::bind(format!("{}:{}", config.host, config.port)).await?;
     let (tx, mut rx) = mpsc::channel::<(BytesMut, Address, SocketAddr, Session<N>)>(1024);
-    let ttl = Duration::from_secs(10);
+    let ttl = Duration::from_secs(300);
     let mut net_map: LruCache<u64, UdpAssociate<N>> = LruCache::with_expiry_duration_and_capacity(ttl, 10240);
     let mut cleanup_timer = time::interval(ttl);
     info!("Udp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
@@ -134,7 +93,7 @@ async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send +
                 if let Some((content, peer_addr, client_addr, session)) = peer_msg {
                     net_map.get(&session.client_session_id); // keep alive
                     let mut dst = BytesMut::new();
-                    if let Err(e) = SessionPacketCodec::encode(&codec, (content, peer_addr, session), &mut dst) {
+                    if let Err(e) = SessionCodec::encode(&codec, (content, peer_addr, session), &mut dst) {
                         error!("[udp] encode failed; error={e}")
                     } else {
                         inbound.send_to(&dst, client_addr).await?;
@@ -149,14 +108,14 @@ async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send +
                 match client_msg {
                     Ok((len, client_addr)) => {
                         let mut src = BytesMut::from(&buf[..len]);
-                        match SessionPacketCodec::<N, CM>::decode(&codec, &mut src) {
+                        match SessionCodec::<N>::decode(&codec, &mut src) {
                             Ok(Some((content, peer_addr, session))) => {
                                 let key = session.client_session_id;
                                 if let Some(assoc) = net_map.get_mut(&key) {
-                                    assoc.try_send(content).await?
+                                    assoc.try_send((content, peer_addr, session)).await?
                                 } else {
-                                    let assoc = UdpAssociateContext::create(session, client_addr, peer_addr, tx.clone()).await?;
-                                    assoc.try_send(content).await?;
+                                    let assoc = UdpAssociateContext::create(&session, client_addr, tx.clone()).await?;
+                                    assoc.try_send((content, peer_addr, session)).await?;
                                     net_map.insert(key, assoc);
                                 }
                             }
@@ -166,7 +125,6 @@ async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send +
                     }
                     Err(e) => {
                         error!("[udp] client closed; error={e}");
-                        break;
                     }
                 }
             }
@@ -178,11 +136,11 @@ async fn startup_udp<const N: usize, CM: CipherMethod + KeyInit + Unpin + Send +
 
 struct UdpAssociate<const N: usize> {
     task: JoinHandle<()>,
-    sender: Sender<BytesMut>,
+    sender: Sender<(BytesMut, Address, Session<N>)>,
 }
 
 impl<const N: usize> UdpAssociate<N> {
-    async fn try_send(&self, msg: BytesMut) -> Result<(), mpsc::error::SendError<BytesMut>> {
+    async fn try_send(&self, msg: (BytesMut, Address, Session<N>)) -> Result<(), mpsc::error::SendError<(BytesMut, Address, Session<N>)>> {
         self.sender.send(msg).await
     }
 }
@@ -195,64 +153,94 @@ impl<const N: usize> Drop for UdpAssociate<N> {
 }
 
 struct UdpAssociateContext<const N: usize> {
-    session: Session<N>,
+    client_session_id: u64,
+    client_session_filter: PacketWindowFilter,
     client_addr: SocketAddr,
-    peer_addr: Address,
     inbound: Sender<(BytesMut, Address, SocketAddr, Session<N>)>,
     outbound: UdpSocket,
-    filter: PacketWindowFilter,
+    server_session_id: u64,
+    server_packet_id: u64,
+    user: Option<Arc<ServerUser<N>>>,
 }
 
 impl<const N: usize> UdpAssociateContext<N> {
     async fn create(
-        session: Session<N>,
+        client_session: &Session<N>,
         client_addr: SocketAddr,
-        peer_addr: Address,
         inbound: Sender<(BytesMut, Address, SocketAddr, Session<N>)>,
     ) -> anyhow::Result<UdpAssociate<N>> {
-        // UDP_ASSOCIATION_SEND_CHANNEL_SIZE
-        let (sender, receiver) = mpsc::channel::<BytesMut>(1024);
+        let (sender, receiver) = mpsc::channel(1024);
 
-        let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).await?;
-        outbound.connect(&peer_addr.to_socket_addr()?).await?;
-        let mut assoc = Self { session, client_addr, peer_addr, inbound, outbound, filter: PacketWindowFilter::new() };
+        let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await?;
+        let mut assoc = Self {
+            client_session_id: client_session.client_session_id,
+            client_session_filter: PacketWindowFilter::new(),
+            client_addr,
+            inbound,
+            outbound,
+            server_session_id: random(),
+            server_packet_id: 0,
+            user: None,
+        };
         let task = tokio::spawn(async move { assoc.relay(receiver).await });
         Ok(UdpAssociate { task, sender })
     }
 
-    async fn relay(&mut self, mut receiver: Receiver<BytesMut>) {
+    async fn relay(&mut self, mut receiver: Receiver<(BytesMut, Address, Session<N>)>) {
         let mut buf = [0; 0x10000];
         loop {
             tokio::select! {
-                peer_msg = self.outbound.recv(&mut buf) => {
+                peer_msg = self.outbound.recv_from(&mut buf) => {
                     match peer_msg {
-                        Ok(len) => {
+                        Ok((len, peer_addr)) => {
                             let content = BytesMut::from(&buf[..len]);
-                            if let Err(e) = self.inbound.send((content, self.peer_addr.clone(), self.client_addr, self.session.clone())).await {
+                            self.server_packet_id = match self.server_packet_id.checked_add(1) {
+                                Some(id) => id,
+                                None => {
+                                    warn!("[udp] server packet id overflowed; client={}, peer={}", self.client_addr, peer_addr);
+                                    break;
+                                }
+                            };
+                            let session = Session::new(
+                                self.client_session_id,
+                                self.server_session_id,
+                                self.server_packet_id,
+                                self.user.clone(),
+                            );
+                            debug!("[udp] send to client; session={}", session);
+                            if let Err(e) = self.inbound.send((content, peer_addr.into(), self.client_addr, session)).await {
                                 warn!("[udp] p_s_c channel closed; error={e}");
                             }
                         },
                         Err(e) => {
-                            error!("[udp] recv peer failed; client={}, peer={}, error={}", self.client_addr, self.peer_addr, e);
+                            error!("[udp] recv peer failed; client={}, error={}", self.client_addr, e);
                             break;
                         }
                     }
                 },
                 client_msg = receiver.recv() => {
                     match client_msg {
-                        Some(item) => {
-                            if !self.validate_packet_id() {
-                                error!("[udp] packet_id {} out of window; client={}, peer={}", self.session.packet_id, self.client_addr, self.peer_addr);
+                        Some((content, peer_addr, session)) => {
+                            debug!("[udp] recv from client; session={}", session);
+                            let resolved_addr = match peer_addr.to_socket_addr() {
+                                Ok(addr) => addr,
+                                Err(e) => {
+                                    error!("[udp] DNS resolve failed; peer={peer_addr}, error={e}");
+                                    break;
+                                },
+                            };
+                            if !self.validate_packet_id(session.packet_id) {
+                                error!("[udp] packet_id {} out of window; client={}, peer={}", session.packet_id, self.client_addr, peer_addr);
                                 break;
                             }
-                            self.session.increase_packet_id();
-                            if let Err(e) = self.outbound.send(&item).await {
-                                error!("[udp] send peer failed; client={}, peer={}, error={}", self.client_addr, self.peer_addr, e);
+                            self.user.clone_from(&session.user);
+                            if let Err(e) = self.outbound.send_to(&content, resolved_addr).await {
+                                error!("[udp] send peer failed; client={}, peer={}/{}, error={}", self.client_addr, peer_addr, resolved_addr, e);
                                 break;
                             }
                         }
                         None => {
-                            trace!("[udp] c_s_p channel closed; peer={}", self.peer_addr);
+                            trace!("[udp] c_s_p channel closed; client={}", self.client_addr);
                             break;
                         }
                     }
@@ -261,46 +249,61 @@ impl<const N: usize> UdpAssociateContext<N> {
         }
     }
 
-    fn validate_packet_id(&mut self) -> bool {
-        self.filter.validate_packet_id(self.session.packet_id, u64::MAX)
+    fn validate_packet_id(&mut self, packet_id: u64) -> bool {
+        self.client_session_filter.validate_packet_id(packet_id, u64::MAX)
     }
 }
 
 mod udp {
-    use octo_squirrel::common::codec::shadowsocks::udp::AEADCipherCodec;
-    use octo_squirrel::common::codec::shadowsocks::udp::Context;
-    use octo_squirrel::common::codec::shadowsocks::udp::SessionPacketCodec;
+    use octo_squirrel::codec::shadowsocks::udp::AEADCipherCodec;
+    use octo_squirrel::codec::shadowsocks::udp::Context;
+    use octo_squirrel::codec::shadowsocks::udp::SessionCodec;
 
     use super::*;
-    pub fn new_codec<const N: usize, CM: CipherMethod + KeyInit>(
-        config: &ServerConfig,
-        user_manager: Arc<ServerUserManager<N>>,
-    ) -> anyhow::Result<SessionPacketCodec<N, CM>> {
-        let context = Context::new(Mode::Server, Some(user_manager));
-        let cipher = AEADCipherCodec::new(config.cipher, &config.password).map_err(|e| anyhow!(e))?;
-        Ok(SessionPacketCodec::new(context, cipher))
+    pub fn new_codec<'a, const N: usize>(config: &ServerConfig, context: Context<'a, N>) -> anyhow::Result<SessionCodec<'a, N>> {
+        let cipher = AEADCipherCodec::new(config.cipher).map_err(|e| anyhow!(e))?;
+        Ok(SessionCodec::<'a, N>::new(context, cipher))
     }
 }
 
 mod tcp {
     use anyhow::Result;
-    use octo_squirrel::common::codec::shadowsocks::tcp::AEADCipherCodec;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Context;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Identity;
-    use octo_squirrel::common::codec::shadowsocks::tcp::Session;
+    use octo_squirrel::codec::shadowsocks::tcp::AEADCipherCodec;
+    use octo_squirrel::codec::shadowsocks::tcp::Context;
+    use octo_squirrel::codec::shadowsocks::tcp::Identity;
+    use octo_squirrel::codec::shadowsocks::tcp::Session;
+    use octo_squirrel::protocol::shadowsocks::aead;
+    use template::message::OutboundIn;
 
     use super::*;
 
-    pub fn new_codec<const N: usize, CM: CipherMethod + KeyInit>(
-        config: &ServerConfig,
-        user_manager: Arc<ServerUserManager<N>>,
-    ) -> Result<PayloadCodec<N, CM>> {
-        PayloadCodec::new(Arc::new(Context::default()), config, Mode::Server, None, Some(user_manager))
+    #[derive(Clone)]
+    pub struct ServerContext<const N: usize>(Arc<Context<N>>);
+
+    impl<const N: usize> ServerContext<N> {
+        pub fn init(config: &ServerConfig, user_manager: Arc<ServerUserManager<N>>) -> Result<Self> {
+            let kind = config.cipher;
+            let (key, identity_keys) = if kind.is_aead_2022() {
+                password_to_keys(&config.password).map_err(|e| anyhow!(e))?
+            } else {
+                let key = aead::openssl_bytes_to_key(config.password.as_bytes());
+                (key, Vec::with_capacity(0))
+            };
+            let context = Arc::new(Context::new(key, identity_keys, config.cipher, Some(user_manager)));
+            Ok(Self(context))
+        }
     }
 
-    pub struct PayloadCodec<const N: usize, CM> {
+    impl<const N: usize> AsRef<ServerContext<N>> for ServerContext<N> {
+        fn as_ref(&self) -> &ServerContext<N> {
+            self
+        }
+    }
+
+    pub struct PayloadCodec<const N: usize> {
+        context: Arc<Context<N>>,
         session: Session<N>,
-        cipher: AEADCipherCodec<N, CM>,
+        cipher: AEADCipherCodec<N>,
         state: State,
     }
 
@@ -309,50 +312,50 @@ mod tcp {
         Body,
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> PayloadCodec<N, CM> {
-        pub fn new(
-            context: Arc<Context>,
-            config: &ServerConfig,
-            mode: Mode,
-            address: Option<Address>,
-            user_manager: Option<Arc<ServerUserManager<N>>>,
-        ) -> anyhow::Result<Self> {
-            let session = Session::new(mode, Identity::default(), context, address, user_manager);
-            Ok(Self { session, cipher: AEADCipherCodec::new(config.cipher, config.password.as_str()).map_err(|e| anyhow!(e))?, state: State::Header })
+    impl<const N: usize> PayloadCodec<N> {
+        pub fn new(context: Arc<Context<N>>, mode: Mode, address: Option<Address>) -> Self {
+            let session = Session::new(mode, Identity::default(), address);
+            Self { context, session, cipher: AEADCipherCodec::default(), state: State::Header }
         }
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> Encoder<BytesMut> for PayloadCodec<N, CM> {
+    impl<const N: usize> Encoder<OutboundIn> for PayloadCodec<N> {
         type Error = anyhow::Error;
 
-        fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<()> {
-            self.cipher.encode(&mut self.session, item, dst)
+        fn encode(&mut self, item: OutboundIn, dst: &mut BytesMut) -> Result<()> {
+            self.cipher.encode(&self.context, &self.session, item.into(), dst)
         }
     }
 
-    impl<const N: usize, CM: CipherMethod + KeyInit> Decoder for PayloadCodec<N, CM> {
-        type Item = Message;
+    impl<const N: usize> Decoder for PayloadCodec<N> {
+        type Item = InboundIn;
 
         type Error = anyhow::Error;
 
         fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
             match self.state {
                 State::Header => {
-                    if let (Some(dst), Some(addr)) = (self.cipher.decode(&mut self.session, src)?, self.session.address.as_ref()) {
+                    if let (Some(dst), Some(addr)) = (self.cipher.decode(&self.context, &mut self.session, src)?, self.session.address.as_ref()) {
                         self.state = State::Body;
-                        Ok(Some(Message::ConnectTcp(dst, addr.clone())))
+                        Ok(Some(InboundIn::ConnectTcp(dst, addr.clone())))
                     } else {
                         Ok(None)
                     }
                 }
                 State::Body => {
-                    if let Some(dst) = self.cipher.decode(&mut self.session, src)? {
-                        Ok(Some(Message::RelayTcp(dst)))
+                    if let Some(dst) = self.cipher.decode(&self.context, &mut self.session, src)? {
+                        Ok(Some(InboundIn::RelayTcp(dst)))
                     } else {
                         Ok(None)
                     }
                 }
             }
+        }
+    }
+
+    impl<const N: usize> From<&ServerContext<N>> for PayloadCodec<N> {
+        fn from(value: &ServerContext<N>) -> Self {
+            Self::new(value.0.clone(), Mode::Server, None)
         }
     }
 }

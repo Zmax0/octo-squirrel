@@ -11,18 +11,18 @@ use std::io::BufReader;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::common::codec::aead::CipherKind;
-use crate::common::network::PacketEncoding;
-use crate::common::network::Transport;
-use crate::common::protocol::Protocols;
+use crate::codec::aead::CipherKind;
 use crate::log::Logger;
+use crate::network::PacketEncoding;
+use crate::network::Transport;
+use crate::protocol::Protocol;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub password: String,
-    pub protocol: Protocols,
+    pub protocol: Protocol,
     #[serde(default)]
     pub cipher: CipherKind,
     #[serde(default)]
@@ -39,6 +39,12 @@ pub struct ServerConfig {
     #[cfg(feature = "server")]
     #[serde(default)]
     pub user: Vec<User>,
+}
+
+impl AsRef<ServerConfig> for ServerConfig {
+    fn as_ref(&self) -> &ServerConfig {
+        self
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -104,11 +110,11 @@ mod test {
     use rand::Rng;
     use serde_json::json;
 
-    use crate::common::codec::aead::CipherKind;
-    use crate::common::network::PacketEncoding;
-    use crate::common::network::Transport;
-    use crate::common::protocol::Protocols;
+    use crate::codec::aead::CipherKind;
     use crate::config::ClientConfig;
+    use crate::network::PacketEncoding;
+    use crate::network::Transport;
+    use crate::protocol::Protocol;
 
     #[test]
     fn test_config_serialize() {
@@ -145,7 +151,7 @@ mod test {
         assert_eq!(server_host, current.host);
         assert_eq!(server_port, current.port);
         assert_eq!(CipherKind::ChaCha20Poly1305, current.cipher);
-        assert_eq!(Protocols::VMess, current.protocol);
+        assert_eq!(Protocol::VMess, current.protocol);
         assert_eq!(vec![Transport::TCP, Transport::UDP], current.transport);
         assert_eq!(PacketEncoding::None, current.packet_encoding);
         assert!(current.ssl.is_some());

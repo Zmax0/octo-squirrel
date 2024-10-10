@@ -5,13 +5,13 @@ enum CodecState {
 
 pub(super) mod tcp {
     use bytes::BufMut;
+    use bytes::Bytes;
     use bytes::BytesMut;
-    use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::socks5::address::AddressCodec;
-    use octo_squirrel::common::protocol::socks5::Socks5CommandType;
-    use octo_squirrel::common::protocol::trojan;
-    use octo_squirrel::common::util::hex;
-    use octo_squirrel::config::ServerConfig;
+    use octo_squirrel::protocol::address::Address;
+    use octo_squirrel::protocol::socks5::address;
+    use octo_squirrel::protocol::socks5::Socks5CommandType;
+    use octo_squirrel::protocol::trojan;
+    use octo_squirrel::util::hex;
     use sha2::Digest;
     use sha2::Sha224;
     use tokio_util::codec::Decoder;
@@ -19,8 +19,8 @@ pub(super) mod tcp {
 
     use super::CodecState;
 
-    pub fn new_codec(addr: &Address, config: &ServerConfig) -> anyhow::Result<ClientCodec> {
-        Ok(ClientCodec::new(config.password.as_bytes(), Socks5CommandType::Connect as u8, addr.clone()))
+    pub fn new_codec(addr: &Address, password: Bytes) -> anyhow::Result<ClientCodec> {
+        Ok(ClientCodec::new(&password, Socks5CommandType::Connect as u8, addr.clone()))
     }
 
     pub struct ClientCodec {
@@ -49,11 +49,11 @@ pub(super) mod tcp {
                 dst.extend_from_slice(&self.key);
                 dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
-                AddressCodec::encode(&self.address, dst)?;
+                address::encode(&self.address, dst);
                 dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
-            dst.put(item);
+            dst.extend_from_slice(&item);
             Ok(())
         }
     }
@@ -83,14 +83,14 @@ pub(super) mod udp {
     use bytes::Buf;
     use bytes::BufMut;
     use bytes::BytesMut;
-    use octo_squirrel::common::codec::DatagramPacket;
-    use octo_squirrel::common::codec::WebSocketFramed;
-    use octo_squirrel::common::protocol::address::Address;
-    use octo_squirrel::common::protocol::socks5::address::AddressCodec;
-    use octo_squirrel::common::protocol::socks5::Socks5CommandType;
-    use octo_squirrel::common::protocol::trojan;
-    use octo_squirrel::common::util::hex;
+    use octo_squirrel::codec::DatagramPacket;
+    use octo_squirrel::codec::WebSocketFramed;
     use octo_squirrel::config::ServerConfig;
+    use octo_squirrel::protocol::address::Address;
+    use octo_squirrel::protocol::socks5::address;
+    use octo_squirrel::protocol::socks5::Socks5CommandType;
+    use octo_squirrel::protocol::trojan;
+    use octo_squirrel::util::hex;
     use sha2::Digest;
     use sha2::Sha224;
     use tokio::net::TcpStream;
@@ -170,16 +170,16 @@ pub(super) mod udp {
                 dst.extend_from_slice(&self.key);
                 dst.extend_from_slice(&trojan::CR_LF);
                 dst.put_u8(self.command);
-                AddressCodec::encode(&self.address, dst)?;
+                address::encode(&self.address, dst);
                 dst.extend_from_slice(&trojan::CR_LF);
                 self.status = CodecState::Body;
             }
             let buffer = &mut BytesMut::new();
-            AddressCodec::encode(&item.1, buffer)?;
+            address::encode(&item.1, buffer);
             buffer.put_u16(item.0.len() as u16);
             buffer.extend_from_slice(&trojan::CR_LF);
-            buffer.put(item.0);
-            dst.put(buffer);
+            buffer.extend_from_slice(&item.0);
+            dst.extend_from_slice(buffer);
             Ok(())
         }
     }
@@ -191,7 +191,7 @@ pub(super) mod udp {
 
         fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
             if !src.is_empty() {
-                let addr = AddressCodec::decode(src)?;
+                let addr = address::decode(src)?;
                 let len = src.get_u16();
                 src.advance(trojan::CR_LF.len());
                 let content = src.split_to(len as usize);
@@ -205,7 +205,7 @@ pub(super) mod udp {
 
 #[cfg(test)]
 mod test {
-    use octo_squirrel::common::util::hex;
+    use octo_squirrel::util::hex;
     use sha2::digest::typenum::Unsigned;
     use sha2::digest::OutputSizeUser;
     use sha2::Digest;

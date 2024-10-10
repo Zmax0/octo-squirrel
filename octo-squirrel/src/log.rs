@@ -11,14 +11,25 @@ use log4rs::Config;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub fn init(config: &Logger) -> Result<()> {
+pub fn init(level: &str) -> Result<()> {
     if let Ok(()) = log4rs::init_file("log4rs.yaml", Default::default()) {
         info!("Init default logger");
     } else {
-        log4rs::init_config(config.into())?;
-        info!("Init custom logger; level={}", config.level);
+        log4rs::init_config(build_config(level))?;
+        info!("Init custom logger; level={}", level);
     }
     Ok(())
+}
+
+fn build_config(level: &str) -> Config {
+    let name = "stdout";
+    Config::builder()
+        .appender(Appender::builder().build(
+            name,
+            Box::new(ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {h({l}):<5} {M} - {m}{n}"))).build()),
+        ))
+        .build(Root::builder().appender(name).build(LevelFilter::from_str(level).unwrap()))
+        .unwrap()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,20 +41,9 @@ impl Logger {
     pub fn new(level: String) -> Self {
         Self { level }
     }
-}
 
-impl From<&Logger> for Config {
-    fn from(value: &Logger) -> Self {
-        let name = "stdout";
-        Config::builder()
-            .appender(Appender::builder().build(
-                name,
-                Box::new(
-                    ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {h({l}):<5} {M} - {m}{n}"))).build(),
-                ),
-            ))
-            .build(Root::builder().appender(name).build(LevelFilter::from_str(value.level.as_str()).unwrap()))
-            .unwrap()
+    pub fn level(&self) -> &str {
+        &self.level
     }
 }
 

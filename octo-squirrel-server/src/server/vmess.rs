@@ -1,28 +1,33 @@
+use aes_gcm::aead::Aead;
+use aes_gcm::aead::Payload;
+use aes_gcm::aes::cipher::Unsigned;
+use aes_gcm::AeadCore;
+use aes_gcm::Aes128Gcm;
+use aes_gcm::KeyInit;
 use anyhow::anyhow;
 use anyhow::bail;
 use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
 use log::debug;
-use octo_squirrel::common::codec::aead::Aes128GcmCipher;
-use octo_squirrel::common::codec::aead::CipherMethod;
-use octo_squirrel::common::codec::vmess::aead::AEADBodyCodec;
-use octo_squirrel::common::protocol::vmess::aead::AuthID;
-use octo_squirrel::common::protocol::vmess::aead::Encrypt;
-use octo_squirrel::common::protocol::vmess::aead::KDF;
-use octo_squirrel::common::protocol::vmess::header::RequestCommand;
-use octo_squirrel::common::protocol::vmess::header::RequestHeader;
-use octo_squirrel::common::protocol::vmess::header::RequestOption;
-use octo_squirrel::common::protocol::vmess::header::SecurityType;
-use octo_squirrel::common::protocol::vmess::session::ServerSession;
-use octo_squirrel::common::protocol::vmess::AddressCodec;
-use octo_squirrel::common::protocol::vmess::ID;
-use octo_squirrel::common::util::FNV;
+use octo_squirrel::codec::vmess::aead::AEADBodyCodec;
 use octo_squirrel::config::ServerConfig;
+use octo_squirrel::protocol::vmess::address;
+use octo_squirrel::protocol::vmess::aead::auth_id;
+use octo_squirrel::protocol::vmess::aead::encrypt;
+use octo_squirrel::protocol::vmess::aead::kdf;
+use octo_squirrel::protocol::vmess::header::RequestCommand;
+use octo_squirrel::protocol::vmess::header::RequestHeader;
+use octo_squirrel::protocol::vmess::header::RequestOption;
+use octo_squirrel::protocol::vmess::header::SecurityType;
+use octo_squirrel::protocol::vmess::id;
+use octo_squirrel::protocol::vmess::session::ServerSession;
+use octo_squirrel::util::fnv;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use super::template::Message;
+use super::template::message::InboundIn;
+use super::template::message::OutboundIn;
 
 pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerAeadCodec> {
     ServerAeadCodec::try_from(config)
@@ -63,18 +68,18 @@ impl ServerAeadCodec {
         header: &mut RequestHeader,
         session: &mut ServerSession,
         decoder: &mut AEADBodyCodec,
-    ) -> anyhow::Result<Option<Message>> {
+    ) -> anyhow::Result<Option<InboundIn>> {
         match header.command {
             RequestCommand::TCP => {
                 if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::ConnectTcp(msg, header.address.clone())))
+                    Ok(Some(InboundIn::ConnectTcp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
             }
             RequestCommand::UDP => {
                 if let Some(msg) = decoder.decode_packet(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::RelayUdp(msg, header.address.clone())))
+                    Ok(Some(InboundIn::RelayUdp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
@@ -87,18 +92,18 @@ impl ServerAeadCodec {
         header: &mut RequestHeader,
         session: &mut ServerSession,
         decoder: &mut AEADBodyCodec,
-    ) -> anyhow::Result<Option<Message>> {
+    ) -> anyhow::Result<Option<InboundIn>> {
         match header.command {
             RequestCommand::TCP => {
                 if let Some(msg) = decoder.decode_payload(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::RelayTcp(msg)))
+                    Ok(Some(InboundIn::RelayTcp(msg)))
                 } else {
                     Ok(None)
                 }
             }
             RequestCommand::UDP => {
                 if let Some(msg) = decoder.decode_packet(src, session).map_err(|e| anyhow!(e))? {
-                    Ok(Some(Message::RelayUdp(msg, header.address.clone())))
+                    Ok(Some(InboundIn::RelayUdp(msg, header.address.clone())))
                 } else {
                     Ok(None)
                 }
@@ -107,31 +112,34 @@ impl ServerAeadCodec {
     }
 }
 
-impl Encoder<BytesMut> for ServerAeadCodec {
+impl Encoder<OutboundIn> for ServerAeadCodec {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: OutboundIn, dst: &mut BytesMut) -> Result<(), Self::Error> {
         if let DecodeState::Ready(ref request_header, ref mut session, _) = self.decode_state {
             match self.encode_state {
                 EncodeState::Init => {
-                    let header_len_key = KDF::kdf16(&session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_LEN_KEY]);
-                    let cipher = Aes128GcmCipher::new_from_slice(&header_len_key)?;
-                    let header_len_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
-                        KDF::kdfn(&session.response_body_iv, vec![KDF::SALT_AEAD_RESP_HEADER_LEN_IV]);
+                    const NONCE_SIZE: usize = <Aes128Gcm as AeadCore>::NonceSize::USIZE;
+                    let header_len_key = kdf::kdf16(&session.response_body_key, vec![kdf::SALT_AEAD_RESP_HEADER_LEN_KEY]);
+                    let cipher = Aes128Gcm::new_from_slice(&header_len_key)?;
+                    let header_len_iv: [u8; NONCE_SIZE] = kdf::kdfn(&session.response_body_iv, vec![kdf::SALT_AEAD_RESP_HEADER_LEN_IV]);
                     let option = RequestOption::get_mask(&request_header.option);
                     let header: [u8; 4] = [session.response_header, option, 0, 0];
-                    dst.extend_from_slice(&cipher.encrypt(&header_len_iv, &(header.len() as u16).to_be_bytes(), b"").map_err(|e| anyhow!(e))?);
-                    let payload_len_key = KDF::kdf16(&session.response_body_key, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]);
-                    let cipher = Aes128GcmCipher::new_from_slice(&payload_len_key)?;
-                    let payload_len_iv: [u8; Aes128GcmCipher::NONCE_SIZE] =
-                        KDF::kdfn(&session.response_body_iv, vec![KDF::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
-                    dst.extend_from_slice(&cipher.encrypt(&payload_len_iv, &header, b"").map_err(|e| anyhow!(e))?);
+                    dst.extend_from_slice(
+                        &cipher
+                            .encrypt(&header_len_iv.into(), Payload { msg: &(header.len() as u16).to_be_bytes(), aad: b"" })
+                            .map_err(|e| anyhow!(e))?,
+                    );
+                    let payload_len_key = kdf::kdf16(&session.response_body_key, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]);
+                    let cipher = Aes128Gcm::new_from_slice(&payload_len_key)?;
+                    let payload_len_iv: [u8; NONCE_SIZE] = kdf::kdfn(&session.response_body_iv, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
+                    dst.extend_from_slice(&cipher.encrypt(&payload_len_iv.into(), Payload { msg: &header, aad: b"" }).map_err(|e| anyhow!(e))?);
                     let mut encoder = AEADBodyCodec::encoder(request_header, session)?;
-                    let res = Self::encode(item, dst, request_header, session, &mut encoder);
+                    let res = Self::encode(item.into(), dst, request_header, session, &mut encoder);
                     self.encode_state = EncodeState::Ready(Box::new(encoder));
                     res
                 }
-                EncodeState::Ready(ref mut encoder) => Self::encode(item, dst, request_header, session, encoder),
+                EncodeState::Ready(ref mut encoder) => Self::encode(item.into(), dst, request_header, session, encoder),
             }
         } else {
             bail!("decode state is not ready")
@@ -140,7 +148,7 @@ impl Encoder<BytesMut> for ServerAeadCodec {
 }
 
 impl Decoder for ServerAeadCodec {
-    type Item = Message;
+    type Item = InboundIn;
 
     type Error = anyhow::Error;
 
@@ -148,8 +156,8 @@ impl Decoder for ServerAeadCodec {
         match self.decode_state {
             DecodeState::Init => {
                 let auth_id = &src[0..16];
-                if let Some(key) = AuthID::matching(auth_id, &self.keys)? {
-                    if let Some(header) = Encrypt::open_header(&key, src)? {
+                if let Some(key) = auth_id::matching(auth_id, &self.keys)? {
+                    if let Some(header) = encrypt::open_header(&key, src)? {
                         let data = header[..header.len() - 4].to_vec();
                         let mut header = Bytes::from(header);
                         let version = header.get_u8();
@@ -168,10 +176,10 @@ impl Decoder for ServerAeadCodec {
                             bail!("unknown request command: {command}")
                         }
                         let command = if command == RequestCommand::TCP as u8 { RequestCommand::TCP } else { RequestCommand::UDP };
-                        let address = AddressCodec::read_address_port(&mut header)?;
+                        let address = address::read_address_port(&mut header)?;
                         header.advance(padding_len as usize);
                         let actual = header.get_u32();
-                        if FNV::fnv1a32(&data) != actual {
+                        if fnv::fnv1a32(&data) != actual {
                             bail!("invalid auth, but this is a AEAD request")
                         }
                         let mut header = RequestHeader::new(version, command, RequestOption::from_mask(option), security, address, key);
@@ -204,7 +212,7 @@ impl TryFrom<&ServerConfig> for ServerAeadCodec {
 
     fn try_from(config: &ServerConfig) -> Result<Self, Self::Error> {
         let uuid = config.user.iter().map(|u| &u.password).collect();
-        let keys = ID::from_passwords(uuid)?;
+        let keys = id::from_passwords(uuid)?;
         Ok(Self { keys, decode_state: DecodeState::Init, encode_state: EncodeState::Init })
     }
 }

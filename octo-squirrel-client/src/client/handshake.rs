@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 use anyhow::anyhow;
 use anyhow::bail;
-use octo_squirrel::common::protocol::address::Address;
-use octo_squirrel::common::protocol::socks::SocksVersion;
-use octo_squirrel::common::protocol::socks5::handshake::ServerHandShake;
-use octo_squirrel::common::protocol::socks5::message::Socks5CommandResponse;
-use octo_squirrel::common::protocol::socks5::Socks5CommandStatus;
+use octo_squirrel::protocol::address::Address;
+use octo_squirrel::protocol::socks::SocksVersion;
+use octo_squirrel::protocol::socks5;
+use octo_squirrel::protocol::socks5::message::Socks5CommandResponse;
+use octo_squirrel::protocol::socks5::Socks5CommandStatus;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -17,22 +19,25 @@ pub enum Proxy {
 }
 
 pub async fn get_request_addr(stream: &mut TcpStream) -> anyhow::Result<Address> {
-    let next = recognize(stream).await?;
-    match next {
-        Proxy::Http(address) => Ok(address),
-        Proxy::Https(address) => {
-            let _ = stream.read(&mut [0; 1024]).await?;
-            stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await?;
-            Ok(address)
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let next = recognize(stream).await?;
+        match next {
+            Proxy::Http(address) => Ok(address),
+            Proxy::Https(address) => {
+                let _ = stream.read(&mut [0; 1024]).await?;
+                stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await?;
+                Ok(address)
+            }
+            Proxy::Socks5 => {
+                let local_addr = stream.local_addr()?;
+                let response = Socks5CommandResponse::new(Socks5CommandStatus::Success, local_addr.into());
+                let handshake = socks5::handshake::server::no_auth(stream, response).await?;
+                Ok(handshake.dst_addr)
+            }
+            Proxy::Unknown => bail!("Unknown type of handshake"),
         }
-        Proxy::Socks5 => {
-            let local_addr = stream.local_addr()?;
-            let response = Socks5CommandResponse::new(Socks5CommandStatus::Success, local_addr.into());
-            let handshake = ServerHandShake::no_auth(stream, response).await;
-            handshake.map(Address::from)
-        }
-        Proxy::Unknown => bail!("Unknown type of handshake"),
-    }
+    })
+    .await?
 }
 
 async fn recognize(stream: &mut TcpStream) -> Result<Proxy, anyhow::Error> {
