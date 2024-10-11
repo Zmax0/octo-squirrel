@@ -5,20 +5,19 @@ use sha1::Sha1;
 use super::Authenticator;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
-use super::ChunkSizeParser;
 use crate::codec::aead::CipherKind;
 use crate::codec::aead::CipherMethod;
 
 pub fn new_encoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> Result<ChunkEncoder, InvalidLength> {
     let key = hkdfsha1(key, salt)?;
     let auth = new_auth(kind, &key);
-    Ok(ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth))
+    Ok(ChunkEncoder::new(0xffff, auth))
 }
 
 pub fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> Result<ChunkDecoder, InvalidLength> {
     let key = hkdfsha1(key, salt)?;
     let auth = new_auth(kind, &key);
-    Ok(ChunkDecoder::new(auth, ChunkSizeParser::Auth))
+    Ok(ChunkDecoder::new(auth))
 }
 
 fn hkdfsha1(ikm: &[u8], salt: &[u8]) -> Result<Vec<u8>, InvalidLength> {

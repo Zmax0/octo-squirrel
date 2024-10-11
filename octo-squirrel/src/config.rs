@@ -49,6 +49,8 @@ impl AsRef<ServerConfig> for ServerConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientConfig {
+    #[serde(default)]
+    pub host: Option<String>,
     pub port: u16,
     pub index: usize,
     #[serde(default)]

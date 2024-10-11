@@ -12,7 +12,6 @@ use rand::Rng;
 use super::Authenticator;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
-use super::ChunkSizeParser;
 use crate::codec::aead::CipherKind;
 use crate::codec::aead::CipherMethod;
 
@@ -50,13 +49,13 @@ pub fn next_padding_length(msg: &BytesMut) -> u16 {
 pub fn new_encoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkEncoder {
     let key = session_sub_key(key, salt);
     let auth = Authenticator::new(CipherMethod::new(kind, &key));
-    ChunkEncoder::new(0xffff, auth, ChunkSizeParser::Auth)
+    ChunkEncoder::new(0xffff, auth)
 }
 
 pub fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkDecoder {
     let key = session_sub_key(key, salt);
     let auth = Authenticator::new(CipherMethod::new(kind, &key));
-    ChunkDecoder::new(auth, ChunkSizeParser::Auth)
+    ChunkDecoder::new(auth)
 }
 
 #[cfg(test)]

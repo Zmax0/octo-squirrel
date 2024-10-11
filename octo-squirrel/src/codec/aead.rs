@@ -69,6 +69,17 @@ impl CipherMethod {
         }
     }
 
+    pub fn encrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut [u8]) -> Result<(), aead::Error> {
+        let (text, tag) = plaintext.split_at_mut(plaintext.len() - self.tag_size());
+        let _tag = match self {
+            Self::Aes128Gcm(cipher) => cipher.encrypt_in_place_detached(nonce.into(), associated_data, text)?,
+            Self::Aes256Gcm(cipher) => cipher.encrypt_in_place_detached(nonce.into(), associated_data, text)?,
+            Self::ChaCha20Poly1305(cipher) => cipher.encrypt_in_place_detached(nonce.into(), associated_data, text)?,
+        };
+        tag.copy_from_slice(_tag.as_slice());
+        Ok(())
+    }
+
     pub fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
         match self {
             Self::Aes128Gcm(cipher) => cipher.decrypt(nonce.into(), Payload { msg: ciphertext, aad: associated_data }),
