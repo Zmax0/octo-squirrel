@@ -134,9 +134,9 @@ impl ChunkDecoder {
                         return Ok(());
                     }
                     dst.reserve(len);
-                    let mut payload_btyes = src.split_to(len);
-                    self.auth.open(&mut payload_btyes)?;
-                    dst.extend_from_slice(&payload_btyes);
+                    let mut payload_bytes = src.split_to(len);
+                    self.auth.open(&mut payload_bytes)?;
+                    dst.extend_from_slice(&payload_bytes);
                     self.state = DecodeState::Length;
                 }
             }

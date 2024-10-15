@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 #[cfg(any(feature = "client", feature = "server"))]
 use std::env::args;
+use std::fmt::Display;
 #[cfg(any(feature = "client", feature = "server"))]
 use std::fs::File;
 #[cfg(any(feature = "client", feature = "server"))]
@@ -13,25 +14,54 @@ use serde::Serialize;
 
 use crate::codec::aead::CipherKind;
 use crate::log::Logger;
-use crate::network::PacketEncoding;
-use crate::network::Transport;
 use crate::protocol::Protocol;
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Mode {
+    #[serde(rename = "tcp")]
+    Tcp,
+    #[serde(rename = "udp")]
+    Udp,
+    #[serde(rename = "tcp_and_udp")]
+    TcpAndUdp,
+}
+
+impl Mode {
+    pub fn enable_tcp(&self) -> bool {
+        matches!(self, Self::Tcp | Self::TcpAndUdp)
+    }
+
+    pub fn enable_udp(&self) -> bool {
+        matches!(self, Self::Udp | Self::TcpAndUdp)
+    }
+}
+
+impl Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Mode::Tcp => write!(f, "tcp"),
+            Mode::Udp => write!(f, "udp"),
+            Mode::TcpAndUdp => write!(f, "tcp_and_udp"),
+        }
+    }
+}
+
+impl Default for Mode {
+    fn default() -> Self {
+        Self::Tcp
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub mode: Mode,
     pub password: String,
     pub protocol: Protocol,
     #[serde(default)]
     pub cipher: CipherKind,
-    #[serde(default)]
-    pub remark: String,
-    #[serde(default)]
-    pub transport: Vec<Transport>,
-    #[serde(rename = "packetEncoding")]
-    #[serde(default)]
-    pub packet_encoding: PacketEncoding,
     #[serde(default)]
     pub ssl: Option<SslConfig>,
     #[serde(default)]
@@ -52,6 +82,8 @@ pub struct ClientConfig {
     #[serde(default)]
     pub host: Option<String>,
     pub port: u16,
+    #[serde(default)]
+    pub mode: Mode,
     pub index: usize,
     #[serde(default)]
     pub logger: Logger,
@@ -59,8 +91,8 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
-    pub fn get_current(&self) -> Option<&ServerConfig> {
-        self.servers.get(self.index)
+    pub fn get_current(&mut self) -> ServerConfig {
+        self.servers.remove(self.index)
     }
 }
 
@@ -114,8 +146,6 @@ mod test {
 
     use crate::codec::aead::CipherKind;
     use crate::config::ClientConfig;
-    use crate::network::PacketEncoding;
-    use crate::network::Transport;
     use crate::protocol::Protocol;
 
     #[test]
@@ -127,6 +157,7 @@ mod test {
         let json = json!({
           "port": client_port,
           "index": 0,
+          "mode" : "tcp_and_udp",
           "servers": [
             {
               "host": server_host,
@@ -134,28 +165,22 @@ mod test {
               "password": "{password}",
               "cipher": "chacha20-poly1305",
               "protocol": "vmess",
-              "remark": "",
-              "transport": [
-                "tcp",
-                "udp"
-              ],
               "ssl": {
                 "certificateFile": "/path/to/certificate.crt",
                 "keyFile": "/path/to/private.key",
                 "serverName": server_name
-              }
+              },
+              "mode": "tcp"
             }
           ]
         });
-        let client_config: ClientConfig = serde_json::from_value(json).unwrap();
+        let mut client_config: ClientConfig = serde_json::from_value(json).unwrap();
         assert_eq!(client_port, client_config.port);
-        let current = client_config.get_current().unwrap();
+        let current = client_config.get_current();
         assert_eq!(server_host, current.host);
         assert_eq!(server_port, current.port);
         assert_eq!(CipherKind::ChaCha20Poly1305, current.cipher);
         assert_eq!(Protocol::VMess, current.protocol);
-        assert_eq!(vec![Transport::TCP, Transport::UDP], current.transport);
-        assert_eq!(PacketEncoding::None, current.packet_encoding);
         assert!(current.ssl.is_some());
         assert_eq!(current.ssl.as_ref().unwrap().server_name, server_name)
     }

@@ -1,7 +1,10 @@
+use std::net::Ipv4Addr;
+use std::net::SocketAddrV4;
 use std::sync::Arc;
 
 use bytes::Bytes;
 use log::error;
+use log::info;
 use octo_squirrel::codec::aead::CipherKind;
 use octo_squirrel::config::ServerConfig;
 use octo_squirrel::protocol::Protocol::*;
@@ -14,7 +17,28 @@ mod template;
 mod trojan;
 mod vmess;
 
-pub async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) {
+pub async fn main() -> anyhow::Result<()> {
+    let mut config = octo_squirrel::config::init_client()?;
+    let current = config.get_current();
+    octo_squirrel::log::init(config.logger.level())?;
+    let listen_addr: SocketAddrV4 = match config.host.as_ref() {
+        Some(host) => format!("{}:{}", host, config.port).parse()?,
+        None => SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port),
+    };
+    if current.mode.enable_udp() {
+        let socket = UdpSocket::bind(listen_addr).await?;
+        info!("Listening UDP on: {}", socket.local_addr()?);
+        tokio::spawn(transfer_udp(socket, current.clone()));
+    }
+    if current.mode.enable_tcp() {
+        let listener = TcpListener::bind(listen_addr).await?;
+        info!("Listening TCP on: {}", listener.local_addr()?);
+        transfer_tcp(listener, current).await;
+    }
+    Ok(())
+}
+
+async fn transfer_tcp(listener: TcpListener, current: ServerConfig) {
     match current.protocol {
         Shadowsocks => match current.cipher {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
@@ -42,7 +66,7 @@ pub async fn transfer_tcp(listener: TcpListener, current: &ServerConfig) {
     }
 }
 
-pub async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
+async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
     match (current.protocol, &current.ssl, &current.ws) {
         (Shadowsocks, _, _) => match current.cipher {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {

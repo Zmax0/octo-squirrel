@@ -8,7 +8,7 @@ use aes::Aes256;
 use ecb::Decryptor;
 use ecb::Encryptor;
 
-macro_rules! aes_ecb_no_padding {
+macro_rules! aes_ecb_no_padding_impl {
     ($name:ident, $aes:ident) => {
         pub struct $name;
         impl $name {
@@ -31,8 +31,8 @@ macro_rules! aes_ecb_no_padding {
     };
 }
 
-aes_ecb_no_padding!(Aes128EcbNoPadding, Aes128);
-aes_ecb_no_padding!(Aes256EcbNoPadding, Aes256);
+aes_ecb_no_padding_impl!(Aes128EcbNoPadding, Aes128);
+aes_ecb_no_padding_impl!(Aes256EcbNoPadding, Aes256);
 
 #[cfg(test)]
 mod test {

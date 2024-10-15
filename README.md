@@ -48,15 +48,13 @@ Only support IPv4 at this time.
     {
         "port": 0,
         "index": 0,
+        "mode": "{mode}",
         "servers": [
             {
                 "cipher": "{cipher}",
                 "password": "{password}",
                 "port": "{port}",
-                "protocol": "{protocol}",
-                "networks": [
-                    "{networks}"
-                ]
+                "protocol": "{protocol}"
             }
         ],
         "ssl": {
@@ -76,11 +74,11 @@ Only support IPv4 at this time.
 
    > index: `servers[index]` will be the client config
 
+   > mode: (OPTIONAL) client listening mode, options are "tcp"(default), "udp", "tcp_and_udp"
+
    > protocol: "shadowsocks" | "vmess" | "trojan"
 
    > cipher: see Ciphers
-
-   > networks: see Transmission
 
    > ssl: (OPTIONAL) SSL specific configurations
 
