@@ -25,12 +25,12 @@ pub async fn main() -> anyhow::Result<()> {
         Some(host) => format!("{}:{}", host, config.port).parse()?,
         None => SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port),
     };
-    if current.mode.enable_udp() {
+    if config.mode.enable_udp() {
         let socket = UdpSocket::bind(listen_addr).await?;
         info!("Listening UDP on: {}", socket.local_addr()?);
         tokio::spawn(transfer_udp(socket, current.clone()));
     }
-    if current.mode.enable_tcp() {
+    if config.mode.enable_tcp() {
         let listener = TcpListener::bind(listen_addr).await?;
         info!("Listening TCP on: {}", listener.local_addr()?);
         transfer_tcp(listener, current).await;
@@ -50,7 +50,10 @@ async fn transfer_tcp(listener: TcpListener, current: ServerConfig) {
                 )
                 .await
             }
-            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
+            CipherKind::Aes256Gcm
+            | CipherKind::Aead2022Blake3Aes256Gcm
+            | CipherKind::ChaCha20Poly1305
+            | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 template::transfer_tcp(
                     listener,
                     current,
@@ -59,7 +62,7 @@ async fn transfer_tcp(listener: TcpListener, current: ServerConfig) {
                 )
                 .await
             }
-            _ => unreachable!(),
+            CipherKind::Unknown => error!("unknown cipher kind"),
         },
         VMess => template::transfer_tcp(listener, current, |c| Ok((c.cipher, Arc::new(c.password.clone()))), vmess::tcp::new_codec).await,
         Trojan => template::transfer_tcp(listener, current, |c| Ok(Bytes::from(c.password.clone())), trojan::tcp::new_codec).await,
@@ -81,7 +84,10 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
                 )
                 .await
             }
-            CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
+            CipherKind::Aes256Gcm
+            | CipherKind::Aead2022Blake3Aes256Gcm
+            | CipherKind::ChaCha20Poly1305
+            | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 template::transfer_udp(
                     socket,
                     current,
@@ -93,7 +99,10 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
                 )
                 .await
             }
-            _ => unreachable!(),
+            CipherKind::Unknown => {
+                error!("unknown cipher kind");
+                Ok(())
+            }
         },
         (VMess, None, None) => {
             template::transfer_udp(

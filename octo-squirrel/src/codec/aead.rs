@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::mem::size_of;
 
+use aead::generic_array::GenericArray;
 use aead::Key;
 use aead::KeyInit;
 use aead::KeySizeUser;
@@ -14,24 +15,38 @@ use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::Aes256Gcm;
 use chacha20poly1305::ChaCha20Poly1305;
+use chacha20poly1305::XChaCha20Poly1305;
 use serde::Deserialize;
 use serde::Serialize;
-
-macro_rules! method_match_aead {
-    ($self:ident, $trait:ident, $type:ident) => {
-        match $self {
-            Self::Aes128Gcm(_) => <Aes128Gcm as $trait>::$type::USIZE,
-            Self::Aes256Gcm(_) => <Aes256Gcm as $trait>::$type::USIZE,
-            Self::ChaCha20Poly1305(_) => <ChaCha20Poly1305 as $trait>::$type::USIZE,
-        }
-    };
-}
 
 #[allow(clippy::large_enum_variant)]
 pub enum CipherMethod {
     Aes128Gcm(Aes128Gcm),
     Aes256Gcm(Aes256Gcm),
     ChaCha20Poly1305(ChaCha20Poly1305),
+    XChaCha20Poly1305(XChaCha20Poly1305),
+}
+
+macro_rules! method_match_aead_trait {
+    ($self:ident, $trait:ident, $type:ident) => {
+        match $self {
+            Self::Aes128Gcm(_) => <Aes128Gcm as $trait>::$type::USIZE,
+            Self::Aes256Gcm(_) => <Aes256Gcm as $trait>::$type::USIZE,
+            Self::ChaCha20Poly1305(_) => <ChaCha20Poly1305 as $trait>::$type::USIZE,
+            Self::XChaCha20Poly1305(_) => <XChaCha20Poly1305 as $trait>::$type::USIZE,
+        }
+    };
+}
+
+macro_rules! method_match_aead_fn {
+    ($self:ident, $fn:ident, $param:tt) => {
+        match $self {
+            Self::Aes128Gcm(cipher) => cipher.$fn$param,
+            Self::Aes256Gcm(cipher) => cipher.$fn$param,
+            Self::ChaCha20Poly1305(cipher) => cipher.$fn$param,
+            Self::XChaCha20Poly1305(cipher) => cipher.$fn$param,
+        }
+    };
 }
 
 impl CipherMethod {
@@ -45,67 +60,52 @@ impl CipherMethod {
                 let key = &key[..<Aes256Gcm as KeySizeUser>::KeySize::USIZE];
                 Self::Aes256Gcm(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key)))
             }
-            CipherKind::ChaCha20Poly1305 => {
+            CipherKind::ChaCha20Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 let key = &key[..<ChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];
                 Self::ChaCha20Poly1305(ChaCha20Poly1305::new(Key::<ChaCha20Poly1305>::from_slice(key)))
             }
-            _ => unreachable!(),
+            CipherKind::Unknown => panic!("unknown cipher kind"),
         }
     }
 
     pub fn encrypt(&self, nonce: &[u8], plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
-        match self {
-            Self::Aes128Gcm(cipher) => cipher.encrypt(nonce.into(), Payload { msg: plaintext, aad: associated_data }),
-            Self::Aes256Gcm(cipher) => cipher.encrypt(nonce.into(), Payload { msg: plaintext, aad: associated_data }),
-            Self::ChaCha20Poly1305(cipher) => cipher.encrypt(nonce.into(), Payload { msg: plaintext, aad: associated_data }),
-        }
+        method_match_aead_fn!(self, encrypt, (nonce.into(), Payload { msg: plaintext, aad: associated_data }))
     }
 
     pub fn encrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut dyn Buffer) -> Result<(), aead::Error> {
-        match self {
-            Self::Aes128Gcm(cipher) => cipher.encrypt_in_place(nonce.into(), associated_data, plaintext),
-            Self::Aes256Gcm(cipher) => cipher.encrypt_in_place(nonce.into(), associated_data, plaintext),
-            Self::ChaCha20Poly1305(cipher) => cipher.encrypt_in_place(nonce.into(), associated_data, plaintext),
-        }
+        method_match_aead_fn!(self, encrypt_in_place, (nonce.into(), associated_data, plaintext))
     }
 
     pub fn encrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut [u8]) -> Result<(), aead::Error> {
-        let (text, tag) = plaintext.split_at_mut(plaintext.len() - self.tag_size());
-        let _tag = match self {
-            Self::Aes128Gcm(cipher) => cipher.encrypt_in_place_detached(nonce.into(), associated_data, text)?,
-            Self::Aes256Gcm(cipher) => cipher.encrypt_in_place_detached(nonce.into(), associated_data, text)?,
-            Self::ChaCha20Poly1305(cipher) => cipher.encrypt_in_place_detached(nonce.into(), associated_data, text)?,
-        };
+        let (buffer, tag) = plaintext.split_at_mut(plaintext.len() - self.tag_size());
+        let _tag = method_match_aead_fn!(self, encrypt_in_place_detached, (nonce.into(), associated_data, buffer))?;
         tag.copy_from_slice(_tag.as_slice());
         Ok(())
     }
 
     pub fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
-        match self {
-            Self::Aes128Gcm(cipher) => cipher.decrypt(nonce.into(), Payload { msg: ciphertext, aad: associated_data }),
-            Self::Aes256Gcm(cipher) => cipher.decrypt(nonce.into(), Payload { msg: ciphertext, aad: associated_data }),
-            Self::ChaCha20Poly1305(cipher) => cipher.decrypt(nonce.into(), Payload { msg: ciphertext, aad: associated_data }),
-        }
+        method_match_aead_fn!(self, decrypt, (nonce.into(), Payload { msg: ciphertext, aad: associated_data }))
     }
 
     pub fn decrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut dyn Buffer) -> Result<(), aead::Error> {
-        match self {
-            Self::Aes128Gcm(cipher) => cipher.decrypt_in_place(nonce.into(), associated_data, ciphertext),
-            Self::Aes256Gcm(cipher) => cipher.decrypt_in_place(nonce.into(), associated_data, ciphertext),
-            Self::ChaCha20Poly1305(cipher) => cipher.decrypt_in_place(nonce.into(), associated_data, ciphertext),
-        }
+        method_match_aead_fn!(self, decrypt_in_place, (nonce.into(), associated_data, ciphertext))
+    }
+
+    pub fn decrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut [u8]) -> Result<(), aead::Error> {
+        let (buffer, tag) = ciphertext.split_at_mut(ciphertext.len() - self.tag_size());
+        method_match_aead_fn!(self, decrypt_in_place_detached, (nonce.into(), associated_data, buffer, GenericArray::from_mut_slice(tag)))
     }
 
     pub const fn nonce_size(&self) -> usize {
-        method_match_aead!(self, AeadCore, NonceSize)
+        method_match_aead_trait!(self, AeadCore, NonceSize)
     }
 
     pub const fn tag_size(&self) -> usize {
-        method_match_aead!(self, AeadCore, TagSize)
+        method_match_aead_trait!(self, AeadCore, TagSize)
     }
 
     pub const fn ciphertext_overhead(&self) -> usize {
-        method_match_aead!(self, AeadCore, CiphertextOverhead)
+        method_match_aead_trait!(self, AeadCore, CiphertextOverhead)
     }
 }
 
@@ -121,6 +121,8 @@ pub enum CipherKind {
     Aead2022Blake3Aes128Gcm,
     #[serde(rename = "2022-blake3-aes-256-gcm")]
     Aead2022Blake3Aes256Gcm,
+    #[serde(rename = "2022-blake3-chacha20-poly1305")]
+    Aead2022Blake3ChaCha20Poly1305,
     #[default]
     Unknown,
 }
@@ -130,19 +132,19 @@ macro_rules! kind_match_aead {
         match $self {
             Self::Aes128Gcm | Self::Aead2022Blake3Aes128Gcm => <Aes128Gcm as $trait>::$type::USIZE,
             Self::Aes256Gcm | Self::Aead2022Blake3Aes256Gcm => <Aes256Gcm as $trait>::$type::USIZE,
-            Self::ChaCha20Poly1305 => <ChaCha20Poly1305 as $trait>::$type::USIZE,
-            _ => unreachable!(),
+            Self::ChaCha20Poly1305 | Self::Aead2022Blake3ChaCha20Poly1305 => <ChaCha20Poly1305 as $trait>::$type::USIZE,
+            Self::Unknown => panic!("unknown cipher kind"),
         }
     };
 }
 
 impl CipherKind {
     pub const fn is_aead_2022(&self) -> bool {
-        matches!(self, CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm)
+        matches!(self, Self::Aead2022Blake3Aes128Gcm | Self::Aead2022Blake3Aes256Gcm | Self::Aead2022Blake3ChaCha20Poly1305)
     }
 
     pub const fn support_eih(&self) -> bool {
-        self.is_aead_2022()
+        matches!(self, Self::Aead2022Blake3Aes128Gcm | Self::Aead2022Blake3Aes256Gcm)
     }
 
     pub const fn tag_size(&self) -> usize {
@@ -162,6 +164,7 @@ impl Display for CipherKind {
             CipherKind::ChaCha20Poly1305 => write!(f, "chacha20-poly1305"),
             CipherKind::Aead2022Blake3Aes128Gcm => write!(f, "2022-blake3-aes-128-gcm"),
             CipherKind::Aead2022Blake3Aes256Gcm => write!(f, "2022-blake3-aes-256-gcm"),
+            CipherKind::Aead2022Blake3ChaCha20Poly1305 => write!(f, "2022-blake3-chacha20-poly1305"),
             CipherKind::Unknown => write!(f, "?"),
         }
     }

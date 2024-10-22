@@ -34,3 +34,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "encrypt"
 path = "src/benches/encrypt.rs"
 harness = false
+
+[[bench]]
+name = "read_bytes"
+path = "src/benches/read_bytes.rs"
+harness = false

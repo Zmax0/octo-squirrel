@@ -1,3 +1,4 @@
+use core::slice;
 use std::cmp::Ordering;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -65,39 +66,54 @@ impl<const N: usize> AEADCipherCodec<N> {
         dst: &mut BytesMut,
     ) -> anyhow::Result<()> {
         let padding_length = aead_2022::next_padding_length(&item);
-        let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
+        let nonce_size = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
         let tag_size = self.kind.tag_size();
         let require_eih = self.kind.support_eih() && !context.identity_keys.is_empty();
         let eih_len = if require_eih { 16 } else { 0 };
-        let mut temp = BytesMut::with_capacity(
-            nonce_length + 8 + 8 + eih_len + 1 + 8 + 2 + padding_length as usize + address::length(address) + item.remaining() + tag_size,
-        );
-        temp.put_u64(session.client_session_id);
-        temp.put_u64(session.packet_id);
+        dst.reserve(nonce_size + 8 + 8 + eih_len + 1 + 8 + 2 + padding_length as usize + address::length(address) + item.remaining() + tag_size);
+        if nonce_size > 0 {
+            unsafe { dst.advance_mut(nonce_size) };
+            let nonce = &mut dst[..nonce_size];
+            dice::fill_bytes(nonce);
+        }
+        dst.put_u64(session.client_session_id);
+        dst.put_u64(session.packet_id);
         if require_eih {
             let mut session_id_packet_id = [0; 16];
-            session_id_packet_id.copy_from_slice(&temp[nonce_length..]);
-            udp::with_eih(self.kind, context.key, context.identity_keys, &session_id_packet_id, &mut temp)?
+            session_id_packet_id.copy_from_slice(&dst[nonce_size..]);
+            udp::with_eih(self.kind, context.key, context.identity_keys, &session_id_packet_id, dst)?
         }
-        temp.put_u8(Mode::Client.to_u8());
-        temp.put_u64(aead_2022::now()?);
-        temp.put_u16(padding_length);
-        temp.extend_from_slice(&dice::roll_bytes(padding_length as usize));
-        address::encode(address, &mut temp);
-        temp.extend_from_slice(&item);
-        let mut header = temp.split_to(16);
-        let mut nonce: [u8; 12] = [0; 12];
-        nonce.copy_from_slice(&header[4..16]);
-        let key = if context.identity_keys.is_empty() { context.key } else { &context.identity_keys[0] };
-        udp::aes_encrypt_in_place(self.kind, key, &mut header)?;
-        dst.extend_from_slice(&header);
-        if eih_len > 0 {
-            dst.extend_from_slice(&temp.split_to(eih_len))
+        dst.put_u8(Mode::Client.to_u8());
+        dst.put_u64(aead_2022::now()?);
+        dst.put_u16(padding_length);
+        dst.extend_from_slice(&dice::roll_bytes(padding_length as usize));
+        address::encode(address, dst);
+        dst.extend_from_slice(&item);
+        unsafe {
+            dst.advance_mut(tag_size);
         }
-        let cipher = unsafe { get_cipher(self.kind, context.key, session.client_session_id) };
-        cipher.encrypt_in_place(&nonce, b"", &mut temp).map_err(|e| anyhow!(e))?;
-        dst.extend_from_slice(&temp);
-        Ok(())
+        match self.kind {
+            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
+                let (header, mut text) = dst.split_at_mut(16);
+                let mut nonce = [0; 12];
+                nonce.copy_from_slice(&header[4..16]);
+                let key = if context.identity_keys.is_empty() { context.key } else { &context.identity_keys[0] };
+                udp::aes_encrypt_in_place(self.kind, key, header)?;
+                if eih_len > 0 {
+                    text = &mut text[eih_len..];
+                }
+                let cipher = unsafe { get_cipher(self.kind, context.key, session.client_session_id) };
+                cipher.encrypt_in_place_detached(&nonce, &[], text).map_err(|e| anyhow!(e))?;
+                Ok(())
+            }
+            CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+                let (nonce, plaintext) = dst.split_at_mut(nonce_size);
+                let cipher = unsafe { get_cipher(self.kind, context.key, session.client_session_id) };
+                cipher.encrypt_in_place_detached(nonce, &[], plaintext).map_err(|e| anyhow!(e))?;
+                Ok(())
+            }
+            _ => bail!("{} is not an AEAD 2022 cipher", self.kind),
+        }
     }
 
     fn encode_server_packet_aead_2022(
@@ -110,41 +126,57 @@ impl<const N: usize> AEADCipherCodec<N> {
     ) -> anyhow::Result<()> {
         let padding_length = aead_2022::next_padding_length(&item);
         let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
-        let mut temp = BytesMut::with_capacity(
-            nonce_length + 8 + 8 + 1 + 8 + 8 + 2 + padding_length as usize + address::length(address) + item.remaining() + self.kind.tag_size(),
-        );
-        temp.put_u64(session.server_session_id);
-        temp.put_u64(session.packet_id);
-        temp.put_u8(Mode::Server.to_u8());
-        temp.put_u64(aead_2022::now()?);
-        temp.put_u64(session.client_session_id);
-        temp.put_u16(padding_length);
-        temp.extend_from_slice(&dice::roll_bytes(padding_length as usize));
-        address::encode(address, &mut temp);
-        temp.extend_from_slice(&item);
-        let key = if let Some(user) = &session.user {
-            trace!("encrypt with identity {}", user);
-            &user.key
-        } else {
-            context.key
-        };
-        let mut header = temp.split_to(16);
-        let mut nonce: [u8; 12] = [0; 12];
-        nonce.copy_from_slice(&header[4..16]);
-        udp::aes_encrypt_in_place(self.kind, key, &mut header)?;
-        dst.extend_from_slice(&header);
-        let cipher = unsafe { get_cipher(self.kind, key, session.server_session_id) };
-        cipher.encrypt_in_place(&nonce, b"", &mut temp).map_err(|e| anyhow!(e))?;
-        dst.extend_from_slice(&temp);
-        Ok(())
+        let tag_size = self.kind.tag_size();
+        dst.reserve(nonce_length + 8 + 8 + 1 + 8 + 8 + 2 + padding_length as usize + address::length(address) + item.remaining() + tag_size);
+        if nonce_length > 0 {
+            unsafe {
+                dst.advance_mut(nonce_length);
+            }
+            let nonce = &mut dst[..nonce_length];
+            dice::fill_bytes(nonce);
+        }
+        dst.put_u64(session.server_session_id);
+        dst.put_u64(session.packet_id);
+        dst.put_u8(Mode::Server.to_u8());
+        dst.put_u64(aead_2022::now()?);
+        dst.put_u64(session.client_session_id);
+        dst.put_u16(padding_length);
+        if padding_length > 0 {
+            unsafe {
+                dst.advance_mut(padding_length as usize);
+            }
+        }
+        address::encode(address, dst);
+        dst.extend_from_slice(&item);
+        unsafe { dst.advance_mut(tag_size) };
+        match self.kind {
+            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
+                let (header, text) = dst.split_at_mut(16);
+                let mut nonce = [0; 12];
+                nonce.copy_from_slice(&header[4..16]);
+                let key = if let Some(user) = &session.user {
+                    trace!("encrypt with identity {}", user);
+                    &user.key
+                } else {
+                    context.key
+                };
+                udp::aes_encrypt_in_place(self.kind, key, header)?;
+                let cipher = unsafe { get_cipher(self.kind, key, session.server_session_id) };
+                cipher.encrypt_in_place_detached(&nonce, &[], text).map_err(|e| anyhow!(e))?;
+                Ok(())
+            }
+            CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+                let (nonce, plaintext) = dst.split_at_mut(nonce_length);
+                let cipher = unsafe { get_cipher(self.kind, context.key, session.server_session_id) };
+                cipher.encrypt_in_place_detached(nonce, &[], plaintext).map_err(|e| anyhow!(e))?;
+                Ok(())
+            }
+            _ => bail!("{} is not an AEAD 2022 cipher", self.kind),
+        }
     }
 
     fn new_encoder(&self, key: &[u8], salt: &[u8]) -> anyhow::Result<ChunkEncoder> {
-        if self.kind.is_aead_2022() {
-            Ok(aead_2022::new_encoder(self.kind, key, salt))
-        } else {
-            super::aead::new_encoder(self.kind, key, salt).map_err(|e| anyhow!(e))
-        }
+        super::aead::new_encoder(self.kind, key, salt).map_err(|e| anyhow!(e))
     }
 
     fn decode(&self, context: &Context<N>, src: &mut BytesMut) -> anyhow::Result<SessionPacket<N>> {
@@ -156,7 +188,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                     bail!("invalid packet length");
                 }
                 let salt = src.split_to(context.key.len());
-                let mut decoder = self.new_payload_decoder(context.key, &salt).map_err(anyhow::Error::msg)?;
+                let mut decoder = self.new_decoder(context.key, &salt).map_err(anyhow::Error::msg)?;
                 let mut packet = decoder.decode_packet(src).map_err(|e| anyhow!(e))?;
                 let address = address::decode(&mut packet)?;
                 Ok((packet, address, Session::default()))
@@ -166,25 +198,59 @@ impl<const N: usize> AEADCipherCodec<N> {
 
     // for client mode
     fn decode_server_packet_aead_2022(&self, context: &Context<N>, src: &mut BytesMut) -> Result<SessionPacket<N>, anyhow::Error> {
+        fn decrypt_message<'a, const N: usize>(
+            kind: CipherKind,
+            src: &'a mut BytesMut,
+            context: &Context<'_, N>,
+        ) -> Result<(u64, u64, &'a [u8]), anyhow::Error> {
+            let tag_size = kind.tag_size();
+            match kind {
+                CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
+                    let (session_id_packet_id, text) = src.split_at_mut(16);
+                    udp::aes_decrypt_in_place(kind, context.key, session_id_packet_id)?;
+                    let mut cursor = Cursor::new(session_id_packet_id);
+                    let server_session_id = cursor.get_u64();
+                    let packet_id = cursor.get_u64();
+                    let session_id_packet_id = cursor.into_inner();
+                    let nonce = &session_id_packet_id[4..16];
+                    let cipher = unsafe { get_cipher(kind, context.key, server_session_id) };
+                    cipher.decrypt_in_place_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
+                    let text = &text[..text.len() - tag_size];
+                    Ok((server_session_id, packet_id, text))
+                }
+                CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+                    let (nonce, text) = src.split_at_mut(aead_2022::udp::nonce_length(kind).map_err(anyhow::Error::msg)?);
+                    let session_id = {
+                        let slice = &text[..8];
+                        let slice: &[u64] = unsafe { slice::from_raw_parts(slice.as_ptr() as *const _, 1) };
+                        u64::from_be(slice[0])
+                    };
+                    let cipher = unsafe { get_cipher(kind, context.key, session_id) };
+                    cipher.decrypt_in_place_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
+                    let mut cursor = Cursor::new(text);
+                    let server_session_id = cursor.get_u64();
+                    let packet_id = cursor.get_u64();
+                    let text = cursor.into_inner();
+                    let text = &text[16..text.len() - tag_size];
+                    Ok((server_session_id, packet_id, text))
+                }
+                _ => bail!("{} is not an AEAD 2022 cipher", kind),
+            }
+        }
+
         let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
         let tag_size = self.kind.tag_size();
         let header_length = nonce_length + tag_size + 8 + 8 + 1 + 8 + 2;
         if src.remaining() < header_length {
             bail!("packet too short, at least {} bytes, but found {} bytes", header_length, src.remaining());
         }
-        let mut session_id_packet_id = src.split_to(16);
-        udp::aes_decrypt_in_place(self.kind, context.key, &mut session_id_packet_id)?;
-        let mut nonce: [u8; 12] = [0; 12];
-        nonce.copy_from_slice(&session_id_packet_id[4..16]);
-        let mut header = Cursor::new(&session_id_packet_id);
-        let server_session_id = header.get_u64();
-        let packet_id = header.get_u64();
-        let cipher = unsafe { get_cipher(self.kind, context.key, server_session_id) };
-        let mut packet = src.split_off(0);
-        cipher.decrypt_in_place(&nonce, b"", &mut packet).map_err(|e| anyhow!(e))?;
+        let (server_session_id, packet_id, text) = decrypt_message(self.kind, src, context)?;
+        let mut packet = BytesMut::with_capacity(text.len());
+        packet.extend_from_slice(text);
         let stream_type = packet.get_u8();
-        if stream_type != Mode::Server.to_u8() {
-            bail!("invalid socket type, expecting {}, but found {}", Mode::Client.to_u8(), stream_type);
+        let expect_stream_type = context.stream_type.expect_u8();
+        if stream_type != expect_stream_type {
+            bail!("invalid socket type, expecting {}, but found {}", expect_stream_type, stream_type);
         }
         aead_2022::validate_timestamp(packet.get_u64()).map_err(anyhow::Error::msg)?;
         let client_session_id = packet.get_u64();
@@ -208,32 +274,53 @@ impl<const N: usize> AEADCipherCodec<N> {
         if src.remaining() < header_length {
             bail!("packet too short, at least {} bytes, but found {} bytes", header_length, src.remaining());
         }
-        let mut session_id_packet_id: [u8; 16] = [0; 16];
-        src.copy_to_slice(&mut session_id_packet_id);
-        udp::aes_decrypt_in_place(self.kind, context.key, &mut session_id_packet_id)?;
-        let mut nonce: [u8; 12] = [0; 12];
-        nonce.copy_from_slice(&session_id_packet_id[4..16]);
-        let mut header = Cursor::new(&session_id_packet_id);
-        let session_id = header.get_u64();
-        let packet_id = header.get_u64();
         let mut user = None;
-        if require_eih {
-            let mut eih = [0; 16];
-            src.copy_to_slice(&mut eih);
-            trace!("server EIH {:?}, session_id_packet_id: {},{}", ByteStr::new(&eih), session_id, packet_id);
-            udp::aes_decrypt_in_place(self.kind, context.key, &mut eih)?;
-            eih.iter_mut().zip(session_id_packet_id).for_each(|(l, r)| *l ^= r);
-            if let Some(_user) = user_manager.unwrap().clone_user_by_hash(&eih) {
-                trace!("{} chosen by EIH", _user);
-                user = Some(_user);
-            } else {
-                bail!("user with identity {:?} not found", ByteStr::new(&eih));
+        let (session_id, packet_id, mut packet) = match self.kind {
+            CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
+                let mut session_id_packet_id = src.split_to(16);
+                udp::aes_decrypt_in_place(self.kind, context.key, &mut session_id_packet_id)?;
+                let mut nonce: [u8; 12] = [0; 12];
+                nonce.copy_from_slice(&session_id_packet_id[4..16]);
+                let mut cursor = Cursor::new(session_id_packet_id);
+                let session_id = cursor.get_u64();
+                let packet_id = cursor.get_u64();
+                let session_id_packet_id = cursor.into_inner();
+                if require_eih {
+                    let mut eih = src.split_to(16);
+                    trace!("server EIH {:?}, session_id_packet_id: {},{}", ByteStr::new(&eih), session_id, packet_id);
+                    udp::aes_decrypt_in_place(self.kind, context.key, &mut eih)?;
+                    eih.iter_mut().zip(session_id_packet_id).for_each(|(l, r)| *l ^= r);
+                    if let Some(_user) = user_manager.unwrap().clone_user_by_hash(&eih) {
+                        trace!("{} chosen by EIH", _user);
+                        user = Some(_user);
+                    } else {
+                        bail!("user with identity {:?} not found", ByteStr::new(&eih));
+                    }
+                }
+                let key = if let Some(ref user) = user { &user.key } else { context.key };
+                let cipher = unsafe { get_cipher(self.kind, key, session_id) };
+                let mut packet = src.split_off(0);
+                cipher.decrypt_in_place(&nonce, &[], &mut packet).map_err(|e| anyhow!(e))?;
+                (session_id, packet_id, packet)
             }
-        }
-        let key = if let Some(ref user) = user { &user.key } else { context.key };
-        let cipher = unsafe { get_cipher(self.kind, key, session_id) };
-        let mut packet = src.split_off(0);
-        cipher.decrypt_in_place(&nonce, b"", &mut packet).map_err(|e| anyhow!(e))?;
+            CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+                let (nonce, text) = src.split_at_mut(nonce_length);
+                let session_id = {
+                    let slice = &text[..8];
+                    let slice: &[u64] = unsafe { slice::from_raw_parts(slice.as_ptr() as *const _, 1) };
+                    u64::from_be(slice[0])
+                };
+                let cipher = unsafe { get_cipher(self.kind, context.key, session_id) };
+                cipher.decrypt_in_place_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
+                let mut cursor = Cursor::new(text);
+                let server_session_id = cursor.get_u64();
+                let packet_id = cursor.get_u64();
+                let text = cursor.into_inner();
+                let text = &text[16..text.len() - tag_size];
+                (server_session_id, packet_id, BytesMut::from(text))
+            }
+            _ => bail!("{} is not an AEAD 2022 cipher", self.kind),
+        };
         let stream_type = packet.get_u8();
         if stream_type != Mode::Client.to_u8() {
             bail!("invalid socket type, expecting {}, but found {}", Mode::Client.to_u8(), stream_type);
@@ -248,12 +335,8 @@ impl<const N: usize> AEADCipherCodec<N> {
         Ok((packet, address, session))
     }
 
-    fn new_payload_decoder(&self, key: &[u8], salt: &BytesMut) -> anyhow::Result<ChunkDecoder> {
-        if self.kind.is_aead_2022() {
-            Ok(aead_2022::new_decoder(self.kind, key, salt))
-        } else {
-            super::aead::new_decoder(self.kind, key, salt).map_err(|e| anyhow!(e))
-        }
+    fn new_decoder(&self, key: &[u8], salt: &BytesMut) -> anyhow::Result<ChunkDecoder> {
+        super::aead::new_decoder(self.kind, key, salt).map_err(|e| anyhow!(e))
     }
 }
 

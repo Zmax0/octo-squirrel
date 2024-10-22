@@ -26,7 +26,7 @@ fn build_config(level: &str) -> Config {
     Config::builder()
         .appender(Appender::builder().build(
             name,
-            Box::new(ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {h({l}):<5}{m}{n}"))).build()),
+            Box::new(ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {h({l}):<6}{m}{n}"))).build()),
         ))
         .build(Root::builder().appender(name).build(LevelFilter::from_str(level).unwrap()))
         .unwrap()

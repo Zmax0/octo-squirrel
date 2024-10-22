@@ -30,7 +30,7 @@ impl Authenticator {
     }
 
     fn encode_size(&mut self, bytes: &mut [u8]) -> Result<(), ::aead::Error> {
-        self.method.encrypt_in_place_detached(self.nonce_generator.generate(), b"", bytes)
+        self.method.encrypt_in_place_detached(self.nonce_generator.generate(), &[], bytes)
     }
 
     fn decode_size(&mut self, data: &mut BytesMut) -> Result<usize, ::aead::Error> {
@@ -40,11 +40,11 @@ impl Authenticator {
     }
 
     fn seal(&mut self, plaintext: &mut dyn Buffer) -> Result<(), ::aead::Error> {
-        self.method.encrypt_in_place(self.nonce_generator.generate(), b"", plaintext)
+        self.method.encrypt_in_place(self.nonce_generator.generate(), &[], plaintext)
     }
 
     fn open(&mut self, ciphertext: &mut dyn Buffer) -> Result<(), ::aead::Error> {
-        self.method.decrypt_in_place(self.nonce_generator.generate(), b"", ciphertext)
+        self.method.decrypt_in_place(self.nonce_generator.generate(), &[], ciphertext)
     }
 }
 
