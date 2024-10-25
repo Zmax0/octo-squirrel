@@ -36,8 +36,8 @@ pub struct AEADCipherCodec<const N: usize> {
 }
 
 impl<const N: usize> AEADCipherCodec<N> {
-    pub fn new(kind: CipherKind) -> Result<Self, base64ct::Error> {
-        Ok(Self { kind })
+    pub fn new(kind: CipherKind) -> Self {
+        Self { kind }
     }
 
     pub fn encode(&self, context: &Context<N>, session: &Session<N>, address: &Address, item: BytesMut, dst: &mut BytesMut) -> anyhow::Result<()> {
@@ -66,7 +66,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         dst: &mut BytesMut,
     ) -> anyhow::Result<()> {
         let padding_length = aead_2022::next_padding_length(&item);
-        let nonce_size = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
+        let nonce_size = udp::nonce_length(self.kind);
         let tag_size = self.kind.tag_size();
         let require_eih = self.kind.support_eih() && !context.identity_keys.is_empty();
         let eih_len = if require_eih { 16 } else { 0 };
@@ -125,7 +125,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         dst: &mut BytesMut,
     ) -> anyhow::Result<()> {
         let padding_length = aead_2022::next_padding_length(&item);
-        let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
+        let nonce_length = udp::nonce_length(self.kind);
         let tag_size = self.kind.tag_size();
         dst.reserve(nonce_length + 8 + 8 + 1 + 8 + 8 + 2 + padding_length as usize + address::length(address) + item.remaining() + tag_size);
         if nonce_length > 0 {
@@ -219,7 +219,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                     Ok((server_session_id, packet_id, text))
                 }
                 CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
-                    let (nonce, text) = src.split_at_mut(aead_2022::udp::nonce_length(kind).map_err(anyhow::Error::msg)?);
+                    let (nonce, text) = src.split_at_mut(aead_2022::udp::nonce_length(kind));
                     let session_id = {
                         let slice = &text[..8];
                         let slice: &[u64] = unsafe { slice::from_raw_parts(slice.as_ptr() as *const _, 1) };
@@ -238,7 +238,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             }
         }
 
-        let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
+        let nonce_length = udp::nonce_length(self.kind);
         let tag_size = self.kind.tag_size();
         let header_length = nonce_length + tag_size + 8 + 8 + 1 + 8 + 2;
         if src.remaining() < header_length {
@@ -265,7 +265,7 @@ impl<const N: usize> AEADCipherCodec<N> {
 
     // for server mode
     fn decode_client_packet_aead_2022(&self, context: &Context<N>, src: &mut BytesMut) -> Result<SessionPacket<N>, anyhow::Error> {
-        let nonce_length = udp::nonce_length(self.kind).map_err(anyhow::Error::msg)?;
+        let nonce_length = udp::nonce_length(self.kind);
         let tag_size = self.kind.tag_size();
         let user_manager = context.user_manager.as_ref();
         let require_eih = self.kind.support_eih() && user_manager.is_some_and(|u| u.user_count() > 0);
@@ -457,7 +457,7 @@ unsafe fn get_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> &CipherMe
     let key_ptr = key.as_ptr() as usize;
     cache.entry(CipherKey { kind, key: key_ptr, session_id }).or_insert_with(|| {
         debug!("[udp] new cache cipher {}|{}|{}", kind, key_ptr, session_id);
-        udp::init_cipher(kind, key, session_id)
+        udp::new_cipher(kind, key, session_id)
     })
 }
 
@@ -488,7 +488,7 @@ mod test {
         fn test_udp(cipher: CipherKind) -> anyhow::Result<()> {
             fn test_udp<const N: usize>(cipher: CipherKind) -> anyhow::Result<()> {
                 let password: String = rand::thread_rng().sample_iter(&Alphanumeric).take(N).map(char::from).collect();
-                let codec = AEADCipherCodec::new(cipher).map_err(|e| anyhow!(e))?;
+                let codec = AEADCipherCodec::new(cipher);
                 let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
                 let keys = password_to_keys(&password).map_err(|e| anyhow!(e))?;
                 let codec: SessionCodec<N> = SessionCodec::new(Context::new(Mode::Server, None, &keys.0, &keys.1), codec);

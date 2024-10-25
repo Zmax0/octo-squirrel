@@ -58,25 +58,26 @@ impl ChunkEncoder {
         Self { payload_limit, auth }
     }
 
-    fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+    fn encode_chunk(&mut self, src: &mut BytesMut, len: usize, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+        trace!("Encode chunk; len={}", len);
         let tag_size = self.auth.method.tag_size();
-        let encrypted_len = src.remaining().min(self.payload_limit - tag_size - self.size_bytes());
-        trace!("Encode payload; payload length={}", encrypted_len);
         dst.reserve(2 + tag_size);
-        let encrypted_size_bytes = &mut dst.chunk_mut()[..2 + tag_size];
-        let encrypted_size_bytes = unsafe { slice::from_raw_parts_mut(encrypted_size_bytes.as_mut_ptr(), encrypted_size_bytes.len()) };
-        dst.put_u16(encrypted_len as u16);
-        self.encode_size(encrypted_size_bytes)?;
+        let temp = &mut dst.chunk_mut()[..2 + tag_size];
+        let temp = unsafe { slice::from_raw_parts_mut(temp.as_mut_ptr(), temp.len()) };
+        dst.put_u16(len as u16);
+        self.encode_size(temp)?;
         unsafe { dst.advance_mut(tag_size) };
-        let mut payload_bytes = src.split_to(encrypted_len);
-        self.auth.seal(&mut payload_bytes)?;
-        dst.extend_from_slice(&payload_bytes);
+        let mut temp = src.split_to(len);
+        self.auth.seal(&mut temp)?;
+        dst.extend_from_slice(&temp);
         Ok(())
     }
 
     fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+        let limit = self.payload_limit - self.auth.method.tag_size() - self.size_bytes();
         while src.has_remaining() {
-            self.encode_chunk(&mut src, dst)?;
+            let len = src.remaining().min(limit);
+            self.encode_chunk(&mut src, len, dst)?;
         }
         Ok(())
     }

@@ -267,8 +267,7 @@ mod udp {
 
     use super::*;
     pub fn new_codec<'a, const N: usize>(config: &ServerConfig, context: Context<'a, N>) -> anyhow::Result<SessionCodec<'a, N>> {
-        let cipher = AEADCipherCodec::new(config.cipher).map_err(|e| anyhow!(e))?;
-        Ok(SessionCodec::<'a, N>::new(context, cipher))
+        Ok(SessionCodec::<'a, N>::new(context, AEADCipherCodec::new(config.cipher)))
     }
 }
 
