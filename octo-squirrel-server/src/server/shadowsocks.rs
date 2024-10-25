@@ -49,7 +49,7 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
             let user_manager = Arc::new(user_manager);
             tokio::join!(startup_udp::<16>(config, &user_manager), startup_tcp::<16>(config, &user_manager))
         }
-        CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => {
+        CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
             let mut user_manager: ServerUserManager<32> = ServerUserManager::new();
             for user in config.user.iter() {
                 user_manager.add_user(ServerUser::try_from(user).map_err(|e| anyhow!(e))?);
@@ -57,7 +57,7 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
             let user_manager = Arc::new(user_manager);
             tokio::join!(startup_udp::<32>(config, &user_manager), startup_tcp::<32>(config, &user_manager))
         }
-        _ => unreachable!(),
+        CipherKind::Unknown => bail!("unknown cipher kind"),
     };
     match res {
         (Ok(_), Ok(_)) => Ok(()),
@@ -68,11 +68,17 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
 }
 
 async fn startup_tcp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
+    if !config.mode.enable_tcp() {
+        return Ok(());
+    }
     let context = ServerContext::init(config, user_manager.clone())?;
     super::startup_tcp(context, config, |c| Ok(PayloadCodec::from(c))).await
 }
 
 async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
+    if !config.mode.enable_udp() {
+        return Ok(());
+    }
     let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
     let context = Context::new(Mode::Server, Some(user_manager.clone()), &key, &identity_keys);
     let codec = udp::new_codec::<N>(config, context)?;
@@ -261,8 +267,7 @@ mod udp {
 
     use super::*;
     pub fn new_codec<'a, const N: usize>(config: &ServerConfig, context: Context<'a, N>) -> anyhow::Result<SessionCodec<'a, N>> {
-        let cipher = AEADCipherCodec::new(config.cipher).map_err(|e| anyhow!(e))?;
-        Ok(SessionCodec::<'a, N>::new(context, cipher))
+        Ok(SessionCodec::<'a, N>::new(context, AEADCipherCodec::new(config.cipher)))
     }
 }
 

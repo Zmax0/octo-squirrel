@@ -1,20 +1,41 @@
+use aead::AeadCore;
+use aead::Key;
+use aead::KeyInit;
+use aead::KeySizeUser;
 use aes::cipher::BlockDecrypt;
 use aes::cipher::BlockEncrypt;
+use aes::cipher::Unsigned;
 use aes::Aes128;
 use aes::Aes256;
 use aes::Block;
 use anyhow::bail;
 use byte_string::ByteStr;
 use bytes::BytesMut;
+use chacha20poly1305::XChaCha20Poly1305;
 use log::trace;
 
 use crate::codec::aead::CipherKind;
 use crate::codec::aead::CipherMethod;
 
-pub fn nonce_length(kind: CipherKind) -> Result<usize, String> {
+pub fn nonce_length(kind: CipherKind) -> usize {
     match kind {
-        CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => Ok(0),
-        _ => Err(format!("{:?} is not an AEAD 2022 cipher", kind)),
+        CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => 0,
+        CipherKind::Aead2022Blake3ChaCha20Poly1305 => <XChaCha20Poly1305 as AeadCore>::NonceSize::USIZE,
+        _ => unreachable!("{} is not an AEAD 2022 cipher", kind),
+    }
+}
+
+pub fn new_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> CipherMethod {
+    match kind {
+        CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
+            let key = super::session_sub_key(key, &session_id.to_be_bytes());
+            CipherMethod::new(kind, &key)
+        }
+        CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+            let key = &key[..<XChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];
+            CipherMethod::XChaCha20Poly1305(XChaCha20Poly1305::new(Key::<XChaCha20Poly1305>::from_slice(key)))
+        }
+        _ => unreachable!("{} is not an AEAD 2022 cipher", kind),
     }
 }
 
@@ -33,7 +54,7 @@ pub fn aes_encrypt_in_place(kind: CipherKind, key: &[u8], header: &mut [u8]) -> 
             cipher.encrypt_block(block);
             Ok(())
         }
-        _ => bail!("{:?} is not an AEAD 2022 cipher", kind),
+        _ => bail!("{} is not an AEAD 2022 cipher", kind),
     }
 }
 
@@ -52,7 +73,7 @@ pub fn aes_decrypt_in_place(kind: CipherKind, key: &[u8], buf: &mut [u8]) -> any
             cipher.decrypt_block(block);
             Ok(())
         }
-        _ => bail!("{:?} is not an AEAD 2022 cipher", kind),
+        _ => bail!("{} is not an AEAD 2022 cipher", kind),
     }
 }
 
@@ -84,9 +105,4 @@ fn make_eih(kind: CipherKind, ipsk: &[u8], ipskn: &[u8], session_id_packet_id: &
     let res = aes_encrypt_in_place(kind, ipsk, identity_header);
     trace!("client EIH:{:?}, hash:{:?}", ByteStr::new(identity_header), ByteStr::new(plain_text));
     res
-}
-
-pub fn init_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> CipherMethod {
-    let key = super::session_sub_key(key, &session_id.to_be_bytes());
-    CipherMethod::new(kind, &key)
 }

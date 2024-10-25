@@ -28,13 +28,14 @@ Only support IPv4 at this time.
 
 ### Ciphers
 
-|                         | Shadowsocks |  VMess  |
-|:------------------------|:-----------:|:-------:|
-| aes-128-gcm             |   `C` `S`   | `C` `S` |
-| aes-256-gcm             |   `C` `S`   |         |
-| chacha20-poly1305       |   `C` `S`   | `C` `S` |
-| 2022-blake3-aes-128-gcm |   `C` `S`   |         |
-| 2022-blake3-aes-256-gcm |   `C` `S`   |         |
+|                               | Shadowsocks |  VMess  |
+|:------------------------------|:-----------:|:-------:|
+| aes-128-gcm                   |   `C` `S`   | `C` `S` |
+| aes-256-gcm                   |   `C` `S`   |         |
+| chacha20-poly1305             |   `C` `S`   | `C` `S` |
+| 2022-blake3-aes-128-gcm       |   `C` `S`   |         |
+| 2022-blake3-aes-256-gcm       |   `C` `S`   |         |
+| 2022-blake3-chacha20-poly1305 |   `C` `S`   |         |
 
 `C` for client `S` for server
 
@@ -48,15 +49,13 @@ Only support IPv4 at this time.
     {
         "port": 0,
         "index": 0,
+        "mode": "{mode}",
         "servers": [
             {
                 "cipher": "{cipher}",
                 "password": "{password}",
                 "port": "{port}",
-                "protocol": "{protocol}",
-                "networks": [
-                    "{networks}"
-                ]
+                "protocol": "{protocol}"
             }
         ],
         "ssl": {
@@ -76,11 +75,11 @@ Only support IPv4 at this time.
 
    > index: `servers[index]` will be the client config
 
+   > mode: (OPTIONAL) client listening mode, options are "tcp"(default), "udp", "tcp_and_udp"
+
    > protocol: "shadowsocks" | "vmess" | "trojan"
 
    > cipher: see Ciphers
-
-   > networks: see Transmission
 
    > ssl: (OPTIONAL) SSL specific configurations
 

@@ -127,13 +127,13 @@ impl Encoder<OutboundIn> for ServerAeadCodec {
                     let header: [u8; 4] = [session.response_header, option, 0, 0];
                     dst.extend_from_slice(
                         &cipher
-                            .encrypt(&header_len_iv.into(), Payload { msg: &(header.len() as u16).to_be_bytes(), aad: b"" })
+                            .encrypt(&header_len_iv.into(), Payload { msg: &(header.len() as u16).to_be_bytes(), aad: &[] })
                             .map_err(|e| anyhow!(e))?,
                     );
                     let payload_len_key = kdf::kdf16(&session.response_body_key, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]);
                     let cipher = Aes128Gcm::new_from_slice(&payload_len_key)?;
                     let payload_len_iv: [u8; NONCE_SIZE] = kdf::kdfn(&session.response_body_iv, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
-                    dst.extend_from_slice(&cipher.encrypt(&payload_len_iv.into(), Payload { msg: &header, aad: b"" }).map_err(|e| anyhow!(e))?);
+                    dst.extend_from_slice(&cipher.encrypt(&payload_len_iv.into(), Payload { msg: &header, aad: &[] }).map_err(|e| anyhow!(e))?);
                     let mut encoder = AEADBodyCodec::encoder(request_header, session)?;
                     let res = Self::encode(item.into(), dst, request_header, session, &mut encoder);
                     self.encode_state = EncodeState::Ready(Box::new(encoder));

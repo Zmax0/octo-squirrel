@@ -235,11 +235,11 @@ impl Authenticator {
     }
 
     fn seal(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), aead::Error> {
-        self.cipher.encrypt_in_place(self.counting.generate(nonce), b"", buffer)
+        self.cipher.encrypt_in_place(self.counting.generate(nonce), &[], buffer)
     }
 
     fn open(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), aead::Error> {
-        self.cipher.decrypt_in_place(self.counting.generate(nonce), b"", buffer)
+        self.cipher.decrypt_in_place(self.counting.generate(nonce), &[], buffer)
     }
 }
 

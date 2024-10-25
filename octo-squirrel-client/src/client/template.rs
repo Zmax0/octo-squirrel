@@ -54,7 +54,7 @@ use super::handshake;
 
 pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
     listener: TcpListener,
-    config: &ServerConfig,
+    config: ServerConfig,
     new_context: NewContext,
     new_codec: NewCodec,
 ) where
@@ -64,19 +64,19 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
     let server_addr: &'static str = Box::leak::<'static>(format!("{}:{}", config.host, config.port).into_boxed_str());
-    let context = new_context(config);
-    let config = Arc::new(config.clone());
+    let context = new_context(&config);
+    let config = Arc::new(config);
     match context {
         Ok(context) => {
-            while let Ok((mut inbound, src)) = listener.accept().await {
+            while let Ok((mut inbound, local_addr)) = listener.accept().await {
                 let context = context.clone();
                 let config = config.clone();
                 tokio::spawn(async move {
                     let handshake = handshake::get_request_addr(&mut inbound).await;
-                    if let Ok(request) = handshake {
-                        info!("[tcp] accept {}, peer={}, local={}", config.protocol, request, &src);
-                        match try_transfer_tcp(inbound, server_addr, &request, config.ssl.as_ref(), config.ws.as_ref(), context, new_codec).await {
-                            Ok(res) => info!("[tcp] relay complete, local={}, server={}, peer={}, {:?}", &src, &server_addr, request, res),
+                    if let Ok(peer_addr) = handshake {
+                        info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
+                        match try_transfer_tcp(inbound, server_addr, &peer_addr, &config.ssl, &config.ws, context, new_codec).await {
+                            Ok(res) => info!("[tcp] relay complete, local={}, server={}, peer={}, {:?}", &local_addr, &server_addr, peer_addr, res),
                             Err(e) => error!("[tcp] transfer failed; error={}", e),
                         }
                     } else {
@@ -94,8 +94,8 @@ pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
     inbound: TcpStream,
     server_addr: &'static str,
     peer_addr: &Address,
-    ssl: Option<&SslConfig>,
-    ws: Option<&WebSocketConfig>,
+    ssl: &Option<SslConfig>,
+    ws: &Option<WebSocketConfig>,
     context: Context,
     new_codec: NewCodec,
 ) -> Result<relay::Result>
@@ -105,7 +105,6 @@ where
 {
     let local_client = Framed::new(inbound, BytesCodec);
     let codec = new_codec(peer_addr, context)?;
-    // let server_addr: String = format!("{}:{}", config.host, config.port);
     Ok(match (ssl, ws) {
         (None, None) => {
             let outbound = TcpStream::connect(&server_addr).await?;

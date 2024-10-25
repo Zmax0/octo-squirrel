@@ -3,20 +3,17 @@ pub mod aead_2022;
 pub mod tcp;
 pub mod udp;
 
+use core::slice;
 use std::mem::size_of;
 
 use ::aead::Buffer;
 use bytes::Buf;
+use bytes::BufMut;
 use bytes::BytesMut;
 use log::trace;
 
 use super::aead::CipherMethod;
 use super::aead::IncreasingNonceGenerator;
-
-pub enum ChunkSizeParser {
-    Auth,
-    Empty,
-}
 
 pub struct Authenticator {
     method: CipherMethod,
@@ -32,10 +29,8 @@ impl Authenticator {
         size_of::<u16>() + self.method.tag_size()
     }
 
-    fn encode_size(&mut self, size: usize) -> Result<Vec<u8>, ::aead::Error> {
-        let mut bytes = ((size - self.method.tag_size()) as u16).to_be_bytes().to_vec();
-        self.seal(&mut bytes)?;
-        Ok(bytes)
+    fn encode_size(&mut self, bytes: &mut [u8]) -> Result<(), ::aead::Error> {
+        self.method.encrypt_in_place_detached(self.nonce_generator.generate(), &[], bytes)
     }
 
     fn decode_size(&mut self, data: &mut BytesMut) -> Result<usize, ::aead::Error> {
@@ -45,40 +40,44 @@ impl Authenticator {
     }
 
     fn seal(&mut self, plaintext: &mut dyn Buffer) -> Result<(), ::aead::Error> {
-        self.method.encrypt_in_place(self.nonce_generator.generate(), b"", plaintext)
+        self.method.encrypt_in_place(self.nonce_generator.generate(), &[], plaintext)
     }
 
     fn open(&mut self, ciphertext: &mut dyn Buffer) -> Result<(), ::aead::Error> {
-        self.method.decrypt_in_place(self.nonce_generator.generate(), b"", ciphertext)
+        self.method.decrypt_in_place(self.nonce_generator.generate(), &[], ciphertext)
     }
 }
 
 pub struct ChunkEncoder {
     payload_limit: usize,
     auth: Authenticator,
-    chunk: ChunkSizeParser,
 }
 
 impl ChunkEncoder {
-    fn new(payload_limit: usize, auth: Authenticator, chunk: ChunkSizeParser) -> Self {
-        Self { payload_limit, auth, chunk }
+    fn new(payload_limit: usize, auth: Authenticator) -> Self {
+        Self { payload_limit, auth }
     }
 
-    fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+    fn encode_chunk(&mut self, src: &mut BytesMut, len: usize, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+        trace!("Encode chunk; len={}", len);
         let tag_size = self.auth.method.tag_size();
-        let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.size_bytes());
-        trace!("Encode payload; payload length={}", encrypted_size);
-        let encrypted_size_bytes = self.encode_size(encrypted_size + tag_size)?;
-        dst.extend_from_slice(&encrypted_size_bytes);
-        let mut payload_bytes = src.split_to(encrypted_size);
-        self.auth.seal(&mut payload_bytes)?;
-        dst.extend_from_slice(&payload_bytes);
+        dst.reserve(2 + tag_size);
+        let temp = &mut dst.chunk_mut()[..2 + tag_size];
+        let temp = unsafe { slice::from_raw_parts_mut(temp.as_mut_ptr(), temp.len()) };
+        dst.put_u16(len as u16);
+        self.encode_size(temp)?;
+        unsafe { dst.advance_mut(tag_size) };
+        let mut temp = src.split_to(len);
+        self.auth.seal(&mut temp)?;
+        dst.extend_from_slice(&temp);
         Ok(())
     }
 
     fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+        let limit = self.payload_limit - self.auth.method.tag_size() - self.size_bytes();
         while src.has_remaining() {
-            self.encode_chunk(&mut src, dst)?;
+            let len = src.remaining().min(limit);
+            self.encode_chunk(&mut src, len, dst)?;
         }
         Ok(())
     }
@@ -90,17 +89,11 @@ impl ChunkEncoder {
     }
 
     fn size_bytes(&self) -> usize {
-        match self.chunk {
-            ChunkSizeParser::Auth => self.auth.size_bytes(),
-            ChunkSizeParser::Empty => 0,
-        }
+        self.auth.size_bytes()
     }
 
-    fn encode_size(&mut self, size: usize) -> Result<Vec<u8>, ::aead::Error> {
-        match self.chunk {
-            ChunkSizeParser::Auth => self.auth.encode_size(size),
-            ChunkSizeParser::Empty => Ok(Vec::with_capacity(0)),
-        }
+    fn encode_size(&mut self, size_bytes: &mut [u8]) -> Result<(), ::aead::Error> {
+        self.auth.encode_size(size_bytes)
     }
 }
 
@@ -111,13 +104,12 @@ enum DecodeState {
 
 pub struct ChunkDecoder {
     auth: Authenticator,
-    chunk: ChunkSizeParser,
     state: DecodeState,
 }
 
 impl ChunkDecoder {
-    fn new(auth: Authenticator, chunk: ChunkSizeParser) -> Self {
-        Self { auth, chunk, state: DecodeState::Length }
+    fn new(auth: Authenticator) -> Self {
+        Self { auth, state: DecodeState::Length }
     }
 
     fn decode_packet(&mut self, src: &mut BytesMut) -> Result<BytesMut, ::aead::Error> {
@@ -143,9 +135,9 @@ impl ChunkDecoder {
                         return Ok(());
                     }
                     dst.reserve(len);
-                    let mut payload_btyes = src.split_to(len);
-                    self.auth.open(&mut payload_btyes)?;
-                    dst.extend_from_slice(&payload_btyes);
+                    let mut payload_bytes = src.split_to(len);
+                    self.auth.open(&mut payload_bytes)?;
+                    dst.extend_from_slice(&payload_bytes);
                     self.state = DecodeState::Length;
                 }
             }
@@ -153,16 +145,10 @@ impl ChunkDecoder {
     }
 
     fn size_bytes(&self) -> usize {
-        match self.chunk {
-            ChunkSizeParser::Auth => self.auth.size_bytes(),
-            ChunkSizeParser::Empty => 0,
-        }
+        self.auth.size_bytes()
     }
 
     fn decode_size(&mut self, data: &mut BytesMut) -> Result<usize, ::aead::Error> {
-        match self.chunk {
-            ChunkSizeParser::Auth => self.auth.decode_size(data),
-            ChunkSizeParser::Empty => Ok(data.len()),
-        }
+        self.auth.decode_size(data)
     }
 }

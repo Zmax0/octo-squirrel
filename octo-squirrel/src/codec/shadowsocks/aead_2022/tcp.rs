@@ -40,24 +40,25 @@ pub fn new_decoder_with_eih<const N: usize>(
     kind: CipherKind,
     key: &[u8],
     salt: &[u8],
-    mut user_hash: [u8; 16],
+    eih: &[u8],
     identity: &mut Identity<N>,
     user_manager: &ServerUserManager<N>,
 ) -> Result<ChunkDecoder, anyhow::Error> {
     let identity_sub_key = blake3::derive_key("shadowsocks 2022 identity subkey", &[key, salt].concat());
-    let eih = user_hash;
+    let user_hash = &mut [0; 16];
+    user_hash.copy_from_slice(&eih[..16]);
     match kind {
-        CipherKind::Aead2022Blake3Aes128Gcm => Aes128EcbNoPadding::decrypt(&identity_sub_key, &mut user_hash),
-        CipherKind::Aead2022Blake3Aes256Gcm => Aes256EcbNoPadding::decrypt(&identity_sub_key, &mut user_hash),
-        _ => unreachable!("{:?} doesn't support EIH", kind),
+        CipherKind::Aead2022Blake3Aes128Gcm => Aes128EcbNoPadding::decrypt(&identity_sub_key, user_hash),
+        CipherKind::Aead2022Blake3Aes256Gcm => Aes256EcbNoPadding::decrypt(&identity_sub_key, user_hash),
+        _ => bail!("{} doesn't support EIH", kind),
     }
-    trace!("server EIH {:?}, hash: {:?}", ByteStr::new(&eih), ByteStr::new(&user_hash));
-    if let Some(user) = user_manager.get_user_by_hash(&user_hash) {
+    trace!("server EIH {:?}, hash: {:?}", ByteStr::new(eih), ByteStr::new(user_hash));
+    if let Some(user) = user_manager.get_user_by_hash(user_hash) {
         trace!("{} chosen by EIH", user);
         identity.user = Some(user.clone());
         Ok(super::new_decoder(kind, &user.key, salt))
     } else {
-        bail!("invalid client user identity {:?}", ByteStr::new(&user_hash))
+        bail!("invalid client user identity {:?}", ByteStr::new(user_hash))
     }
 }
 
@@ -83,7 +84,7 @@ fn make_eih(kind: &CipherKind, sub_key: &[u8], ipsk: &[u8], out: &mut BytesMut) 
     match kind {
         CipherKind::Aead2022Blake3Aes128Gcm => Aes128EcbNoPadding::encrypt(sub_key, &mut ipsk_encrypt_text, 16),
         CipherKind::Aead2022Blake3Aes256Gcm => Aes256EcbNoPadding::encrypt(sub_key, &mut ipsk_encrypt_text, 16),
-        _ => unreachable!("{:?} doesn't support EIH", kind),
+        _ => unreachable!("{} doesn't support EIH", kind),
     }
     trace!("client EIH:{:?}, hash:{:?}", ByteStr::new(&ipsk_encrypt_text), ByteStr::new(ipsk_plain_text));
     out.extend_from_slice(&ipsk_encrypt_text);

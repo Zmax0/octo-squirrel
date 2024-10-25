@@ -78,16 +78,29 @@ fn recognize_http(method: &str, mut path: &str) -> Result<Proxy, anyhow::Error> 
         Ok(Proxy::Https(Address::Domain(host, port)))
     } else {
         let h_end = path.rfind(':');
-        let h_v6_end: Option<usize> = path.rfind(']');
-        if h_end.is_none() || h_v6_end.map(|i| h_end.unwrap() < i).unwrap_or(false) {
-            let host = path.to_owned();
-            Ok(Proxy::Http(Address::Domain(host, 80)))
-        } else {
-            let h_end = h_end.unwrap();
-            let p_start = h_end + 1;
-            let host = path[..h_end].to_owned();
+        let h_v6_end = path.rfind(']');
+        enum Port {
+            Parse(usize),
+            Default,
+        }
+        if let Port::Parse(index) = match (h_end, h_v6_end) {
+            (None, _) => Port::Default,
+            (Some(h_end), None) => Port::Parse(h_end),
+            (Some(h_end), Some(h_v6_end)) => {
+                if h_end < h_v6_end {
+                    Port::Default
+                } else {
+                    Port::Parse(h_end)
+                }
+            }
+        } {
+            let p_start = index + 1;
+            let host = path[..index].to_owned();
             let port = path[p_start..].parse()?;
             Ok(Proxy::Http(Address::Domain(host, port)))
+        } else {
+            let host = path.to_owned();
+            Ok(Proxy::Http(Address::Domain(host, 80)))
         }
     }
 }

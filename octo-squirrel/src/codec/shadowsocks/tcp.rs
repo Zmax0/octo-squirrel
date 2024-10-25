@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -152,16 +151,13 @@ impl<const N: usize> AEADCipherCodec<N> {
         if src.remaining() < session.identity.salt.len() {
             return Ok(());
         }
-        let mut cursor = Cursor::new(src);
         if context.kind.is_aead_2022() {
-            self.init_aead_2022_payload_decoder(context, session, &mut cursor, dst)?
+            self.init_aead_2022_payload_decoder(context, session, src, dst)?
         } else {
-            let salt = cursor.copy_to_bytes(session.identity.salt.len());
+            let salt = src.split_to(session.identity.salt.len());
             trace!("[tcp] get request salt {}", Base64::encode_string(&salt));
             self.decoder = Some(super::aead::new_decoder(context.kind, &context.key, &salt).map_err(anyhow::Error::msg)?);
         }
-        let pos = cursor.position();
-        cursor.into_inner().advance(pos as usize);
         Ok(())
     }
 
@@ -169,7 +165,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         &mut self,
         context: &Context<N>,
         session: &mut Session<N>,
-        src: &mut Cursor<&mut BytesMut>,
+        src: &mut BytesMut,
         dst: &mut BytesMut,
     ) -> anyhow::Result<()> {
         let tag_size = context.kind.tag_size();
@@ -190,17 +186,14 @@ impl<const N: usize> AEADCipherCodec<N> {
         if src.remaining() < header_len {
             bail!("header too short, expecting {} bytes, but found {} bytes", header_len + N, src.remaining());
         }
-        let mut header = BytesMut::with_capacity(header_len);
-        unsafe { header.set_len(header_len) };
-        src.copy_to_slice(&mut header);
+        let mut header = src.split_to(header_len);
         let mut decoder = if require_eih {
-            let mut eih = [0; 16];
-            eih.copy_from_slice(&header.split_to(16));
+            let eih = header.split_to(16);
             aead_2022::tcp::new_decoder_with_eih(
                 context.kind,
                 &context.key,
                 &salt,
-                eih,
+                &eih,
                 &mut session.identity,
                 context.user_manager.as_ref().unwrap(),
             )?
@@ -208,10 +201,10 @@ impl<const N: usize> AEADCipherCodec<N> {
             aead_2022::new_decoder(context.kind, &context.key, &salt)
         };
         decoder.auth.open(&mut header).map_err(|e| anyhow!(e))?;
-        let stream_type_byte = header.get_u8();
-        let expect_stream_type_byte = session.mode.expect_u8();
-        if stream_type_byte != expect_stream_type_byte {
-            bail!("invalid stream type, expecting {}, but found {}", expect_stream_type_byte, stream_type_byte)
+        let stream_type = header.get_u8();
+        let expect_stream_type = session.mode.expect_u8();
+        if stream_type != expect_stream_type {
+            bail!("invalid stream type, expecting {}, but found {}", expect_stream_type, stream_type)
         }
         aead_2022::validate_timestamp(header.get_u64()).map_err(anyhow::Error::msg)?;
         if matches!(session.mode, Mode::Client) {
@@ -222,9 +215,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         if src.remaining() < length + tag_size {
             bail!("Invalid via request header length")
         }
-        let mut via = BytesMut::with_capacity(length + tag_size);
-        unsafe { via.set_len(length + tag_size) };
-        src.copy_to_slice(&mut via);
+        let mut via = src.split_to(length + tag_size);
         decoder.auth.open(&mut via).map_err(|e| anyhow!(e))?;
         self.decoder = Some(decoder);
         if matches!(session.mode, Mode::Server) && session.address.is_none() {

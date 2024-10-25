@@ -1,10 +1,13 @@
+use std::env;
 use std::fs;
 
+use futures::future::join_all;
 use log::error;
 use log::info;
 use octo_squirrel::config::ServerConfig;
 use octo_squirrel::protocol::Protocol;
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 use tokio_native_tls::native_tls;
 use tokio_native_tls::TlsAcceptor;
 use tokio_util::codec::Decoder;
@@ -15,7 +18,19 @@ mod template;
 mod trojan;
 mod vmess;
 
-pub async fn startup(config: ServerConfig) {
+pub async fn main() -> anyhow::Result<()> {
+    let servers = octo_squirrel::config::init_server()?;
+    if let Some(level) = env::args().nth(2) {
+        octo_squirrel::log::init(&level)?;
+    } else {
+        octo_squirrel::log::init("info")?;
+    }
+    let tasks: Vec<JoinHandle<()>> = servers.into_iter().map(|server| tokio::spawn(async move { startup(server).await })).collect();
+    join_all(tasks).await;
+    Ok(())
+}
+
+async fn startup(config: ServerConfig) {
     match config.protocol {
         Protocol::Shadowsocks => shadowsocks::startup(&config).await,
         Protocol::VMess => startup_tcp(&config, &config, vmess::new_codec).await,
@@ -35,6 +50,7 @@ where
         + 'static,
 {
     let listener = TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
+    info!("Tcp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
     match (&config.ssl, &config.ws) {
         (None, ws_config) => {
             while let Ok((inbound, _)) = listener.accept().await {
@@ -66,6 +82,5 @@ where
             }
         }
     }
-    info!("Tcp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
     Ok(())
 }

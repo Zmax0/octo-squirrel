@@ -100,7 +100,7 @@ impl Decoder for ClientAEADCodec {
                 let mut cursor = Cursor::new(src);
                 let header_length_bytes = cursor.copy_to_bytes(size_of::<u16>() + TAG_SIZE);
                 let mut header_length_bytes = BytesMut::from(&header_length_bytes[..]);
-                header_length_cipher.decrypt_in_place(&header_length_iv.into(), b"", &mut header_length_bytes).map_err(|e| anyhow!(e))?;
+                header_length_cipher.decrypt_in_place(&header_length_iv.into(), &[], &mut header_length_bytes).map_err(|e| anyhow!(e))?;
                 let header_length = header_length_bytes.get_u16() as usize;
                 if cursor.remaining() < header_length + TAG_SIZE {
                     info!(
@@ -117,7 +117,7 @@ impl Decoder for ClientAEADCodec {
                     Aes128Gcm::new_from_slice(&kdf::kdf16(&self.session.response_body_key, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_KEY]))?;
                 let header_iv: [u8; NONCE_SIZE] = kdf::kdfn(&self.session.response_body_iv, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
                 let mut header_bytes = src.split_to(header_length + TAG_SIZE);
-                header_cipher.decrypt_in_place(&header_iv.into(), b"", &mut header_bytes).map_err(|e| anyhow!(e))?;
+                header_cipher.decrypt_in_place(&header_iv.into(), &[], &mut header_bytes).map_err(|e| anyhow!(e))?;
                 if self.session.response_header != header_bytes[0] {
                     bail!("Unexpected response header: expecting {} but actually {}", self.session.response_header, header_bytes[0]);
                 }

@@ -121,7 +121,7 @@ pub(super) mod udp {
             outbound,
             DatagramPacketCodec::new(SessionCodec::new(
                 Context::new(Mode::Client, None, client.key, client.identity_keys),
-                AEADCipherCodec::new(client.kind).map_err(|e| anyhow!(e))?,
+                AEADCipherCodec::new(client.kind),
             )),
         );
         Ok(outbound_framed)
