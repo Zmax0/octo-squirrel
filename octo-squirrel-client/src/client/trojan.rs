@@ -135,9 +135,9 @@ pub(super) mod udp {
         template::new_wss_outbound(addr, codec, ssl_config, ws_config).await
     }
 
-    pub fn to_outbound_send(item: (BytesMut, &Address), _: SocketAddr) -> DatagramPacket {
+    pub fn to_outbound_send(item: (BytesMut, Address), _: SocketAddr) -> DatagramPacket {
         let (content, target) = item;
-        (content, target.clone())
+        (content, target)
     }
 
     pub fn to_inbound_recv(item: DatagramPacket, _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {

@@ -217,7 +217,7 @@ pub(super) mod udp {
         template::new_wss_outbound(server_addr, codec, ssl_config, ws_config).await
     }
 
-    pub fn to_outbound_send(item: (BytesMut, &Address), _: SocketAddr) -> BytesMut {
+    pub fn to_outbound_send(item: (BytesMut, Address), _: SocketAddr) -> BytesMut {
         item.0
     }
 

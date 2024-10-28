@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -175,18 +176,16 @@ impl<const N: usize> AEADCipherCodec<N> {
             require_eih = context.kind.support_eih() && context.user_manager.as_ref().is_some_and(|m| m.user_count() > 0);
         }
         let eih_len = if require_eih { 16 } else { 0 };
-        let mut salt = [0; N];
-        src.copy_to_slice(&mut salt);
-        trace!("[tcp] get request salt {:?}", ByteStr::new(&salt));
-        if context.check_nonce_and_set(&salt) {
-            bail!("detected repeated nonce salt {:?}", salt);
-        }
-        session.identity.request_salt = Some(salt);
         let header_len = eih_len + 1 + 8 + request_salt_len + 2 + tag_size;
         if src.remaining() < header_len {
             bail!("header too short, expecting {} bytes, but found {} bytes", header_len + N, src.remaining());
         }
-        let mut header = src.split_to(header_len);
+        let mut salt = [0; N];
+        let mut _src = Cursor::new(src);
+        _src.copy_to_slice(&mut salt);
+        trace!("[tcp] get request salt {:?}", ByteStr::new(&salt));
+        session.identity.request_salt = Some(salt);
+        let mut header = BytesMut::from(_src.copy_to_bytes(header_len));
         let mut decoder = if require_eih {
             let eih = header.split_to(16);
             aead_2022::tcp::new_decoder_with_eih(
@@ -212,18 +211,23 @@ impl<const N: usize> AEADCipherCodec<N> {
             trace!("[tcp] get request header salt {}", Base64::encode_string(session.identity.request_salt.as_ref().unwrap()));
         };
         let length = header.get_u16() as usize;
-        if src.remaining() < length + tag_size {
-            bail!("Invalid via request header length")
+        if _src.remaining() >= length + tag_size {
+            if context.check_nonce_and_set(&salt) {
+                bail!("detected repeated nonce salt {:?}", salt);
+            }
+            let position = _src.position();
+            let src = _src.into_inner();
+            src.advance(position as usize);
+            let mut via = src.split_to(length + tag_size);
+            decoder.auth.open(&mut via).map_err(|e| anyhow!(e))?;
+            self.decoder = Some(decoder);
+            if matches!(session.mode, Mode::Server) && session.address.is_none() {
+                session.address = Some(address::decode(&mut via)?);
+                let padding_len = via.get_u16();
+                via.advance(padding_len as usize);
+            }
+            dst.extend_from_slice(&via);
         }
-        let mut via = src.split_to(length + tag_size);
-        decoder.auth.open(&mut via).map_err(|e| anyhow!(e))?;
-        self.decoder = Some(decoder);
-        if matches!(session.mode, Mode::Server) && session.address.is_none() {
-            session.address = Some(address::decode(&mut via)?);
-            let padding_len = via.get_u16();
-            via.advance(padding_len as usize);
-        }
-        dst.extend_from_slice(&via);
         Ok(())
     }
 
