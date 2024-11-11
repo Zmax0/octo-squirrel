@@ -131,12 +131,9 @@ impl<const N: usize> AEADCipherCodec<N> {
         if src.is_empty() {
             return Ok(None);
         }
-        let mut dst = BytesMut::new();
-        if self.decoder.is_none() {
-            self.init_payload_decoder(context, session, src, &mut dst)?;
-        }
         match self.decoder {
             Some(ref mut decoder) => {
+                let mut dst = BytesMut::new();
                 decoder.decode_payload(src, &mut dst).map_err(|e| anyhow!(e))?;
                 if dst.is_empty() {
                     Ok(None)
@@ -144,22 +141,22 @@ impl<const N: usize> AEADCipherCodec<N> {
                     Ok(Some(dst))
                 }
             }
-            None => Ok(None),
+            None => self.init_payload_decoder(context, session, src),
         }
     }
 
-    fn init_payload_decoder(&mut self, context: &Context<N>, session: &mut Session<N>, src: &mut BytesMut, dst: &mut BytesMut) -> anyhow::Result<()> {
+    fn init_payload_decoder(&mut self, context: &Context<N>, session: &mut Session<N>, src: &mut BytesMut) -> anyhow::Result<Option<BytesMut>> {
         if src.remaining() < session.identity.salt.len() {
-            return Ok(());
+            return Ok(None);
         }
         if context.kind.is_aead_2022() {
-            self.init_aead_2022_payload_decoder(context, session, src, dst)?
+            self.init_aead_2022_payload_decoder(context, session, src)
         } else {
             let salt = src.split_to(session.identity.salt.len());
             trace!("[tcp] get request salt {}", Base64::encode_string(&salt));
             self.decoder = Some(super::aead::new_decoder(context.kind, &context.key, &salt).map_err(anyhow::Error::msg)?);
+            Ok(None)
         }
-        Ok(())
     }
 
     fn init_aead_2022_payload_decoder(
@@ -167,8 +164,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         context: &Context<N>,
         session: &mut Session<N>,
         src: &mut BytesMut,
-        dst: &mut BytesMut,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<BytesMut>> {
         let tag_size = context.kind.tag_size();
         let request_salt_len = if let Mode::Server = session.mode { 0 } else { N };
         let mut require_eih = false;
@@ -226,9 +222,9 @@ impl<const N: usize> AEADCipherCodec<N> {
                 let padding_len = via.get_u16();
                 via.advance(padding_len as usize);
             }
-            dst.extend_from_slice(&via);
+            return Ok(Some(via));
         }
-        Ok(())
+        Ok(None)
     }
 
     fn with_identity(context: &Context<N>, session: &Session<N>, key: &[u8], identity_keys: &[[u8; N]], dst: &mut BytesMut) {

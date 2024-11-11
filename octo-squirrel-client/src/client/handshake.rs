@@ -16,6 +16,7 @@ pub enum Proxy {
     Https(Address),
     Socks5,
     Unknown,
+    Error(String),
 }
 
 pub async fn get_request_addr(stream: &mut TcpStream) -> anyhow::Result<Address> {
@@ -34,25 +35,32 @@ pub async fn get_request_addr(stream: &mut TcpStream) -> anyhow::Result<Address>
                 let handshake = socks5::handshake::server::no_auth(stream, response).await?;
                 Ok(handshake.dst_addr)
             }
-            Proxy::Unknown => bail!("Unknown type of handshake"),
+            Proxy::Unknown => bail!("unknown type of handshake"),
+            Proxy::Error(msg) => bail!(msg),
         }
     })
     .await?
 }
 
 async fn recognize(stream: &mut TcpStream) -> Result<Proxy, anyhow::Error> {
-    let mut buf = [0; 1024];
-    let len = stream.peek(&mut buf).await?;
+    let mut buf = [0; 1];
+    stream.peek(&mut buf).await?;
     let version = SocksVersion::from(buf[0]);
     if matches!(version, SocksVersion::Socks5) {
         Ok(Proxy::Socks5)
     } else {
-        let mut headers = [httparse::EMPTY_HEADER; 16];
+        let mut buf = [0; 1024];
+        let len = stream.peek(&mut buf).await?;
+        let mut headers = [];
         let mut req = httparse::Request::new(&mut headers);
-        if let (Ok(_), Some(path), Some(method)) = (req.parse(&buf[..len]), req.path, req.method) {
-            Ok(recognize_http(method, path)?)
-        } else {
-            Ok(Proxy::Unknown)
+        match (req.parse(&buf[..len]), req.path, req.method) {
+            (_, Some(path), Some(method)) => Ok(recognize_http(method, path)?),
+            (_, None, Some(_)) => {
+                stream.write_all(b"HTTP/1.1 414 URI Too Long\r\n\r\n").await?;
+                stream.shutdown().await?;
+                Ok(Proxy::Error("URI too long".to_owned()))
+            }
+            _ => Ok(Proxy::Unknown),
         }
     }
 }
