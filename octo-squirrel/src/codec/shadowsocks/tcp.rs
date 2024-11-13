@@ -31,7 +31,7 @@ pub struct Context<const N: usize> {
     identity_keys: Vec<[u8; N]>,
     kind: CipherKind,
     user_manager: Option<Arc<ServerUserManager<N>>>,
-    nonce_cache: Mutex<LruCache<Vec<u8>, ()>>,
+    nonce_cache: Mutex<LruCache<[u8; N], ()>>,
 }
 
 impl<const N: usize> Context<N> {
@@ -40,19 +40,19 @@ impl<const N: usize> Context<N> {
         Self { key, identity_keys, kind, user_manager, nonce_cache }
     }
 
-    pub fn check_nonce_and_set(&self, nonce: &[u8]) -> bool {
+    pub fn check_nonce(&self, nonce: &[u8]) -> bool {
         if nonce.is_empty() {
             return false;
         }
         match self.nonce_cache.try_lock() {
-            Ok(mut set) => {
-                let res = set.get(nonce).is_some();
-                if !res {
-                    set.insert(nonce.to_vec(), ());
-                }
-                res
-            }
+            Ok(mut set) => set.get(nonce).is_some(),
             Err(_) => false,
+        }
+    }
+
+    pub fn set_nonce(&self, nonce: [u8; N]) {
+        if let Ok(mut set) = self.nonce_cache.try_lock() {
+            set.insert(nonce, ());
         }
     }
 }
@@ -179,6 +179,9 @@ impl<const N: usize> AEADCipherCodec<N> {
         let mut salt = [0; N];
         let mut _src = Cursor::new(src);
         _src.copy_to_slice(&mut salt);
+        if context.check_nonce(&salt) {
+            bail!("detected repeated nonce salt {:?}", salt);
+        }
         trace!("[tcp] get request salt {:?}", ByteStr::new(&salt));
         session.identity.request_salt = Some(salt);
         let mut header = BytesMut::from(_src.copy_to_bytes(header_len));
@@ -208,9 +211,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         };
         let length = header.get_u16() as usize;
         if _src.remaining() >= length + tag_size {
-            if context.check_nonce_and_set(&salt) {
-                bail!("detected repeated nonce salt {:?}", salt);
-            }
+            context.set_nonce(salt);
             let position = _src.position();
             let src = _src.into_inner();
             src.advance(position as usize);
