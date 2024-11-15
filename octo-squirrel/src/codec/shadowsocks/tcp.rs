@@ -309,7 +309,11 @@ mod test {
 
             match cipher {
                 CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_tcp::<16>(cipher),
-                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_tcp::<32>(cipher),
+                CipherKind::Aes256Gcm
+                | CipherKind::Aead2022Blake3Aes256Gcm
+                | CipherKind::ChaCha20Poly1305
+                | CipherKind::Aead2022Blake3ChaCha8Poly1305
+                | CipherKind::Aead2022Blake3ChaCha20Poly1305 => test_tcp::<32>(cipher),
                 _ => unreachable!(),
             }
         }

@@ -12,6 +12,7 @@ use anyhow::bail;
 use byte_string::ByteStr;
 use bytes::BytesMut;
 use chacha20poly1305::XChaCha20Poly1305;
+use chacha20poly1305::XChaCha8Poly1305;
 use log::trace;
 
 use crate::codec::aead::CipherKind;
@@ -20,6 +21,7 @@ use crate::codec::aead::CipherMethod;
 pub fn nonce_length(kind: CipherKind) -> usize {
     match kind {
         CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => 0,
+        CipherKind::Aead2022Blake3ChaCha8Poly1305 => <XChaCha8Poly1305 as AeadCore>::NonceSize::USIZE,
         CipherKind::Aead2022Blake3ChaCha20Poly1305 => <XChaCha20Poly1305 as AeadCore>::NonceSize::USIZE,
         _ => unreachable!("{} is not an AEAD 2022 cipher", kind),
     }
@@ -30,6 +32,10 @@ pub fn new_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> CipherMethod
         CipherKind::Aead2022Blake3Aes128Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
             let key = super::session_sub_key(key, &session_id.to_be_bytes());
             CipherMethod::new(kind, &key)
+        }
+        CipherKind::Aead2022Blake3ChaCha8Poly1305 => {
+            let key = &key[..<XChaCha8Poly1305 as KeySizeUser>::KeySize::USIZE];
+            CipherMethod::XChaCha8Poly1305(XChaCha8Poly1305::new(Key::<XChaCha8Poly1305>::from_slice(key)))
         }
         CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
             let key = &key[..<XChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];

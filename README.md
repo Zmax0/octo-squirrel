@@ -35,6 +35,7 @@ Only support IPv4 at this time.
 | chacha20-poly1305             |   `C` `S`   | `C` `S` |
 | 2022-blake3-aes-128-gcm       |   `C` `S`   |         |
 | 2022-blake3-aes-256-gcm       |   `C` `S`   |         |
+| 2022-blake3-chacha8-poly1305  |   `C` `S`   |         |
 | 2022-blake3-chacha20-poly1305 |   `C` `S`   |         |
 
 `C` for client `S` for server

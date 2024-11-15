@@ -106,7 +106,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                 cipher.encrypt_in_place_detached(&nonce, &[], text).map_err(|e| anyhow!(e))?;
                 Ok(())
             }
-            CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+            CipherKind::Aead2022Blake3ChaCha8Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 let (nonce, plaintext) = dst.split_at_mut(nonce_size);
                 let cipher = unsafe { get_cipher(self.kind, context.key, session.client_session_id) };
                 cipher.encrypt_in_place_detached(nonce, &[], plaintext).map_err(|e| anyhow!(e))?;
@@ -165,7 +165,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                 cipher.encrypt_in_place_detached(&nonce, &[], text).map_err(|e| anyhow!(e))?;
                 Ok(())
             }
-            CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+            CipherKind::Aead2022Blake3ChaCha8Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 let (nonce, plaintext) = dst.split_at_mut(nonce_length);
                 let cipher = unsafe { get_cipher(self.kind, context.key, session.server_session_id) };
                 cipher.encrypt_in_place_detached(nonce, &[], plaintext).map_err(|e| anyhow!(e))?;
@@ -218,7 +218,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                     let text = &text[..text.len() - tag_size];
                     Ok((server_session_id, packet_id, text))
                 }
-                CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+                CipherKind::Aead2022Blake3ChaCha8Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                     let (nonce, text) = src.split_at_mut(aead_2022::udp::nonce_length(kind));
                     let session_id = {
                         let slice = &text[..8];
@@ -303,7 +303,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                 cipher.decrypt_in_place(&nonce, &[], &mut packet).map_err(|e| anyhow!(e))?;
                 (session_id, packet_id, packet)
             }
-            CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+            CipherKind::Aead2022Blake3ChaCha8Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 let (nonce, text) = src.split_at_mut(nonce_length);
                 let session_id = {
                     let slice = &text[..8];
@@ -468,6 +468,7 @@ mod test {
     use std::net::SocketAddrV4;
 
     use anyhow::anyhow;
+    use bytes::Buf;
     use bytes::BytesMut;
     use rand::distributions::Alphanumeric;
     use rand::random;
@@ -495,15 +496,24 @@ mod test {
                 let mut dst = BytesMut::new();
                 let addr = Address::Socket(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, random())));
                 codec.encode((expect.as_bytes().into(), addr.clone(), Session::default()), &mut dst)?;
-                let actual = codec.decode(&mut dst)?.unwrap();
-                assert_eq!(String::from_utf8(actual.0.freeze().to_vec())?, expect);
-                assert_eq!(actual.1, addr);
+                let mut actual = BytesMut::new();
+                while dst.has_remaining() {
+                    if let Ok(Some(part)) = codec.decode(&mut dst) {
+                        actual.extend_from_slice(&part.0);
+                        assert_eq!(addr, part.1);
+                    }
+                }
+                assert_eq!(String::from_utf8(actual.to_vec())?, expect);
                 Ok(())
             }
 
             match cipher {
                 CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_udp::<16>(cipher),
-                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_udp::<32>(cipher),
+                CipherKind::Aes256Gcm
+                | CipherKind::Aead2022Blake3Aes256Gcm
+                | CipherKind::ChaCha20Poly1305
+                | CipherKind::Aead2022Blake3ChaCha8Poly1305
+                | CipherKind::Aead2022Blake3ChaCha20Poly1305 => test_udp::<32>(cipher),
                 _ => unreachable!(),
             }
         }

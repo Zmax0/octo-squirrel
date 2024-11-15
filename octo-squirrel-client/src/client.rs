@@ -53,6 +53,7 @@ async fn transfer_tcp(listener: TcpListener, current: ServerConfig) {
             CipherKind::Aes256Gcm
             | CipherKind::Aead2022Blake3Aes256Gcm
             | CipherKind::ChaCha20Poly1305
+            | CipherKind::Aead2022Blake3ChaCha8Poly1305
             | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 template::transfer_tcp(
                     listener,
@@ -87,6 +88,7 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             CipherKind::Aes256Gcm
             | CipherKind::Aead2022Blake3Aes256Gcm
             | CipherKind::ChaCha20Poly1305
+            | CipherKind::Aead2022Blake3ChaCha8Poly1305
             | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 template::transfer_udp(
                     socket,
