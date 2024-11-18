@@ -271,6 +271,7 @@ mod test {
     use anyhow::anyhow;
     use base64ct::Base64;
     use base64ct::Encoding;
+    use bytes::Buf;
     use bytes::BytesMut;
     use rand::distributions::Alphanumeric;
     use rand::Rng;
@@ -301,7 +302,12 @@ mod test {
                 let src = BytesMut::from(expect.as_str());
                 let mut dst = BytesMut::new();
                 codec.encode(&context, &mut session, src, &mut dst)?;
-                let actual = codec.decode(&context, &mut session, &mut dst)?.unwrap();
+                let mut actual = BytesMut::new();
+                while dst.has_remaining() {
+                    if let Some(part) = codec.decode(&context, &mut session, &mut dst)? {
+                        actual.extend_from_slice(&part);
+                    }
+                }
                 let actual = String::from_utf8(actual.freeze().to_vec())?;
                 assert_eq!(expect, actual);
                 Ok(())
