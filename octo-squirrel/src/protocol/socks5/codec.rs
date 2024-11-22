@@ -15,7 +15,7 @@ use super::Socks5AuthMethod;
 use super::Socks5CommandStatus;
 use super::Socks5CommandType;
 use super::VERSION;
-use crate::protocol::address::Address;
+use crate::codec::DatagramPacket;
 
 pub struct Socks5ClientEncoder;
 
@@ -117,7 +117,7 @@ impl Decoder for Socks5CommandResponseDecoder {
 pub struct Socks5UdpCodec;
 
 impl Decoder for Socks5UdpCodec {
-    type Item = (BytesMut, Address);
+    type Item = DatagramPacket;
 
     type Error = anyhow::Error;
 
@@ -137,10 +137,10 @@ impl Decoder for Socks5UdpCodec {
     }
 }
 
-impl Encoder<(BytesMut, Address)> for Socks5UdpCodec {
+impl Encoder<DatagramPacket> for Socks5UdpCodec {
     type Error = anyhow::Error;
 
-    fn encode(&mut self, item: (BytesMut, Address), dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: DatagramPacket, dst: &mut BytesMut) -> Result<(), Self::Error> {
         dst.extend_from_slice(&[0, 0, 0]); // Fragment
         address::encode(&item.1, dst);
         dst.extend_from_slice(&item.0);
