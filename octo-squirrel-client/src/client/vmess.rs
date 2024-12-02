@@ -133,8 +133,6 @@ impl Decoder for ClientAEADCodec {
 }
 
 pub(super) mod tcp {
-    use std::sync::Arc;
-
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::protocol::address::Address;
     use octo_squirrel::protocol::vmess::header::RequestCommand;
@@ -143,7 +141,7 @@ pub(super) mod tcp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_codec(addr: &Address, (kind, password): (CipherKind, Arc<String>)) -> anyhow::Result<ClientAEADCodec> {
+    pub fn new_codec(addr: &Address, (kind, password): (CipherKind, String)) -> anyhow::Result<ClientAEADCodec> {
         let security = if kind == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
         let header = RequestHeader::default(RequestCommand::TCP, security, addr.clone(), &password)?;
         Ok(ClientAEADCodec::new(header))

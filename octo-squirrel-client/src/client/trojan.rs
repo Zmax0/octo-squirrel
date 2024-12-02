@@ -5,7 +5,6 @@ enum CodecState {
 
 pub(super) mod tcp {
     use bytes::BufMut;
-    use bytes::Bytes;
     use bytes::BytesMut;
     use octo_squirrel::protocol::address::Address;
     use octo_squirrel::protocol::socks5::address;
@@ -19,8 +18,8 @@ pub(super) mod tcp {
 
     use super::CodecState;
 
-    pub fn new_codec(addr: &Address, password: Bytes) -> anyhow::Result<ClientCodec> {
-        Ok(ClientCodec::new(&password, Socks5CommandType::Connect as u8, addr.clone()))
+    pub fn new_codec(addr: &Address, password: String) -> anyhow::Result<ClientCodec> {
+        Ok(ClientCodec::new(password.as_bytes(), Socks5CommandType::Connect as u8, addr.clone()))
     }
 
     pub struct ClientCodec {

@@ -1,8 +1,6 @@
 use std::net::Ipv4Addr;
 use std::net::SocketAddrV4;
-use std::sync::Arc;
 
-use bytes::Bytes;
 use log::error;
 use log::info;
 use octo_squirrel::codec::aead::CipherKind;
@@ -65,8 +63,8 @@ async fn transfer_tcp(listener: TcpListener, current: ServerConfig) {
             }
             CipherKind::Unknown => error!("unknown cipher kind"),
         },
-        VMess => template::transfer_tcp(listener, current, |c| Ok((c.cipher, Arc::new(c.password.clone()))), vmess::tcp::new_codec).await,
-        Trojan => template::transfer_tcp(listener, current, |c| Ok(Bytes::from(c.password.clone())), trojan::tcp::new_codec).await,
+        VMess => template::transfer_tcp(listener, current, |c| Ok((c.cipher, c.password.clone())), vmess::tcp::new_codec).await,
+        Trojan => template::transfer_tcp(listener, current, |c| Ok(c.password.clone()), trojan::tcp::new_codec).await,
     }
 }
 

@@ -11,7 +11,6 @@ use digest::InvalidLength;
 use digest::Update;
 use digest::XofReader;
 use log::trace;
-use rand::Rng;
 use sha3::Shake128;
 use sha3::Shake128ReaderCore;
 
@@ -25,6 +24,7 @@ use crate::protocol::vmess::header::RequestHeader;
 use crate::protocol::vmess::header::RequestOption;
 use crate::protocol::vmess::header::SecurityType;
 use crate::protocol::vmess::session::Session;
+use crate::util::dice;
 
 const AUTH_LEN: &[u8] = b"auth_len";
 
@@ -54,12 +54,12 @@ impl AEADBodyCodec {
         }
         if header.option.contains(&RequestOption::AuthenticatedLength) {
             let key = session.chunk_key();
-            chunk = ChunkSizeParser::Auth(Self::new_aead_chunk_size_cipher(header.security, key)?);
+            chunk = ChunkSizeParser::Auth(new_aead_chunk_size_cipher(header.security, key)?);
         }
         let key: &[u8] = key(session);
         let cipher = match header.security {
-            SecurityType::Chacha20Poly1305 => Self::new_aead_cipher(header.security, &auth::generate_chacha20_poly1305_key(key)),
-            _ => Self::new_aead_cipher(header.security, key),
+            SecurityType::Chacha20Poly1305 => new_aead_cipher(header.security, &auth::generate_chacha20_poly1305_key(key)),
+            _ => new_aead_cipher(header.security, key),
         };
         let nonce = nonce(session);
         let shake = ShakeSizeParser::new(nonce);
@@ -74,21 +74,6 @@ impl AEADBodyCodec {
         Self::new(header, session, |s| s.decoder_key(), |s| s.decoder_nonce())
     }
 
-    fn new_aead_chunk_size_cipher(security: SecurityType, key: &[u8]) -> Result<Authenticator, InvalidLength> {
-        let key = &kdf::kdf16(key, vec![AUTH_LEN]);
-        match security {
-            SecurityType::Chacha20Poly1305 => Ok(Authenticator::new(Self::new_aead_cipher(security, &auth::generate_chacha20_poly1305_key(key)))),
-            _ => Ok(Authenticator::new(Self::new_aead_cipher(security, key))),
-        }
-    }
-
-    fn new_aead_cipher(security: SecurityType, key: &[u8]) -> CipherMethod {
-        match security {
-            SecurityType::Chacha20Poly1305 => CipherMethod::new(CipherKind::ChaCha20Poly1305, key),
-            _ => CipherMethod::new(CipherKind::Aes128Gcm, key),
-        }
-    }
-
     fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), aead::Error> {
         let padding_length = self.next_padding_length();
         trace!("Encode payload; padding length={}", padding_length);
@@ -100,7 +85,7 @@ impl AEADBodyCodec {
         self.auth.seal(&mut payload_bytes, session.encoder_nonce())?;
         dst.extend_from_slice(&payload_bytes);
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
-        rand::thread_rng().fill(&mut padding_bytes[..]);
+        dice::fill_bytes(&mut padding_bytes);
         dst.extend_from_slice(&padding_bytes);
         Ok(())
     }
@@ -192,6 +177,21 @@ impl AEADBodyCodec {
             ChunkSizeParser::Auth(ref mut parser) => parser.decode_size(data, nonce),
             ChunkSizeParser::Shake => Ok(self.shake.decode_size(data)),
         }
+    }
+}
+
+fn new_aead_chunk_size_cipher(security: SecurityType, key: &[u8]) -> Result<Authenticator, InvalidLength> {
+    let key = &kdf::kdf16(key, vec![AUTH_LEN]);
+    match security {
+        SecurityType::Chacha20Poly1305 => Ok(Authenticator::new(new_aead_cipher(security, &auth::generate_chacha20_poly1305_key(key)))),
+        _ => Ok(Authenticator::new(new_aead_cipher(security, key))),
+    }
+}
+
+fn new_aead_cipher(security: SecurityType, key: &[u8]) -> CipherMethod {
+    match security {
+        SecurityType::Chacha20Poly1305 => CipherMethod::new(CipherKind::ChaCha20Poly1305, key),
+        _ => CipherMethod::new(CipherKind::Aes128Gcm, key),
     }
 }
 
