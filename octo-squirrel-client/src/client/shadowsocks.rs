@@ -131,9 +131,9 @@ pub(super) mod udp {
         from
     }
 
-    pub fn to_outbound_send(item: (BytesMut, &Address), proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
+    pub fn to_outbound_send(item: DatagramPacket, proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
         let (content, target) = item;
-        ((content, target.clone()), proxy)
+        ((content, target), proxy)
     }
 
     pub fn to_inbound_recv(item: (DatagramPacket, SocketAddr), _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {

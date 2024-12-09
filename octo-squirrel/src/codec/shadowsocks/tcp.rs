@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -30,7 +31,7 @@ pub struct Context<const N: usize> {
     identity_keys: Vec<[u8; N]>,
     kind: CipherKind,
     user_manager: Option<Arc<ServerUserManager<N>>>,
-    nonce_cache: Mutex<LruCache<Vec<u8>, ()>>,
+    nonce_cache: Mutex<LruCache<[u8; N], ()>>,
 }
 
 impl<const N: usize> Context<N> {
@@ -39,19 +40,19 @@ impl<const N: usize> Context<N> {
         Self { key, identity_keys, kind, user_manager, nonce_cache }
     }
 
-    pub fn check_nonce_and_set(&self, nonce: &[u8]) -> bool {
+    pub fn check_nonce(&self, nonce: &[u8]) -> bool {
         if nonce.is_empty() {
             return false;
         }
         match self.nonce_cache.try_lock() {
-            Ok(mut set) => {
-                let res = set.get(nonce).is_some();
-                if !res {
-                    set.insert(nonce.to_vec(), ());
-                }
-                res
-            }
+            Ok(mut set) => set.get(nonce).is_some(),
             Err(_) => false,
+        }
+    }
+
+    pub fn set_nonce(&self, nonce: [u8; N]) {
+        if let Ok(mut set) = self.nonce_cache.try_lock() {
+            set.insert(nonce, ());
         }
     }
 }
@@ -130,12 +131,9 @@ impl<const N: usize> AEADCipherCodec<N> {
         if src.is_empty() {
             return Ok(None);
         }
-        let mut dst = BytesMut::new();
-        if self.decoder.is_none() {
-            self.init_payload_decoder(context, session, src, &mut dst)?;
-        }
         match self.decoder {
             Some(ref mut decoder) => {
+                let mut dst = BytesMut::new();
                 decoder.decode_payload(src, &mut dst).map_err(|e| anyhow!(e))?;
                 if dst.is_empty() {
                     Ok(None)
@@ -143,22 +141,22 @@ impl<const N: usize> AEADCipherCodec<N> {
                     Ok(Some(dst))
                 }
             }
-            None => Ok(None),
+            None => self.init_payload_decoder(context, session, src),
         }
     }
 
-    fn init_payload_decoder(&mut self, context: &Context<N>, session: &mut Session<N>, src: &mut BytesMut, dst: &mut BytesMut) -> anyhow::Result<()> {
+    fn init_payload_decoder(&mut self, context: &Context<N>, session: &mut Session<N>, src: &mut BytesMut) -> anyhow::Result<Option<BytesMut>> {
         if src.remaining() < session.identity.salt.len() {
-            return Ok(());
+            return Ok(None);
         }
         if context.kind.is_aead_2022() {
-            self.init_aead_2022_payload_decoder(context, session, src, dst)?
+            self.init_aead_2022_payload_decoder(context, session, src)
         } else {
             let salt = src.split_to(session.identity.salt.len());
             trace!("[tcp] get request salt {}", Base64::encode_string(&salt));
             self.decoder = Some(super::aead::new_decoder(context.kind, &context.key, &salt).map_err(anyhow::Error::msg)?);
+            Ok(None)
         }
-        Ok(())
     }
 
     fn init_aead_2022_payload_decoder(
@@ -166,8 +164,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         context: &Context<N>,
         session: &mut Session<N>,
         src: &mut BytesMut,
-        dst: &mut BytesMut,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<BytesMut>> {
         let tag_size = context.kind.tag_size();
         let request_salt_len = if let Mode::Server = session.mode { 0 } else { N };
         let mut require_eih = false;
@@ -175,18 +172,19 @@ impl<const N: usize> AEADCipherCodec<N> {
             require_eih = context.kind.support_eih() && context.user_manager.as_ref().is_some_and(|m| m.user_count() > 0);
         }
         let eih_len = if require_eih { 16 } else { 0 };
-        let mut salt = [0; N];
-        src.copy_to_slice(&mut salt);
-        trace!("[tcp] get request salt {:?}", ByteStr::new(&salt));
-        if context.check_nonce_and_set(&salt) {
-            bail!("detected repeated nonce salt {:?}", salt);
-        }
-        session.identity.request_salt = Some(salt);
         let header_len = eih_len + 1 + 8 + request_salt_len + 2 + tag_size;
         if src.remaining() < header_len {
             bail!("header too short, expecting {} bytes, but found {} bytes", header_len + N, src.remaining());
         }
-        let mut header = src.split_to(header_len);
+        let mut salt = [0; N];
+        let mut _src = Cursor::new(src);
+        _src.copy_to_slice(&mut salt);
+        if context.check_nonce(&salt) {
+            bail!("detected repeated nonce salt {:?}", salt);
+        }
+        trace!("[tcp] get request salt {:?}", ByteStr::new(&salt));
+        session.identity.request_salt = Some(salt);
+        let mut header = BytesMut::from(_src.copy_to_bytes(header_len));
         let mut decoder = if require_eih {
             let eih = header.split_to(16);
             aead_2022::tcp::new_decoder_with_eih(
@@ -212,19 +210,22 @@ impl<const N: usize> AEADCipherCodec<N> {
             trace!("[tcp] get request header salt {}", Base64::encode_string(session.identity.request_salt.as_ref().unwrap()));
         };
         let length = header.get_u16() as usize;
-        if src.remaining() < length + tag_size {
-            bail!("Invalid via request header length")
+        if _src.remaining() >= length + tag_size {
+            context.set_nonce(salt);
+            let position = _src.position();
+            let src = _src.into_inner();
+            src.advance(position as usize);
+            let mut via = src.split_to(length + tag_size);
+            decoder.auth.open(&mut via).map_err(|e| anyhow!(e))?;
+            self.decoder = Some(decoder);
+            if matches!(session.mode, Mode::Server) && session.address.is_none() {
+                session.address = Some(address::decode(&mut via)?);
+                let padding_len = via.get_u16();
+                via.advance(padding_len as usize);
+            }
+            return Ok(Some(via));
         }
-        let mut via = src.split_to(length + tag_size);
-        decoder.auth.open(&mut via).map_err(|e| anyhow!(e))?;
-        self.decoder = Some(decoder);
-        if matches!(session.mode, Mode::Server) && session.address.is_none() {
-            session.address = Some(address::decode(&mut via)?);
-            let padding_len = via.get_u16();
-            via.advance(padding_len as usize);
-        }
-        dst.extend_from_slice(&via);
-        Ok(())
+        Ok(None)
     }
 
     fn with_identity(context: &Context<N>, session: &Session<N>, key: &[u8], identity_keys: &[[u8; N]], dst: &mut BytesMut) {
@@ -270,6 +271,7 @@ mod test {
     use anyhow::anyhow;
     use base64ct::Base64;
     use base64ct::Encoding;
+    use bytes::Buf;
     use bytes::BytesMut;
     use rand::distributions::Alphanumeric;
     use rand::Rng;
@@ -300,7 +302,12 @@ mod test {
                 let src = BytesMut::from(expect.as_str());
                 let mut dst = BytesMut::new();
                 codec.encode(&context, &mut session, src, &mut dst)?;
-                let actual = codec.decode(&context, &mut session, &mut dst)?.unwrap();
+                let mut actual = BytesMut::new();
+                while dst.has_remaining() {
+                    if let Some(part) = codec.decode(&context, &mut session, &mut dst)? {
+                        actual.extend_from_slice(&part);
+                    }
+                }
                 let actual = String::from_utf8(actual.freeze().to_vec())?;
                 assert_eq!(expect, actual);
                 Ok(())
@@ -308,7 +315,11 @@ mod test {
 
             match cipher {
                 CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => test_tcp::<16>(cipher),
-                CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 => test_tcp::<32>(cipher),
+                CipherKind::Aes256Gcm
+                | CipherKind::Aead2022Blake3Aes256Gcm
+                | CipherKind::ChaCha20Poly1305
+                | CipherKind::Aead2022Blake3ChaCha8Poly1305
+                | CipherKind::Aead2022Blake3ChaCha20Poly1305 => test_tcp::<32>(cipher),
                 _ => unreachable!(),
             }
         }

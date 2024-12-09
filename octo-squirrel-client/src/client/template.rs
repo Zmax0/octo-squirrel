@@ -89,7 +89,6 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
     }
 }
 
-#[inline]
 pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
     inbound: TcpStream,
     server_addr: &'static str,
@@ -178,7 +177,7 @@ where
     Key: Ord + Clone + Debug + Send + Sync + 'static,
     NewOut: for<'a> AsyncP3G2<SocketAddr, &'a Address, &'a Context, Out, OutRecv, Output = Result<Out, anyhow::Error>> + Copy,
     Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
-    ToOutSend: FnOnce((BytesMut, &Address), SocketAddr) -> OutSend + Copy,
+    ToOutSend: FnOnce(DatagramPacket, SocketAddr) -> OutSend + Copy,
     ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
     OutRecv: Send + Sync + 'static,
 {
@@ -206,32 +205,38 @@ where
             // local->client|inbound
             Some(Ok(((content, target), sender))) = local_client.next() => {
                 let key = new_key(sender, &target);
-                if let Entry::Vacant(entry) = client_server_cache.entry(key.clone()) {
-                    let target = target.clone();
-                    debug!("[udp] new binding; key={:?}", &key);
-                    // client->server|outbound, server->client|outbound
-                    let (client_server, mut server_client) = new_out(server_addr, &target, &context).await?.split();
-                    let _client_local_tx = client_local_tx.clone();
-                    let _key = key.clone();
-                    let relay_task = tokio::spawn(async move {
-                        // server->client|outbound
-                        while let Some(next) = server_client.next().await {
-                            match next {
-                                Ok(outbound_recv) => {
-                                    // client->local|mpsc
-                                    _client_local_tx
-                                    .send((to_inbound_recv(outbound_recv, &target, sender), _key.clone()))
-                                    .await
-                                    .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
+                let _key = key.clone();
+                match client_server_cache.entry(key) {
+                    Entry::Vacant(entry) => {
+                        debug!("[udp] new binding; key={:?}", &_key);
+                        // client->server|outbound, server->client|outbound
+                        let (mut client_server, mut server_client) = new_out(server_addr, &target, &context).await?.split();
+                        let _client_local_tx = client_local_tx.clone();
+                        let _target = target.clone();
+                        let relay_task = tokio::spawn(async move {
+                            // server->client|outbound
+                            while let Some(next) = server_client.next().await {
+                                match next {
+                                    Ok(outbound_recv) => {
+                                        // client->local|mpsc
+                                        _client_local_tx
+                                            .send((to_inbound_recv(outbound_recv, &_target, sender), _key.clone()))
+                                            .await
+                                            .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
+                                    }
+                                    Err(e) => error!("[udp] server*-client decode failed; error={}", e),
                                 }
-                                Err(e) => error!("[udp] server*-client decode failed; error={}", e),
                             }
-                        }
-                    });
-                    entry.insert(Binding { sink: client_server, relay_task });
+                        });
+                        // client->server|outbound
+                        client_server.send(to_outbound_send((content, target), server_addr)).await?;
+                        entry.insert(Binding { sink: client_server, relay_task });
+                    }
+                    Entry::Occupied(entry) => {
+                        // client->server|outbound
+                        entry.into_mut().sink.send(to_outbound_send((content, target), server_addr)).await?;
+                    }
                 }
-                // client->server|outbound
-                client_server_cache.get_mut(&key).unwrap().sink.send(to_outbound_send((content, &target), server_addr)).await?;
             }
             else => break,
         }
@@ -295,7 +300,6 @@ where
     Ok(WebSocketFramed::new(outbound, codec))
 }
 
-#[inline]
 fn new_ws_builder<'a>(ip: IpAddr, port: u16, ws_config: &WebSocketConfig) -> Result<ClientBuilder<'a>> {
     let mut host = None;
     let mut builder = ClientBuilder::new();

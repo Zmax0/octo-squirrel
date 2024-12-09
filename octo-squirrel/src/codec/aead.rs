@@ -15,7 +15,9 @@ use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::Aes256Gcm;
 use chacha20poly1305::ChaCha20Poly1305;
+use chacha20poly1305::ChaCha8Poly1305;
 use chacha20poly1305::XChaCha20Poly1305;
+use chacha20poly1305::XChaCha8Poly1305;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -23,7 +25,9 @@ use serde::Serialize;
 pub enum CipherMethod {
     Aes128Gcm(Aes128Gcm),
     Aes256Gcm(Aes256Gcm),
+    ChaCha8Poly1305(ChaCha8Poly1305),
     ChaCha20Poly1305(ChaCha20Poly1305),
+    XChaCha8Poly1305(XChaCha8Poly1305),
     XChaCha20Poly1305(XChaCha20Poly1305),
 }
 
@@ -32,7 +36,9 @@ macro_rules! method_match_aead_trait {
         match $self {
             Self::Aes128Gcm(_) => <Aes128Gcm as $trait>::$type::USIZE,
             Self::Aes256Gcm(_) => <Aes256Gcm as $trait>::$type::USIZE,
+            Self::ChaCha8Poly1305(_) => <ChaCha8Poly1305 as $trait>::$type::USIZE,
             Self::ChaCha20Poly1305(_) => <ChaCha20Poly1305 as $trait>::$type::USIZE,
+            Self::XChaCha8Poly1305(_) => <XChaCha8Poly1305 as $trait>::$type::USIZE,
             Self::XChaCha20Poly1305(_) => <XChaCha20Poly1305 as $trait>::$type::USIZE,
         }
     };
@@ -43,7 +49,9 @@ macro_rules! method_match_aead_fn {
         match $self {
             Self::Aes128Gcm(cipher) => cipher.$fn$param,
             Self::Aes256Gcm(cipher) => cipher.$fn$param,
+            Self::ChaCha8Poly1305(cipher) => cipher.$fn$param,
             Self::ChaCha20Poly1305(cipher) => cipher.$fn$param,
+            Self::XChaCha8Poly1305(cipher) => cipher.$fn$param,
             Self::XChaCha20Poly1305(cipher) => cipher.$fn$param,
         }
     };
@@ -63,6 +71,10 @@ impl CipherMethod {
             CipherKind::ChaCha20Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 let key = &key[..<ChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];
                 Self::ChaCha20Poly1305(ChaCha20Poly1305::new(Key::<ChaCha20Poly1305>::from_slice(key)))
+            }
+            CipherKind::Aead2022Blake3ChaCha8Poly1305 => {
+                let key = &key[..<ChaCha8Poly1305 as KeySizeUser>::KeySize::USIZE];
+                Self::ChaCha8Poly1305(ChaCha8Poly1305::new(Key::<ChaCha8Poly1305>::from_slice(key)))
             }
             CipherKind::Unknown => panic!("unknown cipher kind"),
         }
@@ -121,6 +133,8 @@ pub enum CipherKind {
     Aead2022Blake3Aes128Gcm,
     #[serde(rename = "2022-blake3-aes-256-gcm")]
     Aead2022Blake3Aes256Gcm,
+    #[serde(rename = "2022-blake3-chacha8-poly1305")]
+    Aead2022Blake3ChaCha8Poly1305,
     #[serde(rename = "2022-blake3-chacha20-poly1305")]
     Aead2022Blake3ChaCha20Poly1305,
     #[default]
@@ -133,6 +147,7 @@ macro_rules! kind_match_aead {
             Self::Aes128Gcm | Self::Aead2022Blake3Aes128Gcm => <Aes128Gcm as $trait>::$type::USIZE,
             Self::Aes256Gcm | Self::Aead2022Blake3Aes256Gcm => <Aes256Gcm as $trait>::$type::USIZE,
             Self::ChaCha20Poly1305 | Self::Aead2022Blake3ChaCha20Poly1305 => <ChaCha20Poly1305 as $trait>::$type::USIZE,
+            Self::Aead2022Blake3ChaCha8Poly1305 => <ChaCha8Poly1305 as $trait>::$type::USIZE,
             Self::Unknown => panic!("unknown cipher kind"),
         }
     };
@@ -140,7 +155,13 @@ macro_rules! kind_match_aead {
 
 impl CipherKind {
     pub const fn is_aead_2022(&self) -> bool {
-        matches!(self, Self::Aead2022Blake3Aes128Gcm | Self::Aead2022Blake3Aes256Gcm | Self::Aead2022Blake3ChaCha20Poly1305)
+        matches!(
+            self,
+            Self::Aead2022Blake3Aes128Gcm
+                | Self::Aead2022Blake3Aes256Gcm
+                | Self::Aead2022Blake3ChaCha8Poly1305
+                | Self::Aead2022Blake3ChaCha20Poly1305
+        )
     }
 
     pub const fn support_eih(&self) -> bool {
@@ -164,6 +185,7 @@ impl Display for CipherKind {
             CipherKind::ChaCha20Poly1305 => write!(f, "chacha20-poly1305"),
             CipherKind::Aead2022Blake3Aes128Gcm => write!(f, "2022-blake3-aes-128-gcm"),
             CipherKind::Aead2022Blake3Aes256Gcm => write!(f, "2022-blake3-aes-256-gcm"),
+            CipherKind::Aead2022Blake3ChaCha8Poly1305 => write!(f, "2022-blake3-chacha8-poly1305"),
             CipherKind::Aead2022Blake3ChaCha20Poly1305 => write!(f, "2022-blake3-chacha20-poly1305"),
             CipherKind::Unknown => write!(f, "?"),
         }

@@ -49,7 +49,11 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
             let user_manager = Arc::new(user_manager);
             tokio::join!(startup_udp::<16>(config, &user_manager), startup_tcp::<16>(config, &user_manager))
         }
-        CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm | CipherKind::ChaCha20Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
+        CipherKind::Aes256Gcm
+        | CipherKind::Aead2022Blake3Aes256Gcm
+        | CipherKind::ChaCha20Poly1305
+        | CipherKind::Aead2022Blake3ChaCha8Poly1305
+        | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
             let mut user_manager: ServerUserManager<32> = ServerUserManager::new();
             for user in config.user.iter() {
                 user_manager.add_user(ServerUser::try_from(user).map_err(|e| anyhow!(e))?);

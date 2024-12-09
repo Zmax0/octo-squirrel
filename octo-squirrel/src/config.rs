@@ -6,8 +6,6 @@ use std::fmt::Display;
 use std::fs::File;
 #[cfg(any(feature = "client", feature = "server"))]
 use std::io;
-#[cfg(any(feature = "client", feature = "server"))]
-use std::io::BufReader;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -123,17 +121,21 @@ pub struct User {
 
 #[cfg(feature = "client")]
 pub fn init_client() -> Result<ClientConfig, io::Error> {
+    use std::io::Read;
     let path = args().nth(1).unwrap_or("config.json".to_owned());
-    let file = File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path));
-    let config: ClientConfig = serde_json::from_reader(BufReader::new(file))?;
+    let mut json = String::new();
+    File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path)).read_to_string(&mut json)?;
+    let config: ClientConfig = serde_json::from_str(&json)?;
     Ok(config)
 }
 
 #[cfg(feature = "server")]
 pub fn init_server() -> Result<Vec<ServerConfig>, io::Error> {
+    use std::io::Read;
     let path = args().nth(1).unwrap_or("config.json".to_owned());
-    let file = File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path));
-    let config: Vec<ServerConfig> = serde_json::from_reader(BufReader::new(file))?;
+    let mut json = String::new();
+    File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path)).read_to_string(&mut json)?;
+    let config: Vec<ServerConfig> = serde_json::from_str(&json)?;
     Ok(config)
 }
 

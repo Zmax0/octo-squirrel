@@ -4,9 +4,10 @@ use std::fmt::Formatter;
 
 use base64ct::Encoding;
 use rand::random;
-use rand::Rng;
 use sha2::Digest;
 use sha2::Sha256;
+
+use crate::util::dice;
 
 macro_rules! session_impl {
     ($name:ident) => {
@@ -58,8 +59,8 @@ impl ClientSession {
         let mut request_body_iv: [u8; 16] = [0; 16];
         let mut request_body_key: [u8; 16] = [0; 16];
         let response_header = random();
-        rand::thread_rng().fill(&mut request_body_iv[..]);
-        rand::thread_rng().fill(&mut request_body_key[..]);
+        dice::fill_bytes(&mut request_body_iv);
+        dice::fill_bytes(&mut request_body_key);
         Self::init(request_body_iv, request_body_key, response_header)
     }
 }

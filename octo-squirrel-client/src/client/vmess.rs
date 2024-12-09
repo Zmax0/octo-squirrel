@@ -67,7 +67,7 @@ impl Encoder<BytesMut> for ClientAEADCodec {
                 header.extend_from_slice(&dice::roll_bytes(padding_len as usize)); // padding
                 header.put_u32(fnv::fnv1a32(&header));
                 dst.extend_from_slice(&encrypt::seal_header(&self.header.id, header.freeze())?);
-                self.body_encoder = Some(AEADBodyCodec::encoder(&self.header, &mut self.session)?);
+                self.body_encoder = Some(AEADBodyCodec::new_encoder(&self.header, &mut self.session)?);
                 self.encode(item, dst)
             }
             Some(ref mut encoder) => match self.header.command {
@@ -121,7 +121,7 @@ impl Decoder for ClientAEADCodec {
                 if self.session.response_header != header_bytes[0] {
                     bail!("Unexpected response header: expecting {} but actually {}", self.session.response_header, header_bytes[0]);
                 }
-                self.body_decoder = Some(AEADBodyCodec::decoder(&self.header, &mut self.session)?);
+                self.body_decoder = Some(AEADBodyCodec::new_decoder(&self.header, &mut self.session)?);
                 self.decode(src)
             }
             Some(ref mut decoder) => match self.header.command {
@@ -133,8 +133,6 @@ impl Decoder for ClientAEADCodec {
 }
 
 pub(super) mod tcp {
-    use std::sync::Arc;
-
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::protocol::address::Address;
     use octo_squirrel::protocol::vmess::header::RequestCommand;
@@ -143,7 +141,7 @@ pub(super) mod tcp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_codec(addr: &Address, (kind, password): (CipherKind, Arc<String>)) -> anyhow::Result<ClientAEADCodec> {
+    pub fn new_codec(addr: &Address, (kind, password): (CipherKind, String)) -> anyhow::Result<ClientAEADCodec> {
         let security = if kind == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
         let header = RequestHeader::default(RequestCommand::TCP, security, addr.clone(), &password)?;
         Ok(ClientAEADCodec::new(header))
@@ -217,7 +215,7 @@ pub(super) mod udp {
         template::new_wss_outbound(server_addr, codec, ssl_config, ws_config).await
     }
 
-    pub fn to_outbound_send(item: (BytesMut, &Address), _: SocketAddr) -> BytesMut {
+    pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> BytesMut {
         item.0
     }
 

@@ -134,7 +134,7 @@ impl Encoder<OutboundIn> for ServerAeadCodec {
                     let cipher = Aes128Gcm::new_from_slice(&payload_len_key)?;
                     let payload_len_iv: [u8; NONCE_SIZE] = kdf::kdfn(&session.response_body_iv, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
                     dst.extend_from_slice(&cipher.encrypt(&payload_len_iv.into(), Payload { msg: &header, aad: &[] }).map_err(|e| anyhow!(e))?);
-                    let mut encoder = AEADBodyCodec::encoder(request_header, session)?;
+                    let mut encoder = AEADBodyCodec::new_encoder(request_header, session)?;
                     let res = Self::encode(item.into(), dst, request_header, session, &mut encoder);
                     self.encode_state = EncodeState::Ready(Box::new(encoder));
                     res
@@ -185,7 +185,7 @@ impl Decoder for ServerAeadCodec {
                         let mut header = RequestHeader::new(version, command, RequestOption::from_mask(option), security, address, key);
                         let mut session = ServerSession::new(request_body_iv, request_body_key, response_header);
                         debug!("New session; {}", session);
-                        let mut decoder = AEADBodyCodec::decoder(&header, &mut session)?;
+                        let mut decoder = AEADBodyCodec::new_decoder(&header, &mut session)?;
                         let res = Self::decode_header(src, &mut header, &mut session, &mut decoder);
                         self.decode_state = DecodeState::Ready(header, session, Box::new(decoder));
                         res
