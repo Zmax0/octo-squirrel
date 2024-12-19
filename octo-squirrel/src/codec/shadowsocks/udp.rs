@@ -347,8 +347,8 @@ pub struct SessionCodec<'a, const N: usize> {
     cipher: AEADCipherCodec<N>,
 }
 
-impl<'a, const N: usize> SessionCodec<'_, N> {
-    pub fn new(context: Context<'a, N>, cipher: AEADCipherCodec<N>) -> SessionCodec<'_, N> {
+impl<'a, const N: usize> SessionCodec<'a, N> {
+    pub fn new(context: Context<'a, N>, cipher: AEADCipherCodec<N>) -> SessionCodec<'a, N> {
         SessionCodec { context, cipher }
     }
 
@@ -430,8 +430,6 @@ impl<const N: usize> From<Mode> for Session<N> {
     }
 }
 
-static mut CACHE: OnceLock<LruCache<CipherKey, CipherMethod>> = OnceLock::new();
-
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 struct CipherKey {
     kind: CipherKind,
@@ -451,9 +449,11 @@ impl Ord for CipherKey {
     }
 }
 
+static CACHE: OnceLock<LruCache<CipherKey, CipherMethod>> = OnceLock::new();
+
 unsafe fn get_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> &CipherMethod {
-    CACHE.get_or_init(|| LruCache::with_expiry_duration_and_capacity(Duration::from_secs(30), 102400));
-    let cache = CACHE.get_mut().expect("empty cipher cache");
+    let cache = CACHE.get_or_init(|| LruCache::with_expiry_duration_and_capacity(Duration::from_secs(30), 102400));
+    let cache = std::ptr::from_ref(cache).cast_mut().as_mut().expect("empty cipher cache");
     let key_ptr = key.as_ptr() as usize;
     cache.entry(CipherKey { kind, key: key_ptr, session_id }).or_insert_with(|| {
         debug!("[udp] new cache cipher {}|{}|{}", kind, key_ptr, session_id);
