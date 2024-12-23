@@ -42,9 +42,9 @@ impl AEADBodyCodec {
         header: &RequestHeader,
         session: &mut dyn Session,
         key: impl FnOnce(&dyn Session) -> &[u8],
-        nonce: impl FnOnce(&mut dyn Session) -> &mut [u8],
+        nonce: impl FnOnce(&dyn Session) -> &[u8],
     ) -> Result<Self, InvalidLength> {
-        let mut chunk = ChunkSizeParser::Plain(PlainSizeParser);
+        let mut chunk = ChunkSizeParser::Plain;
         let mut padding = PaddingLengthGenerator::Empty;
         if header.option.contains(&RequestOption::ChunkMasking) {
             chunk = ChunkSizeParser::Shake;
@@ -78,11 +78,11 @@ impl AEADBodyCodec {
         let padding_length = self.next_padding_length();
         trace!("Encode payload; padding length={}", padding_length);
         let tag_size = self.auth.cipher.tag_size();
-        let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.size_bytes() - padding_length);
+        let encrypted_size = src.remaining().min(self.payload_limit - tag_size - self.chunk.size_bytes() - padding_length);
         let encrypted_size_bytes = self.encode_size(encrypted_size + padding_length + tag_size, session.chunk_nonce())?;
         dst.extend_from_slice(&encrypted_size_bytes);
         let mut payload_bytes = src.split_to(encrypted_size);
-        self.auth.seal(&mut payload_bytes, session.encoder_nonce())?;
+        self.auth.seal(&mut payload_bytes, session.encoder_nonce_mut())?;
         dst.extend_from_slice(&payload_bytes);
         let mut padding_bytes: Vec<u8> = vec![0; padding_length];
         dice::fill_bytes(&mut padding_bytes);
@@ -99,17 +99,9 @@ impl AEADBodyCodec {
 
     fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Result<Vec<u8>, aead::Error> {
         match self.chunk {
-            ChunkSizeParser::Plain(ref mut parser) => Ok(parser.encode_size(size)),
+            ChunkSizeParser::Plain => Ok(PlainSizeParser::encode_size(size)),
             ChunkSizeParser::Auth(ref mut parser) => parser.encode_size(size, nonce),
             ChunkSizeParser::Shake => Ok(self.shake.encode_size(size)),
-        }
-    }
-
-    fn size_bytes(&self) -> usize {
-        match self.chunk {
-            ChunkSizeParser::Plain(_) => PlainSizeParser::size_bytes(),
-            ChunkSizeParser::Auth(ref parser) => parser.size_bytes(),
-            ChunkSizeParser::Shake => ShakeSizeParser::size_bytes(),
         }
     }
 
@@ -126,9 +118,9 @@ impl AEADBodyCodec {
 
     pub fn decode_packet(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, aead::Error> {
         let padding_length = self.next_padding_length();
-        let packet_length = self.decode_size(&mut src.split_to(self.size_bytes()), session.chunk_nonce())? - padding_length;
+        let packet_length = self.decode_size(&mut src.split_to(self.chunk.size_bytes()), session.chunk_nonce())? - padding_length;
         let mut packet_bytes = src.split_to(packet_length);
-        self.auth.open(&mut packet_bytes, session.decoder_nonce())?;
+        self.auth.open(&mut packet_bytes, session.decoder_nonce_mut())?;
         src.advance(padding_length);
         Ok(Some(packet_bytes))
     }
@@ -143,7 +135,7 @@ impl AEADBodyCodec {
                     self.state = DecodeState::Length(padding)
                 }
                 DecodeState::Length(padding) => {
-                    let size_bytes = self.size_bytes();
+                    let size_bytes = self.chunk.size_bytes();
                     if src.remaining() < size_bytes {
                         break;
                     }
@@ -157,7 +149,7 @@ impl AEADBodyCodec {
                     }
                     dst.reserve(length);
                     let mut payload_bytes = src.split_to(length - padding);
-                    self.auth.open(&mut payload_bytes, session.decoder_nonce())?;
+                    self.auth.open(&mut payload_bytes, session.decoder_nonce_mut())?;
                     dst.extend_from_slice(&payload_bytes);
                     src.advance(padding);
                     self.state = DecodeState::Padding
@@ -173,7 +165,7 @@ impl AEADBodyCodec {
 
     fn decode_size(&mut self, data: &mut BytesMut, nonce: &mut [u8]) -> Result<usize, aead::Error> {
         match self.chunk {
-            ChunkSizeParser::Plain(ref mut parser) => Ok(parser.decode_size(data)),
+            ChunkSizeParser::Plain => Ok(PlainSizeParser::decode_size(data)),
             ChunkSizeParser::Auth(ref mut parser) => parser.decode_size(data, nonce),
             ChunkSizeParser::Shake => Ok(self.shake.decode_size(data)),
         }
@@ -203,9 +195,19 @@ enum DecodeState {
 
 #[allow(clippy::large_enum_variant)]
 enum ChunkSizeParser {
-    Plain(PlainSizeParser),
+    Plain,
     Auth(Authenticator),
     Shake,
+}
+
+impl ChunkSizeParser {
+    fn size_bytes(&self) -> usize {
+        match self {
+            ChunkSizeParser::Plain => PlainSizeParser::size_bytes(),
+            ChunkSizeParser::Auth(ref parser) => parser.size_bytes(),
+            ChunkSizeParser::Shake => ShakeSizeParser::size_bytes(),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -221,11 +223,11 @@ struct Authenticator {
 
 impl Authenticator {
     fn new(cipher: CipherMethod) -> Self {
-        let nonce_size = cipher.nonce_size();
-        Self { cipher, counting: CountingNonceGenerator::new(nonce_size) }
+        let counting = CountingNonceGenerator::new(cipher.nonce_size());
+        Self { cipher, counting }
     }
 
-    fn size_bytes(&self) -> usize {
+    const fn size_bytes(&self) -> usize {
         size_of::<u16>() + self.cipher.tag_size()
     }
 

@@ -18,9 +18,9 @@ pub fn kdf(key: &[u8], path: Vec<&[u8]>) -> [u8; SIZE] {
     for v in path {
         creator = HmacCreator { parent: Some(Box::new(creator)), value: v }
     }
-    let mut hmacf = creator.create();
-    hmacf.update(key);
-    hmacf.do_final()
+    let mut hmac = creator.create();
+    hmac.update(key);
+    hmac.do_final()
 }
 
 pub fn kdfn<const N: usize>(key: &[u8], path: Vec<&[u8]>) -> [u8; N] {
@@ -34,16 +34,25 @@ pub fn kdf16(key: &[u8], path: Vec<&[u8]>) -> [u8; 16] {
     kdfn(key, path)
 }
 
+#[derive(Clone)]
 struct Hmac {
-    inner: Box<dyn Hash>,
-    outer: Box<dyn Hash>,
+    inner: Box<Hash>,
+    outer: Box<Hash>,
     ipad: [u8; 64],
     opad: [u8; 64],
 }
 
+const IPAD: u8 = 0x36;
+const OPAD: u8 = 0x5c;
+
 impl Hmac {
-    fn new(hash: &dyn Hash, key: &[u8]) -> Self {
-        let mut hm = Self { inner: hash.clone(), outer: hash.clone(), ipad: [0x36; 64], opad: [0x5c; 64] };
+    fn new(key: &[u8]) -> Self {
+        let mut hm = Self {
+            inner: Box::new(Hash::Sha256(Sha256::default())),
+            outer: Box::new(Hash::Sha256(Sha256::default())),
+            ipad: [IPAD; 64],
+            opad: [OPAD; 64],
+        };
         for (i, k) in key.iter().enumerate() {
             hm.ipad[i] ^= k;
             hm.opad[i] ^= k;
@@ -51,31 +60,15 @@ impl Hmac {
         hm.inner.update(&hm.ipad);
         hm
     }
-}
 
-trait Hash {
-    fn clone(&self) -> Box<dyn Hash>;
-    fn update(&mut self, data: &[u8]);
-    fn do_final(&mut self) -> [u8; 32];
-}
-
-impl Hash for Sha256 {
-    fn clone(&self) -> Box<dyn Hash> {
-        Box::new(Clone::clone(self))
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        Digest::update(self, data)
-    }
-
-    fn do_final(&mut self) -> [u8; 32] {
-        self.finalize_reset().into()
-    }
-}
-
-impl Hash for Hmac {
-    fn clone(&self) -> Box<dyn Hash> {
-        Box::new(Self { inner: self.inner.clone(), outer: self.outer.clone(), ipad: self.ipad, opad: self.opad })
+    fn from_hmac(parent: Hmac, key: &[u8]) -> Self {
+        let mut hm = Self { inner: Box::new(Hash::Hmac(parent.clone())), outer: Box::new(Hash::Hmac(parent)), ipad: [IPAD; 64], opad: [OPAD; 64] };
+        for (i, k) in key.iter().enumerate() {
+            hm.ipad[i] ^= k;
+            hm.opad[i] ^= k;
+        }
+        hm.inner.update(&hm.ipad);
+        hm
     }
 
     fn update(&mut self, data: &[u8]) {
@@ -89,17 +82,39 @@ impl Hash for Hmac {
     }
 }
 
+#[derive(Clone)]
+enum Hash {
+    Sha256(Sha256),
+    Hmac(Hmac),
+}
+
+impl Hash {
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            Self::Sha256(h) => Digest::update(h, data),
+            Self::Hmac(h) => h.update(data),
+        }
+    }
+
+    fn do_final(&mut self) -> [u8; 32] {
+        match self {
+            Self::Sha256(h) => h.finalize_reset().into(),
+            Self::Hmac(h) => h.do_final(),
+        }
+    }
+}
+
 struct HmacCreator<'a> {
     parent: Option<Box<HmacCreator<'a>>>,
     value: &'a [u8],
 }
 
 impl HmacCreator<'_> {
-    fn create(&self) -> Box<dyn Hash> {
+    fn create(&self) -> Hmac {
         if let Some(parent) = self.parent.as_ref() {
-            Box::new(Hmac::new(parent.create().as_ref(), self.value))
+            Hmac::from_hmac(parent.create(), self.value)
         } else {
-            Box::new(Hmac::new(&Sha256::new(), self.value))
+            Hmac::new(self.value)
         }
     }
 }
