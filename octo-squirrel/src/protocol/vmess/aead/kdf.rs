@@ -53,22 +53,22 @@ impl Hmac {
             ipad: [IPAD; 64],
             opad: [OPAD; 64],
         };
-        for (i, k) in key.iter().enumerate() {
-            hm.ipad[i] ^= k;
-            hm.opad[i] ^= k;
-        }
-        hm.inner.update(&hm.ipad);
+        hm.init(key);
         hm
     }
 
     fn from_hmac(parent: Hmac, key: &[u8]) -> Self {
         let mut hm = Self { inner: Box::new(Hash::Hmac(parent.clone())), outer: Box::new(Hash::Hmac(parent)), ipad: [IPAD; 64], opad: [OPAD; 64] };
-        for (i, k) in key.iter().enumerate() {
-            hm.ipad[i] ^= k;
-            hm.opad[i] ^= k;
-        }
-        hm.inner.update(&hm.ipad);
+        hm.init(key);
         hm
+    }
+
+    fn init(&mut self, key: &[u8]) {
+        for (i, k) in key.iter().enumerate() {
+            self.ipad[i] ^= k;
+            self.opad[i] ^= k;
+        }
+        self.inner.update(&self.ipad);
     }
 
     fn update(&mut self, data: &[u8]) {
