@@ -163,7 +163,7 @@ pub(super) mod udp {
     use octo_squirrel::protocol::vmess::header::RequestHeader;
     use octo_squirrel::protocol::vmess::header::SecurityType;
     use tokio::net::TcpStream;
-    use tokio_native_tls::TlsStream;
+    use tokio_rustls::client::TlsStream;
     use tokio_util::codec::Framed;
 
     use super::ClientAEADCodec;

@@ -62,6 +62,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub ws: Option<WebSocketConfig>,
     #[serde(default)]
+    pub quic: Option<SslConfig>,
+    #[serde(default)]
     pub user: Vec<User>,
 }
 

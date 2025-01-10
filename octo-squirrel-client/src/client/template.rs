@@ -1,5 +1,4 @@
 use core::fmt::Debug;
-use std::fs;
 use std::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -40,10 +39,13 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time;
-use tokio_native_tls::native_tls;
-use tokio_native_tls::native_tls::Certificate;
-use tokio_native_tls::TlsConnector;
-use tokio_native_tls::TlsStream;
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::CertificateDer;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::RootCertStore;
+use tokio_rustls::TlsConnector;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
@@ -75,7 +77,7 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
                     let handshake = handshake::get_request_addr(&mut inbound).await;
                     if let Ok(peer_addr) = handshake {
                         info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
-                        match try_transfer_tcp(inbound, server_addr, &peer_addr, &config.ssl, &config.ws, context, new_codec).await {
+                        match try_transfer_tcp(inbound, server_addr, &peer_addr, &config.ssl, &config.ws, &config.quic, context, new_codec).await {
                             Ok(res) => info!("[tcp] relay complete, local={}, server={}, peer={}, {:?}", &local_addr, &server_addr, peer_addr, res),
                             Err(e) => error!("[tcp] transfer failed; error={}", e),
                         }
@@ -95,6 +97,7 @@ pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
     peer_addr: &Address,
     ssl: &Option<SslConfig>,
     ws: &Option<WebSocketConfig>,
+    quic: &Option<SslConfig>,
     context: Context,
     new_codec: NewCodec,
 ) -> Result<relay::Result>
@@ -104,21 +107,24 @@ where
 {
     let local_client = Framed::new(inbound, BytesCodec);
     let codec = new_codec(peer_addr, context)?;
-    Ok(match (ssl, ws) {
-        (None, None) => {
+    Ok(match (ssl, ws, quic) {
+        (None, None, None) => {
             let outbound = TcpStream::connect(&server_addr).await?;
             let client_server = codec.framed(outbound);
             relay_tcp(local_client, client_server).await
         }
-        (None, Some(ws_config)) => {
+        (_, _, Some(quic)) => {
+            todo!()
+        }
+        (None, Some(ws_config), None) => {
             let client_server = new_ws_outbound(&server_addr, codec, ws_config).await?;
             relay_tcp(local_client, client_server).await
         }
-        (Some(ssl_config), None) => {
+        (Some(ssl_config), None, None) => {
             let client_server = new_tls_outbound(&server_addr, codec, ssl_config).await?;
             relay_tcp(local_client, client_server).await
         }
-        (Some(ssl_config), Some(ws_config)) => {
+        (Some(ssl_config), Some(ws_config), None) => {
             let client_server = new_wss_outbound(&server_addr, codec, ssl_config, ws_config).await?;
             relay_tcp(local_client, client_server).await
         }
@@ -256,16 +262,32 @@ impl<Out, OutSend> Drop for Binding<Out, OutSend> {
     }
 }
 
+pub async fn new_quic_outbound<A, C, E, D>(addr: A, codec: C, quic_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
+where
+    A: ToSocketAddrs,
+    C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
+{
+    // let mut roots = quinn::rustls::RootCertStore::empty();
+    // let cert = CertificateDer::from_pem(&fs::read(&quic_config.certificate_file)?).map(|cert| roots.add(&cert)).map_err(|e| anyhow!(e))?;
+    // let file = fs::read(&quic_config.certificate_file)?;
+    // quinn::ClientConfig::builder().add_certificate_authority(&mut roots).unwrap();
+    // QuicClientConfig::try_from();
+    todo!()
+}
+
 pub async fn new_tls_outbound<A, C, E, D>(addr: A, codec: C, ssl_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
 where
     A: ToSocketAddrs,
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
     let outbound = TcpStream::connect(addr).await?;
-    let pem = fs::read(ssl_config.certificate_file.as_str())?;
-    let cert = Certificate::from_pem(&pem)?;
-    let connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-    let outbound = connector.connect(&ssl_config.server_name, outbound).await?;
+    let cert = CertificateDer::from_pem_file(ssl_config.certificate_file.as_str())?;
+    let mut roots = RootCertStore::empty();
+    roots.add(cert)?;
+    let config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+    let server_name = ServerName::try_from(ssl_config.server_name.clone())?;
+    let outbound = connector.connect(server_name, outbound).await?;
     Ok(codec.framed(outbound))
 }
 
@@ -292,10 +314,13 @@ where
 {
     let outbound = TcpStream::connect(addr).await?;
     let addr = outbound.peer_addr()?;
-    let pem = fs::read(ssl_config.certificate_file.as_str())?;
-    let cert = Certificate::from_pem(&pem)?;
-    let connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-    let outbound = connector.connect(&ssl_config.server_name, outbound).await?;
+    let cert = CertificateDer::from_pem_file(ssl_config.certificate_file.as_str())?;
+    let mut roots = RootCertStore::empty();
+    roots.add(cert)?;
+    let config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+    let server_name = ServerName::try_from(ssl_config.server_name.clone())?;
+    let outbound = connector.connect(server_name, outbound).await?;
     let (outbound, _) = new_ws_builder(addr.ip(), addr.port(), ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
     Ok(WebSocketFramed::new(outbound, codec))
 }

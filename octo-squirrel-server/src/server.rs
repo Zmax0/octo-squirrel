@@ -1,5 +1,5 @@
 use std::env;
-use std::fs;
+use std::sync::Arc;
 
 use futures::future::join_all;
 use log::error;
@@ -8,8 +8,10 @@ use octo_squirrel::config::ServerConfig;
 use octo_squirrel::protocol::Protocol;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
-use tokio_native_tls::native_tls;
-use tokio_native_tls::TlsAcceptor;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::CertificateDer;
+use tokio_rustls::rustls::pki_types::PrivateKeyDer;
+use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
@@ -62,14 +64,13 @@ where
             }
         }
         (Some(ssl_config), ws_config) => {
-            let pem = fs::read(ssl_config.certificate_file.as_str())?;
-            let key = fs::read(ssl_config.key_file.as_str())?;
-            let identity = native_tls::Identity::from_pkcs8(&pem, &key)?;
-            let tls_acceptor = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
+            let cert = CertificateDer::from_pem_file(ssl_config.certificate_file.as_str())?;
+            let key = PrivateKeyDer::from_pem_file(ssl_config.key_file.as_str())?;
+            let tls_config = tokio_rustls::rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(vec![cert], key)?;
+            let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
             while let Ok((inbound, _)) = listener.accept().await {
-                let tls = tls_acceptor.clone();
                 let codec = new_codec(context.as_ref())?;
-                match tls.accept(inbound).await {
+                match tls_acceptor.accept(inbound).await {
                     Ok(inbound) => {
                         if ws_config.is_some() {
                             tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.as_ref())?));
