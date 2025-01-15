@@ -19,6 +19,10 @@ pub enum Mode {
     Udp,
     #[serde(rename = "tcp_and_udp")]
     TcpAndUdp,
+    #[serde(rename = "quic")]
+    Quic,
+    #[serde(rename = "tcp_and_quic")]
+    TcpAndQuic,
 }
 
 impl Mode {
@@ -29,6 +33,10 @@ impl Mode {
     pub fn enable_udp(&self) -> bool {
         matches!(self, Self::Udp | Self::TcpAndUdp)
     }
+
+    pub fn enable_quic(&self) -> bool {
+        matches!(self, Self::Quic | Self::TcpAndQuic)
+    }
 }
 
 impl Display for Mode {
@@ -37,6 +45,8 @@ impl Display for Mode {
             Mode::Tcp => write!(f, "tcp"),
             Mode::Udp => write!(f, "udp"),
             Mode::TcpAndUdp => write!(f, "tcp_and_udp"),
+            Mode::Quic => write!(f, "quic"),
+            Mode::TcpAndQuic => write!(f, "tcp_and_quic"),
         }
     }
 }

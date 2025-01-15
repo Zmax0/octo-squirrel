@@ -16,6 +16,7 @@ mod trojan;
 mod vmess;
 
 pub async fn main() -> anyhow::Result<()> {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
     let mut config = octo_squirrel::config::init_client()?;
     let current = config.get_current();
     octo_squirrel::log::init(config.logger.level())?;

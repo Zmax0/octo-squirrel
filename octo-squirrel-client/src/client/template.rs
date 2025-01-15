@@ -1,7 +1,9 @@
 use core::fmt::Debug;
 use std::future::Future;
 use std::net::IpAddr;
+use std::net::Ipv4Addr;
 use std::net::SocketAddr;
+use std::net::SocketAddrV4;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +26,7 @@ use lru_time_cache::Entry;
 use lru_time_cache::LruCache;
 use octo_squirrel::codec::BytesCodec;
 use octo_squirrel::codec::DatagramPacket;
+use octo_squirrel::codec::QuicStream;
 use octo_squirrel::codec::WebSocketFramed;
 use octo_squirrel::config::ServerConfig;
 use octo_squirrel::config::SslConfig;
@@ -32,6 +35,7 @@ use octo_squirrel::protocol::address::Address;
 use octo_squirrel::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::relay;
 use octo_squirrel::relay::End;
+use quinn::crypto::rustls::QuicClientConfig;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::ToSocketAddrs;
@@ -77,7 +81,7 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
                     let handshake = handshake::get_request_addr(&mut inbound).await;
                     if let Ok(peer_addr) = handshake {
                         info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
-                        match try_transfer_tcp(inbound, server_addr, &peer_addr, &config.ssl, &config.ws, &config.quic, context, new_codec).await {
+                        match try_transfer_tcp(inbound, server_addr, &peer_addr, &config, context, new_codec).await {
                             Ok(res) => info!("[tcp] relay complete, local={}, server={}, peer={}, {:?}", &local_addr, &server_addr, peer_addr, res),
                             Err(e) => error!("[tcp] transfer failed; error={}", e),
                         }
@@ -95,9 +99,7 @@ pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
     inbound: TcpStream,
     server_addr: &'static str,
     peer_addr: &Address,
-    ssl: &Option<SslConfig>,
-    ws: &Option<WebSocketConfig>,
-    quic: &Option<SslConfig>,
+    config: &ServerConfig,
     context: Context,
     new_codec: NewCodec,
 ) -> Result<relay::Result>
@@ -107,14 +109,15 @@ where
 {
     let local_client = Framed::new(inbound, BytesCodec);
     let codec = new_codec(peer_addr, context)?;
-    Ok(match (ssl, ws, quic) {
+    Ok(match (&config.ssl, &config.ws, &config.quic) {
         (None, None, None) => {
             let outbound = TcpStream::connect(&server_addr).await?;
             let client_server = codec.framed(outbound);
             relay_tcp(local_client, client_server).await
         }
-        (_, _, Some(quic)) => {
-            todo!()
+        (_, _, Some(quic_config)) => {
+            let client_server = new_quic_outbound(server_addr.parse()?, codec, quic_config).await?;
+            relay_tcp(local_client, client_server).await
         }
         (None, Some(ws_config), None) => {
             let client_server = new_ws_outbound(&server_addr, codec, ws_config).await?;
@@ -262,17 +265,21 @@ impl<Out, OutSend> Drop for Binding<Out, OutSend> {
     }
 }
 
-pub async fn new_quic_outbound<A, C, E, D>(addr: A, codec: C, quic_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
+pub async fn new_quic_outbound<C, E, D>(addr: SocketAddr, codec: C, config: &SslConfig) -> Result<Framed<QuicStream, C>>
 where
-    A: ToSocketAddrs,
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    // let mut roots = quinn::rustls::RootCertStore::empty();
-    // let cert = CertificateDer::from_pem(&fs::read(&quic_config.certificate_file)?).map(|cert| roots.add(&cert)).map_err(|e| anyhow!(e))?;
-    // let file = fs::read(&quic_config.certificate_file)?;
-    // quinn::ClientConfig::builder().add_certificate_authority(&mut roots).unwrap();
-    // QuicClientConfig::try_from();
-    todo!()
+    let cert = CertificateDer::from_pem_file(config.certificate_file.as_str())?;
+    let mut roots = RootCertStore::empty();
+    roots.add(cert)?;
+    let mut tls_config = quinn::rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let mut endpoint = quinn::Endpoint::client(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
+    let quic_client_config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_config)?));
+    endpoint.set_default_client_config(quic_client_config);
+    let conn = endpoint.connect(addr, &config.server_name)?.await?;
+    let (send, recv) = conn.open_bi().await?;
+    Ok(codec.framed(QuicStream::new(send, recv)))
 }
 
 pub async fn new_tls_outbound<A, C, E, D>(addr: A, codec: C, ssl_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
