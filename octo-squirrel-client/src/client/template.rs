@@ -21,7 +21,6 @@ use http::HeaderValue;
 use log::debug;
 use log::error;
 use log::info;
-use log::trace;
 use lru_time_cache::Entry;
 use lru_time_cache::LruCache;
 use octo_squirrel::codec::BytesCodec;
@@ -41,6 +40,7 @@ use tokio::net::TcpStream;
 use tokio::net::ToSocketAddrs;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_rustls::client::TlsStream;
@@ -218,32 +218,22 @@ where
                 match client_server_cache.entry(key) {
                     Entry::Vacant(entry) => {
                         debug!("[udp] new binding; key={:?}", &_key);
-                        // client->server|outbound, server->client|outbound
-                        let (mut client_server, mut server_client) = new_out(server_addr, &target, &context).await?.split();
-                        let _client_local_tx = client_local_tx.clone();
-                        let _target = target.clone();
-                        let relay_task = tokio::spawn(async move {
-                            // server->client|outbound
-                            while let Some(next) = server_client.next().await {
-                                match next {
-                                    Ok(outbound_recv) => {
-                                        // client->local|mpsc
-                                        _client_local_tx
-                                            .send((to_inbound_recv(outbound_recv, &_target, sender), _key.clone()))
-                                            .await
-                                            .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
-                                    }
-                                    Err(e) => error!("[udp] server*-client decode failed; error={}", e),
-                                }
-                            }
-                        });
-                        // client->server|outbound
-                        client_server.send(to_outbound_send((content, target), server_addr)).await?;
-                        entry.insert(Binding { sink: client_server, relay_task });
+                        let out = new_out(server_addr, &target, &context).await?;
+                        let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, to_inbound_recv, to_outbound_send).await?;
+                        entry.insert(Binding {sink, relay_task});
                     }
                     Entry::Occupied(entry) => {
                         // client->server|outbound
-                        entry.into_mut().sink.send(to_outbound_send((content, target), server_addr)).await?;
+                        let value = entry.into_mut();
+                        if value.relay_task.is_finished() {
+                            debug!("[udp] retry binding; key={:?}", &_key);
+                            let out = new_out(server_addr, &target, &context).await?;
+                            let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, to_inbound_recv, to_outbound_send).await?;
+                            value.sink = sink;
+                            value.relay_task = relay_task;
+                        } else {
+                            value.sink.send(to_outbound_send((content, target), server_addr)).await?;
+                        }
                     }
                 }
             }
@@ -253,6 +243,52 @@ where
     Ok(())
 }
 
+type CToLSender<T> = Sender<((DatagramPacket, SocketAddr), T)>;
+
+async fn new_binding<Key, Out, OutSend, ToOutSend, OutRecv, ToInRecv>(
+    server_addr: SocketAddr,
+    client_local_tx: CToLSender<Key>,
+    msg: (DatagramPacket, SocketAddr),
+    key: Key,
+    out: Out,
+    to_inbound_recv: ToInRecv,
+    to_outbound_send: ToOutSend,
+) -> Result<(SplitSink<Out, OutSend>, JoinHandle<()>)>
+where
+    Key: Ord + Clone + Debug + Send + Sync + 'static,
+    Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
+    OutRecv: Send + Sync + 'static,
+    ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
+    ToOutSend: FnOnce(DatagramPacket, SocketAddr) -> OutSend + Copy,
+{
+    let ((content, target), sender) = msg;
+    // client->server|outbound, server->client|outbound
+    let (mut client_server, mut server_client) = out.split();
+    let _target = target.clone();
+    let relay_task = tokio::spawn(async move {
+        // server->client|outbound
+        while let Some(next) = server_client.next().await {
+            match next {
+                Ok(outbound_recv) => {
+                    // client->local|mpsc
+                    client_local_tx
+                        .send((to_inbound_recv(outbound_recv, &_target, sender), key.clone()))
+                        .await
+                        .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
+                }
+                Err(e) => {
+                    error!("[udp] server*-client decode failed; error={}", e);
+                    break;
+                }
+            }
+        }
+        debug!("[udp] server-client relay task done");
+    });
+    // client->server|outbound
+    client_server.send(to_outbound_send((content, target), server_addr)).await?;
+    Ok((client_server, relay_task))
+}
+
 struct Binding<Out, OutSend> {
     sink: SplitSink<Out, OutSend>,
     relay_task: JoinHandle<()>,
@@ -260,7 +296,7 @@ struct Binding<Out, OutSend> {
 
 impl<Out, OutSend> Drop for Binding<Out, OutSend> {
     fn drop(&mut self) {
-        trace!("remove binding");
+        debug!("remove binding");
         self.relay_task.abort();
     }
 }

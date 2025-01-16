@@ -50,6 +50,9 @@ impl Decoder for ServerCodec {
     type Error = anyhow::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if !src.has_remaining() {
+            return Ok(None);
+        }
         match self.state {
             CodecState::Header => {
                 if src.remaining() < 60 || src.remaining() < 59 + address::try_decode_at(src, 59)? {

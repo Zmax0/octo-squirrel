@@ -83,6 +83,7 @@ pub(super) mod udp {
     use bytes::BufMut;
     use bytes::BytesMut;
     use octo_squirrel::codec::DatagramPacket;
+    use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketFramed;
     use octo_squirrel::config::ServerConfig;
     use octo_squirrel::protocol::address::Address;
@@ -109,6 +110,12 @@ pub(super) mod udp {
 
     pub fn new_key(sender: SocketAddr, _: &Address) -> SocketAddr {
         sender
+    }
+
+    pub async fn new_quic_outbound(server_addr: SocketAddr, target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientCodec>> {
+        let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
+        let quic_config = config.quic.as_ref().ok_or(anyhow!("config.quic is empty"))?;
+        template::new_quic_outbound(server_addr, codec, quic_config).await
     }
 
     pub async fn new_tls_outbound(
@@ -207,6 +214,8 @@ pub(super) mod udp {
         }
     }
 }
+
+pub(super) mod quic {}
 
 #[cfg(test)]
 mod test {
