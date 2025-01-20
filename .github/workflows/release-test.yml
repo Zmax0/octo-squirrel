@@ -19,15 +19,14 @@ jobs:
         run: cargo build --release --bin octo-squirrel-client --bin octo-squirrel-server
       - name: Zip
         run: |
-          zip -q target/release/octo-squirrel-client-win.zip target/release/octo-squirrel-client.exe
-          zip -q target/release/octo-squirrel-server-win.zip target/release/octo-squirrel-server.exe  
+          Compress-Archive -Path target/release/octo-squirrel-client.exe target/release/octo-squirrel-client-win-${{ inputs.tag }}.zip
+          Compress-Archive -Path target/release/octo-squirrel-server.exe target/release/octo-squirrel-server-win-${{ inputs.tag }}.zip
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: octo-squirrel-windows
           path: |
-            target/release/octo-squirrel-client-win.zip
-            target/release/octo-squirrel-server-win.zip
+            target/release/*.zip
           retention-days: 1
           overwrite: true
         env:
@@ -43,8 +42,8 @@ jobs:
         run: cargo build --release --bin octo-squirrel-client --bin octo-squirrel-server
       - name: Zip
         run: |
-          zip -q target/release/octo-squirrel-client-linux.zip target/release/octo-squirrel-client
-          zip -q target/release/octo-squirrel-server-linux.zip target/release/octo-squirrel-server
+          zip -q target/release/octo-squirrel-client-linux-${{ inputs.tag }}.zip target/release/octo-squirrel-client
+          zip -q target/release/octo-squirrel-server-linux-${{ inputs.tag }}.zip target/release/octo-squirrel-server
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
