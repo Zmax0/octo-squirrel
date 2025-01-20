@@ -75,73 +75,78 @@ async fn startup_tcp<const N: usize>(config: &ServerConfig, user_manager: &Arc<S
     if !config.mode.enable_tcp() {
         return Ok(());
     }
-    let context = ServerContext::init(config, user_manager.clone())?;
+    let context: ServerContext<N> = ServerContext::init(config, user_manager.clone())?;
     super::startup_tcp(context, config, |c| Ok(PayloadCodec::from(c))).await
 }
 
 async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
-    if !config.mode.enable_udp() {
+    if !config.mode.enable_udp() && !config.mode.enable_quic() {
         return Ok(());
     }
-    let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
-    let context = Context::new(Mode::Server, Some(user_manager.clone()), &key, &identity_keys);
-    let codec = udp::new_codec::<N>(config, context)?;
-    let inbound = UdpSocket::bind(format!("{}:{}", config.host, config.port)).await?;
-    let (tx, mut rx) = mpsc::channel::<(BytesMut, Address, SocketAddr, Session<N>)>(1024);
-    let ttl = Duration::from_secs(300);
-    let mut net_map: LruCache<u64, UdpAssociate<N>> = LruCache::with_expiry_duration_and_capacity(ttl, 10240);
-    let mut cleanup_timer = time::interval(ttl);
-    info!("Udp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
-    let mut buf = [0; 0x10000];
-    loop {
-        tokio::select! {
-            _ = cleanup_timer.tick() => {
-                net_map.iter();
-            }
-            // p_s_c
-            peer_msg = rx.recv() => {
-                if let Some((content, peer_addr, client_addr, session)) = peer_msg {
-                    net_map.get(&session.client_session_id); // keep alive
-                    let mut dst = BytesMut::new();
-                    if let Err(e) = SessionCodec::encode(&codec, (content, peer_addr, session), &mut dst) {
-                        error!("[udp] encode failed; error={e}")
-                    } else {
-                        inbound.send_to(&dst, client_addr).await?;
-                    }
-                } else {
-                    trace!("[udp] p_s_c channel closed");
-                    break;
+    if config.mode.enable_udp() {
+        let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
+        let context = Context::new(Mode::Server, Some(user_manager.clone()), &key, &identity_keys);
+        let codec = udp::new_codec::<N>(config, context)?;
+        let inbound = UdpSocket::bind(format!("{}:{}", config.host, config.port)).await?;
+        let (tx, mut rx) = mpsc::channel::<(BytesMut, Address, SocketAddr, Session<N>)>(1024);
+        let ttl = Duration::from_secs(300);
+        let mut net_map: LruCache<u64, UdpAssociate<N>> = LruCache::with_expiry_duration_and_capacity(ttl, 10240);
+        let mut cleanup_timer = time::interval(ttl);
+        info!("Udp server running => {}|{}|{}:{}", config.protocol, config.cipher, config.host, config.port);
+        let mut buf = [0; 0x10000];
+        loop {
+            tokio::select! {
+                _ = cleanup_timer.tick() => {
+                    net_map.iter();
                 }
-            }
-            // c_s_p
-            client_msg = inbound.recv_from(&mut buf) => {
-                match client_msg {
-                    Ok((len, client_addr)) => {
-                        let mut src = BytesMut::from(&buf[..len]);
-                        match SessionCodec::<N>::decode(&codec, &mut src) {
-                            Ok(Some((content, peer_addr, session))) => {
-                                let key = session.client_session_id;
-                                if let Some(assoc) = net_map.get_mut(&key) {
-                                    assoc.try_send((content, peer_addr, session)).await?
-                                } else {
-                                    let assoc = UdpAssociateContext::create(&session, client_addr, tx.clone()).await?;
-                                    assoc.try_send((content, peer_addr, session)).await?;
-                                    net_map.insert(key, assoc);
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(e) => error!("[udp] decode failed; error={e}"),
+                // p_s_c
+                peer_msg = rx.recv() => {
+                    if let Some((content, peer_addr, client_addr, session)) = peer_msg {
+                        net_map.get(&session.client_session_id); // keep alive
+                        let mut dst = BytesMut::new();
+                        if let Err(e) = SessionCodec::encode(&codec, (content, peer_addr, session), &mut dst) {
+                            error!("[udp] encode failed; error={e}")
+                        } else {
+                            inbound.send_to(&dst, client_addr).await?;
                         }
+                    } else {
+                        trace!("[udp] p_s_c channel closed");
+                        break;
                     }
-                    Err(e) => {
-                        error!("[udp] client closed; error={e}");
+                }
+                // c_s_p
+                client_msg = inbound.recv_from(&mut buf) => {
+                    match client_msg {
+                        Ok((len, client_addr)) => {
+                            let mut src = BytesMut::from(&buf[..len]);
+                            match SessionCodec::<N>::decode(&codec, &mut src) {
+                                Ok(Some((content, peer_addr, session))) => {
+                                    let key = session.client_session_id;
+                                    if let Some(assoc) = net_map.get_mut(&key) {
+                                        assoc.try_send((content, peer_addr, session)).await?
+                                    } else {
+                                        let assoc = UdpAssociateContext::create(&session, client_addr, tx.clone()).await?;
+                                        assoc.try_send((content, peer_addr, session)).await?;
+                                        net_map.insert(key, assoc);
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(e) => error!("[udp] decode failed; error={e}"),
+                            }
+                        }
+                        Err(e) => {
+                            error!("[udp] client closed; error={e}");
+                        }
                     }
                 }
             }
         }
+        info!("Udp server shutdown");
+        Ok(())
+    } else {
+        let context: ServerContext<N> = ServerContext::init(config, user_manager.clone())?;
+        super::startup_quic(context, config, |c| Ok(PayloadCodec::from(c))).await
     }
-    info!("Udp server shutdown");
-    Ok(())
 }
 
 struct UdpAssociate<const N: usize> {

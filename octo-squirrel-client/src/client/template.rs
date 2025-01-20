@@ -1,8 +1,9 @@
 use core::fmt::Debug;
-use std::fs;
 use std::future::Future;
 use std::net::IpAddr;
+use std::net::Ipv4Addr;
 use std::net::SocketAddr;
+use std::net::SocketAddrV4;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,11 +21,11 @@ use http::HeaderValue;
 use log::debug;
 use log::error;
 use log::info;
-use log::trace;
 use lru_time_cache::Entry;
 use lru_time_cache::LruCache;
 use octo_squirrel::codec::BytesCodec;
 use octo_squirrel::codec::DatagramPacket;
+use octo_squirrel::codec::QuicStream;
 use octo_squirrel::codec::WebSocketFramed;
 use octo_squirrel::config::ServerConfig;
 use octo_squirrel::config::SslConfig;
@@ -33,17 +34,22 @@ use octo_squirrel::protocol::address::Address;
 use octo_squirrel::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::relay;
 use octo_squirrel::relay::End;
+use quinn::crypto::rustls::QuicClientConfig;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::ToSocketAddrs;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio::time;
-use tokio_native_tls::native_tls;
-use tokio_native_tls::native_tls::Certificate;
-use tokio_native_tls::TlsConnector;
-use tokio_native_tls::TlsStream;
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::CertificateDer;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::RootCertStore;
+use tokio_rustls::TlsConnector;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
@@ -75,7 +81,7 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
                     let handshake = handshake::get_request_addr(&mut inbound).await;
                     if let Ok(peer_addr) = handshake {
                         info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
-                        match try_transfer_tcp(inbound, server_addr, &peer_addr, &config.ssl, &config.ws, context, new_codec).await {
+                        match try_transfer_tcp(inbound, server_addr, &peer_addr, &config, context, new_codec).await {
                             Ok(res) => info!("[tcp] relay complete, local={}, server={}, peer={}, {:?}", &local_addr, &server_addr, peer_addr, res),
                             Err(e) => error!("[tcp] transfer failed; error={}", e),
                         }
@@ -93,8 +99,7 @@ pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
     inbound: TcpStream,
     server_addr: &'static str,
     peer_addr: &Address,
-    ssl: &Option<SslConfig>,
-    ws: &Option<WebSocketConfig>,
+    config: &ServerConfig,
     context: Context,
     new_codec: NewCodec,
 ) -> Result<relay::Result>
@@ -104,21 +109,25 @@ where
 {
     let local_client = Framed::new(inbound, BytesCodec);
     let codec = new_codec(peer_addr, context)?;
-    Ok(match (ssl, ws) {
-        (None, None) => {
+    Ok(match (&config.ssl, &config.ws, &config.quic) {
+        (None, None, None) => {
             let outbound = TcpStream::connect(&server_addr).await?;
             let client_server = codec.framed(outbound);
             relay_tcp(local_client, client_server).await
         }
-        (None, Some(ws_config)) => {
+        (_, _, Some(quic_config)) => {
+            let client_server = new_quic_outbound(server_addr.parse()?, codec, quic_config).await?;
+            relay_tcp(local_client, client_server).await
+        }
+        (None, Some(ws_config), None) => {
             let client_server = new_ws_outbound(&server_addr, codec, ws_config).await?;
             relay_tcp(local_client, client_server).await
         }
-        (Some(ssl_config), None) => {
+        (Some(ssl_config), None, None) => {
             let client_server = new_tls_outbound(&server_addr, codec, ssl_config).await?;
             relay_tcp(local_client, client_server).await
         }
-        (Some(ssl_config), Some(ws_config)) => {
+        (Some(ssl_config), Some(ws_config), None) => {
             let client_server = new_wss_outbound(&server_addr, codec, ssl_config, ws_config).await?;
             relay_tcp(local_client, client_server).await
         }
@@ -209,32 +218,22 @@ where
                 match client_server_cache.entry(key) {
                     Entry::Vacant(entry) => {
                         debug!("[udp] new binding; key={:?}", &_key);
-                        // client->server|outbound, server->client|outbound
-                        let (mut client_server, mut server_client) = new_out(server_addr, &target, &context).await?.split();
-                        let _client_local_tx = client_local_tx.clone();
-                        let _target = target.clone();
-                        let relay_task = tokio::spawn(async move {
-                            // server->client|outbound
-                            while let Some(next) = server_client.next().await {
-                                match next {
-                                    Ok(outbound_recv) => {
-                                        // client->local|mpsc
-                                        _client_local_tx
-                                            .send((to_inbound_recv(outbound_recv, &_target, sender), _key.clone()))
-                                            .await
-                                            .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
-                                    }
-                                    Err(e) => error!("[udp] server*-client decode failed; error={}", e),
-                                }
-                            }
-                        });
-                        // client->server|outbound
-                        client_server.send(to_outbound_send((content, target), server_addr)).await?;
-                        entry.insert(Binding { sink: client_server, relay_task });
+                        let out = new_out(server_addr, &target, &context).await?;
+                        let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, to_inbound_recv, to_outbound_send).await?;
+                        entry.insert(Binding {sink, relay_task});
                     }
                     Entry::Occupied(entry) => {
                         // client->server|outbound
-                        entry.into_mut().sink.send(to_outbound_send((content, target), server_addr)).await?;
+                        let value = entry.into_mut();
+                        if value.relay_task.is_finished() {
+                            debug!("[udp] retry binding; key={:?}", &_key);
+                            let out = new_out(server_addr, &target, &context).await?;
+                            let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, to_inbound_recv, to_outbound_send).await?;
+                            value.sink = sink;
+                            value.relay_task = relay_task;
+                        } else {
+                            value.sink.send(to_outbound_send((content, target), server_addr)).await?;
+                        }
                     }
                 }
             }
@@ -244,6 +243,52 @@ where
     Ok(())
 }
 
+type CToLSender<T> = Sender<((DatagramPacket, SocketAddr), T)>;
+
+async fn new_binding<Key, Out, OutSend, ToOutSend, OutRecv, ToInRecv>(
+    server_addr: SocketAddr,
+    client_local_tx: CToLSender<Key>,
+    msg: (DatagramPacket, SocketAddr),
+    key: Key,
+    out: Out,
+    to_inbound_recv: ToInRecv,
+    to_outbound_send: ToOutSend,
+) -> Result<(SplitSink<Out, OutSend>, JoinHandle<()>)>
+where
+    Key: Ord + Clone + Debug + Send + Sync + 'static,
+    Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
+    OutRecv: Send + Sync + 'static,
+    ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
+    ToOutSend: FnOnce(DatagramPacket, SocketAddr) -> OutSend + Copy,
+{
+    let ((content, target), sender) = msg;
+    // client->server|outbound, server->client|outbound
+    let (mut client_server, mut server_client) = out.split();
+    let _target = target.clone();
+    let relay_task = tokio::spawn(async move {
+        // server->client|outbound
+        while let Some(next) = server_client.next().await {
+            match next {
+                Ok(outbound_recv) => {
+                    // client->local|mpsc
+                    client_local_tx
+                        .send((to_inbound_recv(outbound_recv, &_target, sender), key.clone()))
+                        .await
+                        .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
+                }
+                Err(e) => {
+                    error!("[udp] server*-client decode failed; error={}", e);
+                    break;
+                }
+            }
+        }
+        debug!("[udp] server-client relay task done");
+    });
+    // client->server|outbound
+    client_server.send(to_outbound_send((content, target), server_addr)).await?;
+    Ok((client_server, relay_task))
+}
+
 struct Binding<Out, OutSend> {
     sink: SplitSink<Out, OutSend>,
     relay_task: JoinHandle<()>,
@@ -251,9 +296,26 @@ struct Binding<Out, OutSend> {
 
 impl<Out, OutSend> Drop for Binding<Out, OutSend> {
     fn drop(&mut self) {
-        trace!("remove binding");
+        debug!("remove binding");
         self.relay_task.abort();
     }
+}
+
+pub async fn new_quic_outbound<C, E, D>(addr: SocketAddr, codec: C, config: &SslConfig) -> Result<Framed<QuicStream, C>>
+where
+    C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
+{
+    let cert = CertificateDer::from_pem_file(config.certificate_file.as_str())?;
+    let mut roots = RootCertStore::empty();
+    roots.add(cert)?;
+    let mut tls_config = quinn::rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let mut endpoint = quinn::Endpoint::client(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
+    let quic_client_config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_config)?));
+    endpoint.set_default_client_config(quic_client_config);
+    let conn = endpoint.connect(addr, &config.server_name)?.await?;
+    let (send, recv) = conn.open_bi().await?;
+    Ok(codec.framed(QuicStream::new(send, recv)))
 }
 
 pub async fn new_tls_outbound<A, C, E, D>(addr: A, codec: C, ssl_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
@@ -262,10 +324,13 @@ where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
     let outbound = TcpStream::connect(addr).await?;
-    let pem = fs::read(ssl_config.certificate_file.as_str())?;
-    let cert = Certificate::from_pem(&pem)?;
-    let connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-    let outbound = connector.connect(&ssl_config.server_name, outbound).await?;
+    let cert = CertificateDer::from_pem_file(ssl_config.certificate_file.as_str())?;
+    let mut roots = RootCertStore::empty();
+    roots.add(cert)?;
+    let config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+    let server_name = ServerName::try_from(ssl_config.server_name.clone())?;
+    let outbound = connector.connect(server_name, outbound).await?;
     Ok(codec.framed(outbound))
 }
 
@@ -292,10 +357,13 @@ where
 {
     let outbound = TcpStream::connect(addr).await?;
     let addr = outbound.peer_addr()?;
-    let pem = fs::read(ssl_config.certificate_file.as_str())?;
-    let cert = Certificate::from_pem(&pem)?;
-    let connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-    let outbound = connector.connect(&ssl_config.server_name, outbound).await?;
+    let cert = CertificateDer::from_pem_file(ssl_config.certificate_file.as_str())?;
+    let mut roots = RootCertStore::empty();
+    roots.add(cert)?;
+    let config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+    let server_name = ServerName::try_from(ssl_config.server_name.clone())?;
+    let outbound = connector.connect(server_name, outbound).await?;
     let (outbound, _) = new_ws_builder(addr.ip(), addr.port(), ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
     Ok(WebSocketFramed::new(outbound, codec))
 }

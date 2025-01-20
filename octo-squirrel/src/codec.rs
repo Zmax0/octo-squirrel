@@ -10,6 +10,7 @@ use std::task::Context;
 use std::task::Poll;
 
 use anyhow::anyhow;
+use anyhow::bail;
 use anyhow::Result;
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -19,6 +20,7 @@ use futures::Stream;
 use futures::StreamExt;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
+use tokio::io::ReadBuf;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_websockets::WebSocketStream;
@@ -123,5 +125,44 @@ where
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.stream.poll_close_unpin(cx).map_err(|e| anyhow!(e))
+    }
+}
+
+pub struct QuicStream {
+    send: quinn::SendStream,
+    recv: quinn::RecvStream,
+}
+
+impl QuicStream {
+    pub fn new(send: quinn::SendStream, recv: quinn::RecvStream) -> Self {
+        QuicStream { send, recv }
+    }
+
+    pub async fn close(mut self) -> anyhow::Result<()> {
+        self.send.finish()?;
+        match self.send.stopped().await {
+            Ok(_) => Ok(()),
+            Err(e) => bail!(e),
+        }
+    }
+}
+
+impl AsyncRead for QuicStream {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<Result<(), std::io::Error>> {
+        AsyncRead::poll_read(Pin::new(&mut self.recv), cx, buf)
+    }
+}
+
+impl AsyncWrite for QuicStream {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, std::io::Error>> {
+        AsyncWrite::poll_write(Pin::new(&mut self.send), cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        AsyncWrite::poll_flush(Pin::new(&mut self.send), cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        AsyncWrite::poll_shutdown(Pin::new(&mut self.send), cx)
     }
 }

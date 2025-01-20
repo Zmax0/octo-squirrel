@@ -74,8 +74,8 @@ pub(super) mod tcp {
 }
 
 pub(super) mod udp {
-    use std::fs;
     use std::net::SocketAddr;
+    use std::sync::Arc;
 
     use anyhow::anyhow;
     use anyhow::Result;
@@ -83,6 +83,7 @@ pub(super) mod udp {
     use bytes::BufMut;
     use bytes::BytesMut;
     use octo_squirrel::codec::DatagramPacket;
+    use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketFramed;
     use octo_squirrel::config::ServerConfig;
     use octo_squirrel::protocol::address::Address;
@@ -93,10 +94,13 @@ pub(super) mod udp {
     use sha2::Digest;
     use sha2::Sha224;
     use tokio::net::TcpStream;
-    use tokio_native_tls::native_tls;
-    use tokio_native_tls::native_tls::Certificate;
-    use tokio_native_tls::TlsConnector;
-    use tokio_native_tls::TlsStream;
+    use tokio_rustls::client::TlsStream;
+    use tokio_rustls::rustls::pki_types::pem::PemObject;
+    use tokio_rustls::rustls::pki_types::CertificateDer;
+    use tokio_rustls::rustls::pki_types::ServerName;
+    use tokio_rustls::rustls::ClientConfig;
+    use tokio_rustls::rustls::RootCertStore;
+    use tokio_rustls::TlsConnector;
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
     use tokio_util::codec::Framed;
@@ -108,18 +112,27 @@ pub(super) mod udp {
         sender
     }
 
+    pub async fn new_quic_outbound(server_addr: SocketAddr, target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientCodec>> {
+        let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
+        let quic_config = config.quic.as_ref().ok_or(anyhow!("config.quic is empty"))?;
+        template::new_quic_outbound(server_addr, codec, quic_config).await
+    }
+
     pub async fn new_tls_outbound(
         server_addr: SocketAddr,
         target: &Address,
         config: &ServerConfig,
     ) -> Result<Framed<TlsStream<TcpStream>, ClientCodec>> {
         let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
-        let pem = fs::read(ssl_config.certificate_file.as_str())?;
-        let cert = Certificate::from_pem(&pem)?;
         let outbound = TcpStream::connect(server_addr).await?;
+        let cert = CertificateDer::from_pem_file(ssl_config.certificate_file.as_str())?;
+        let mut roots = RootCertStore::empty();
+        roots.add(cert)?;
+        let tls_config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+        let tls_connector = TlsConnector::from(Arc::new(tls_config));
+        let server_name = ServerName::try_from(ssl_config.server_name.clone())?;
+        let outbound = tls_connector.connect(server_name, outbound).await?;
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        let tls_connector = TlsConnector::from(native_tls::TlsConnector::builder().add_root_certificate(cert).use_sni(true).build()?);
-        let outbound = tls_connector.connect(ssl_config.server_name.as_str(), outbound).await?;
         Ok(Framed::new(outbound, codec))
     }
 
@@ -201,6 +214,8 @@ pub(super) mod udp {
         }
     }
 }
+
+pub(super) mod quic {}
 
 #[cfg(test)]
 mod test {

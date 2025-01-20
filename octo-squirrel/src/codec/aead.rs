@@ -127,7 +127,7 @@ pub enum CipherKind {
     Aes128Gcm,
     #[serde(rename = "aes-256-gcm")]
     Aes256Gcm,
-    #[serde(rename = "chacha20-poly1305")]
+    #[serde(rename = "chacha20-poly1305", alias = "chacha20-ietf-poly1305")]
     ChaCha20Poly1305,
     #[serde(rename = "2022-blake3-aes-128-gcm")]
     Aead2022Blake3Aes128Gcm,

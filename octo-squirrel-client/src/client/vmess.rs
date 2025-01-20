@@ -156,6 +156,7 @@ pub(super) mod udp {
     use bytes::BytesMut;
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::codec::DatagramPacket;
+    use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketFramed;
     use octo_squirrel::config::ServerConfig;
     use octo_squirrel::protocol::address::Address;
@@ -163,7 +164,7 @@ pub(super) mod udp {
     use octo_squirrel::protocol::vmess::header::RequestHeader;
     use octo_squirrel::protocol::vmess::header::SecurityType;
     use tokio::net::TcpStream;
-    use tokio_native_tls::TlsStream;
+    use tokio_rustls::client::TlsStream;
     use tokio_util::codec::Framed;
 
     use super::ClientAEADCodec;
@@ -177,6 +178,12 @@ pub(super) mod udp {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
         let header = RequestHeader::default(RequestCommand::UDP, security, addr.clone(), &config.password)?;
         Ok(ClientAEADCodec::new(header))
+    }
+
+    pub async fn new_quic_outbound(server_addr: SocketAddr, target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientAEADCodec>> {
+        let codec = new_codec(target, config)?;
+        let quic_config = config.quic.as_ref().ok_or(anyhow!("config.quic is empty"))?;
+        template::new_quic_outbound(server_addr, codec, quic_config).await
     }
 
     pub async fn new_plain_outbound(server_addr: SocketAddr, target: &Address, config: &ServerConfig) -> Result<Framed<TcpStream, ClientAEADCodec>> {

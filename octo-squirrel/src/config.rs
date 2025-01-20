@@ -1,10 +1,7 @@
 use std::collections::HashMap;
-#[cfg(any(feature = "client", feature = "server"))]
 use std::env::args;
 use std::fmt::Display;
-#[cfg(any(feature = "client", feature = "server"))]
 use std::fs::File;
-#[cfg(any(feature = "client", feature = "server"))]
 use std::io;
 
 use serde::Deserialize;
@@ -22,6 +19,10 @@ pub enum Mode {
     Udp,
     #[serde(rename = "tcp_and_udp")]
     TcpAndUdp,
+    #[serde(rename = "quic")]
+    Quic,
+    #[serde(rename = "tcp_and_quic")]
+    TcpAndQuic,
 }
 
 impl Mode {
@@ -32,6 +33,10 @@ impl Mode {
     pub fn enable_udp(&self) -> bool {
         matches!(self, Self::Udp | Self::TcpAndUdp)
     }
+
+    pub fn enable_quic(&self) -> bool {
+        matches!(self, Self::Quic | Self::TcpAndQuic)
+    }
 }
 
 impl Display for Mode {
@@ -40,6 +45,8 @@ impl Display for Mode {
             Mode::Tcp => write!(f, "tcp"),
             Mode::Udp => write!(f, "udp"),
             Mode::TcpAndUdp => write!(f, "tcp_and_udp"),
+            Mode::Quic => write!(f, "quic"),
+            Mode::TcpAndQuic => write!(f, "tcp_and_quic"),
         }
     }
 }
@@ -64,7 +71,8 @@ pub struct ServerConfig {
     pub ssl: Option<SslConfig>,
     #[serde(default)]
     pub ws: Option<WebSocketConfig>,
-    #[cfg(feature = "server")]
+    #[serde(default)]
+    pub quic: Option<SslConfig>,
     #[serde(default)]
     pub user: Vec<User>,
 }
@@ -98,8 +106,7 @@ impl ClientConfig {
 pub struct SslConfig {
     #[serde(rename = "certificateFile")]
     pub certificate_file: String,
-    #[cfg(feature = "server")]
-    #[serde(rename = "keyFile")]
+    #[serde(rename = "keyFile", default)]
     pub key_file: String,
     #[serde(rename = "serverName")]
     pub server_name: String,
@@ -119,7 +126,6 @@ pub struct User {
     pub password: String,
 }
 
-#[cfg(feature = "client")]
 pub fn init_client() -> Result<ClientConfig, io::Error> {
     use std::io::Read;
     let path = args().nth(1).unwrap_or("config.json".to_owned());
@@ -129,7 +135,6 @@ pub fn init_client() -> Result<ClientConfig, io::Error> {
     Ok(config)
 }
 
-#[cfg(feature = "server")]
 pub fn init_server() -> Result<Vec<ServerConfig>, io::Error> {
     use std::io::Read;
     let path = args().nth(1).unwrap_or("config.json".to_owned());
@@ -165,7 +170,7 @@ mod test {
               "host": server_host,
               "port": server_port,
               "password": "{password}",
-              "cipher": "chacha20-poly1305",
+              "cipher": "chacha20-ietf-poly1305",
               "protocol": "vmess",
               "ssl": {
                 "certificateFile": "/path/to/certificate.crt",

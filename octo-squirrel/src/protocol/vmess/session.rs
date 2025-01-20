@@ -101,9 +101,11 @@ impl From<ClientSession> for ServerSession {
 
 pub trait Session: Display {
     fn encoder_key(&self) -> &[u8];
-    fn encoder_nonce(&mut self) -> &mut [u8];
+    fn encoder_nonce(&self) -> &[u8];
+    fn encoder_nonce_mut(&mut self) -> &mut [u8];
     fn decoder_key(&self) -> &[u8];
-    fn decoder_nonce(&mut self) -> &mut [u8];
+    fn decoder_nonce(&self) -> &[u8];
+    fn decoder_nonce_mut(&mut self) -> &mut [u8];
     fn chunk_key(&self) -> &[u8];
     fn chunk_nonce(&mut self) -> &mut [u8];
 }
@@ -112,13 +114,19 @@ impl Session for ClientSession {
     fn encoder_key(&self) -> &[u8] {
         &self.request_body_key
     }
-    fn encoder_nonce(&mut self) -> &mut [u8] {
+    fn encoder_nonce(&self) -> &[u8] {
+        &self.request_body_iv
+    }
+    fn encoder_nonce_mut(&mut self) -> &mut [u8] {
         &mut self.request_body_iv
     }
     fn decoder_key(&self) -> &[u8] {
         &self.response_body_key
     }
-    fn decoder_nonce(&mut self) -> &mut [u8] {
+    fn decoder_nonce(&self) -> &[u8] {
+        &self.response_body_iv
+    }
+    fn decoder_nonce_mut(&mut self) -> &mut [u8] {
         &mut self.response_body_iv
     }
     fn chunk_key(&self) -> &[u8] {
@@ -133,13 +141,19 @@ impl Session for ServerSession {
     fn encoder_key(&self) -> &[u8] {
         &self.response_body_key
     }
-    fn encoder_nonce(&mut self) -> &mut [u8] {
+    fn encoder_nonce(&self) -> &[u8] {
+        &self.response_body_iv
+    }
+    fn encoder_nonce_mut(&mut self) -> &mut [u8] {
         &mut self.response_body_iv
     }
     fn decoder_key(&self) -> &[u8] {
         &self.request_body_key
     }
-    fn decoder_nonce(&mut self) -> &mut [u8] {
+    fn decoder_nonce(&self) -> &[u8] {
+        &self.request_body_iv
+    }
+    fn decoder_nonce_mut(&mut self) -> &mut [u8] {
         &mut self.request_body_iv
     }
     fn chunk_key(&self) -> &[u8] {
@@ -147,5 +161,20 @@ impl Session for ServerSession {
     }
     fn chunk_nonce(&mut self) -> &mut [u8] {
         &mut self.request_body_iv
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::ClientSession;
+    use super::Session;
+
+    #[test]
+    fn test() {
+        let mut session = ClientSession::new();
+        let nonce = session.encoder_nonce_mut();
+        nonce[0] = nonce[0].wrapping_add(1);
+        let b = nonce[0];
+        assert_eq!(session.request_body_iv[0], b);
     }
 }

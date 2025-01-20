@@ -20,11 +20,13 @@ Only support IPv4 at this time.
 |   `tcp`    |     `tls`     |      ✔      |   ✔   |   ✔    |
 |   `tcp`    |     `ws`      |      ✔      |   ✔   |   ✔    |
 |   `tcp`    |     `wss`     |      ✔      |   ✔   |   ✔    |
+|   `tcp`    |    `quic`     |      ✔      |   ✔   |   ✔    |
 |   `udp`    |     `udp`     |      ✔      |       |        |
 |   `udp`    |     `tcp`     |             |   ✔   |        |
 |   `udp`    |     `tls`     |             |   ✔   |   ✔    |
 |   `udp`    |     `ws`      |             |   ✔   |        |
 |   `udp`    |     `wss`     |             |   ✔   |   ✔    |
+|   `ucp`    |    `quic`     |             |   ✔   |   ✔    |
 
 ### Ciphers
 
@@ -76,7 +78,12 @@ Only support IPv4 at this time.
 
    > index: `servers[index]` will be the client config
 
-   > mode: (OPTIONAL) client listening mode, options are "tcp"(default), "udp", "tcp_and_udp"
+   > mode: (OPTIONAL) listening mode
+   
+   1. `client`: options are "tcp"(default), "udp", "tcp_and_udp"
+   2. `shadowsocks server`: options are "tcp"(default), "udp", "quic", "tcp_and_udp", "tcp_and_quic", priority: "udp" > "
+      quic"
+   3. `shadowsocks quic server`: bind udp socket but process shadowsocks tcp payload
 
    > protocol: "shadowsocks" | "vmess" | "trojan"
 
@@ -94,11 +101,19 @@ Only support IPv4 at this time.
 
    > > path: the HTTP path for the websocket request
 
+   > quic: (OPTIONAL) QUIC specific configurations
+
+   > > certificateFile: certificate file
+
+   > > keyFile: private key file for encryption
+
+   > > serverName: the Server Name Indication field in the SSL handshake.
+
 2. running command
 
     * Windows
 
-    ```cmd
+    ```shell
     octo-squirrel-client.exe {config path}
     ```
 
