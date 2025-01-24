@@ -243,11 +243,11 @@ where
     Ok(())
 }
 
-type CToLSender<T> = Sender<((DatagramPacket, SocketAddr), T)>;
+type ClientLocalSender<T> = Sender<((DatagramPacket, SocketAddr), T)>;
 
 async fn new_binding<Key, Out, OutSend, ToOutSend, OutRecv, ToInRecv>(
     server_addr: SocketAddr,
-    client_local_tx: CToLSender<Key>,
+    client_local: ClientLocalSender<Key>,
     msg: (DatagramPacket, SocketAddr),
     key: Key,
     out: Out,
@@ -271,7 +271,7 @@ where
             match next {
                 Ok(outbound_recv) => {
                     // client->local|mpsc
-                    client_local_tx
+                    client_local
                         .send((to_inbound_recv(outbound_recv, &_target, sender), key.clone()))
                         .await
                         .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));

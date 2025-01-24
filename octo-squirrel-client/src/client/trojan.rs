@@ -215,8 +215,6 @@ pub(super) mod udp {
     }
 }
 
-pub(super) mod quic {}
-
 #[cfg(test)]
 mod test {
     use octo_squirrel::util::hex;
