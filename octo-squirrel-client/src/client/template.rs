@@ -141,17 +141,23 @@ where
 {
     let (mut c_l, mut l_c) = local_client.split();
     let (mut c_s, mut s_c) = client_server.split();
-    tokio::select! {
-        res = c_s.send_all(&mut l_c) => {
-            match res {
-                Ok(_) => relay::Result::Close(End::Local, End::Client),
-                Err(e) => relay::Result::Err(End::Local, End::Client,e),
-            }
-        },
-        res = c_l.send_all(&mut s_c) => {
-            match res {
-                Ok(_) => relay::Result::Close(End::Server, End::Client),
-                Err(e) => relay::Result::Err(End::Server, End::Client, e),
+    loop {
+        tokio::select! {
+            res = l_c.next() => match res {
+                Some(Ok(item)) => match c_s.send(item).await {
+                    Ok(_) => (),
+                    Err(e) => return relay::Result::Err(End::Client, End::Server, e),
+                },
+                Some(Err(e)) => return relay::Result::Err(End::Local, End::Client, e),
+                None => return relay::Result::Close(End::Local, End::Client),
+            },
+            res = s_c.next() => match res {
+                Some(Ok(item)) => match c_l.send(item).await {
+                    Ok(_) => (),
+                    Err(e) => return relay::Result::Err(End::Client, End::Local, e),
+                },
+                Some(Err(e)) => return relay::Result::Err(End::Server, End::Client, e),
+                None => return relay::Result::Close(End::Server, End::Client),
             }
         }
     }
@@ -204,7 +210,7 @@ where
         tokio::select! {
             // clean up
             _ = cleanup_timer.tick() => {
-                client_server_cache.iter();
+                client_server_cache.iter(); // removes expired items before creating the iterator
             }
             // client->local|mpsc
             Some((item, key)) = client_local_rx.recv() => {
