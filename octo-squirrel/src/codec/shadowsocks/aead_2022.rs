@@ -5,9 +5,9 @@ use std::time::SystemTime;
 use std::time::SystemTimeError;
 use std::time::UNIX_EPOCH;
 
-use bytes::Buf;
-use bytes::BytesMut;
 use rand::Rng;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BytesMut;
 
 use super::Authenticator;
 use super::ChunkDecoder;
@@ -42,7 +42,7 @@ pub fn next_padding_length(msg: &BytesMut) -> u16 {
     if msg.has_remaining() {
         0
     } else {
-        rand::thread_rng().gen_range(MIN_PADDING_LENGTH..=MAX_PADDING_LENGTH)
+        rand::rng().random_range(MIN_PADDING_LENGTH..=MAX_PADDING_LENGTH)
     }
 }
 
@@ -62,7 +62,7 @@ pub fn new_decoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkDecoder {
 mod test {
     use base64ct::Base64;
     use base64ct::Encoding;
-    use bytes::BytesMut;
+    use tokio_util::bytes::BytesMut;
 
     use super::next_padding_length;
     use super::now;

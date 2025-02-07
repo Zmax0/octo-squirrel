@@ -8,12 +8,12 @@ use anyhow::bail;
 use base64ct::Base64;
 use base64ct::Encoding;
 use byte_string::ByteStr;
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::BytesMut;
 use log::trace;
 use lru_time_cache::LruCache;
 use rand::Rng;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BufMut;
+use tokio_util::bytes::BytesMut;
 
 use super::aead_2022;
 use super::ChunkDecoder;
@@ -261,7 +261,7 @@ pub struct Identity<const N: usize> {
 impl<const N: usize> Default for Identity<N> {
     fn default() -> Self {
         let mut salt: [u8; N] = [0; N];
-        rand::thread_rng().fill(&mut salt[..N]);
+        rand::rng().fill(&mut salt[..N]);
         Self { salt, request_salt: Default::default(), user: Default::default() }
     }
 }
@@ -271,10 +271,10 @@ mod test {
     use anyhow::anyhow;
     use base64ct::Base64;
     use base64ct::Encoding;
-    use bytes::Buf;
-    use bytes::BytesMut;
-    use rand::distributions::Alphanumeric;
+    use rand::distr::Alphanumeric;
     use rand::Rng;
+    use tokio_util::bytes::Buf;
+    use tokio_util::bytes::BytesMut;
 
     use crate::codec::aead::CipherKind;
     use crate::codec::shadowsocks::tcp::AEADCipherCodec;
@@ -292,13 +292,13 @@ mod test {
         fn test_tcp(cipher: CipherKind) -> anyhow::Result<()> {
             fn test_tcp<const N: usize>(cipher: CipherKind) -> anyhow::Result<()> {
                 let mut password: [u8; N] = [0; N];
-                rand::thread_rng().fill(&mut password[..]);
+                rand::rng().fill(&mut password[..]);
                 let password = Base64::encode_string(&password);
                 let (key, identity_keys) = password_to_keys(&password).map_err(|e| anyhow!(e))?;
                 let context = Context::new(key, identity_keys, cipher, None);
                 let mut session: Session<N> = Session::new(Mode::Server, Identity::default(), Some(Address::Domain("localhost".to_owned(), 0)));
                 let mut codec: AEADCipherCodec<N> = AEADCipherCodec::default();
-                let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(1).map(char::from).collect();
+                let expect: String = rand::rng().sample_iter(&Alphanumeric).take(1).map(char::from).collect();
                 let src = BytesMut::from(expect.as_str());
                 let mut dst = BytesMut::new();
                 codec.encode(&context, &mut session, src, &mut dst)?;

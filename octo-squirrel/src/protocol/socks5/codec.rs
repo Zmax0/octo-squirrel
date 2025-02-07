@@ -1,7 +1,7 @@
 use anyhow::bail;
 use anyhow::Result;
-use bytes::Buf;
-use bytes::BytesMut;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 

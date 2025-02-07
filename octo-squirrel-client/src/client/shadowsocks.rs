@@ -3,7 +3,6 @@ pub(super) mod tcp {
 
     use anyhow::anyhow;
     use anyhow::Result;
-    use bytes::BytesMut;
     use octo_squirrel::codec::shadowsocks::tcp::AEADCipherCodec;
     use octo_squirrel::codec::shadowsocks::tcp::Context;
     use octo_squirrel::codec::shadowsocks::tcp::Identity;
@@ -13,6 +12,7 @@ pub(super) mod tcp {
     use octo_squirrel::protocol::shadowsocks::aead;
     use octo_squirrel::protocol::shadowsocks::aead_2022;
     use octo_squirrel::protocol::shadowsocks::Mode;
+    use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
@@ -78,7 +78,6 @@ pub(super) mod udp {
 
     use anyhow::anyhow;
     use anyhow::bail;
-    use bytes::BytesMut;
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::codec::shadowsocks::udp::AEADCipherCodec;
     use octo_squirrel::codec::shadowsocks::udp::Context;
@@ -91,6 +90,7 @@ pub(super) mod udp {
     use octo_squirrel::protocol::shadowsocks::aead_2022::password_to_keys;
     use octo_squirrel::protocol::shadowsocks::Mode;
     use tokio::net::UdpSocket;
+    use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
     use tokio_util::udp::UdpFramed;

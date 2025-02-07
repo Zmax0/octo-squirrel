@@ -1,19 +1,19 @@
-use aead::AeadCore;
-use aead::Key;
-use aead::KeyInit;
-use aead::KeySizeUser;
 use aes::cipher::BlockDecrypt;
 use aes::cipher::BlockEncrypt;
 use aes::cipher::Unsigned;
 use aes::Aes128;
 use aes::Aes256;
 use aes::Block;
+use aes_gcm::aead::AeadCore;
+use aes_gcm::aead::Key;
+use aes_gcm::aead::KeyInit;
+use aes_gcm::aead::KeySizeUser;
 use anyhow::bail;
 use byte_string::ByteStr;
-use bytes::BytesMut;
 use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::XChaCha8Poly1305;
 use log::trace;
+use tokio_util::bytes::BytesMut;
 
 use crate::codec::aead::CipherKind;
 use crate::codec::aead::CipherMethod;
@@ -46,7 +46,7 @@ pub fn new_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> CipherMethod
 }
 
 pub fn aes_encrypt_in_place(kind: CipherKind, key: &[u8], header: &mut [u8]) -> anyhow::Result<()> {
-    use aead::KeyInit;
+    use aes_gcm::aead::KeyInit;
     match kind {
         CipherKind::Aead2022Blake3Aes128Gcm => {
             let cipher = Aes128::new_from_slice(key)?;
@@ -65,7 +65,7 @@ pub fn aes_encrypt_in_place(kind: CipherKind, key: &[u8], header: &mut [u8]) -> 
 }
 
 pub fn aes_decrypt_in_place(kind: CipherKind, key: &[u8], buf: &mut [u8]) -> anyhow::Result<()> {
-    use aead::KeyInit;
+    use aes_gcm::aead::KeyInit;
     match kind {
         CipherKind::Aead2022Blake3Aes128Gcm => {
             let cipher = Aes128::new_from_slice(key)?;

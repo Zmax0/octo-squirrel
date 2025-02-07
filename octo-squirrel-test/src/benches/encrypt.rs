@@ -35,12 +35,13 @@ fn standard(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> anyhow::Result<()> {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let mut rng = rand::rng();
     let mut key = [0; 16];
-    rand::thread_rng().fill(&mut key);
+    rng.fill(&mut key);
     let mut nonce = [0; 12];
-    rand::thread_rng().fill(&mut nonce);
+    rng.fill(&mut nonce);
     let mut plaintext = [0; 1024];
-    rand::thread_rng().fill(&mut plaintext);
+    rng.fill(&mut plaintext);
     let mut group = c.benchmark_group("encrypt");
     group.bench_function("chunk", |b| b.iter(|| by_chunk(&key, &nonce, &plaintext)));
     group.bench_function("std", |b| b.iter(|| standard(&key, &nonce, &plaintext)));

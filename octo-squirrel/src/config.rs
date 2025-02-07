@@ -146,7 +146,7 @@ pub fn init_server() -> Result<Vec<ServerConfig>, io::Error> {
 
 #[cfg(test)]
 mod test {
-    use rand::distributions::Alphanumeric;
+    use rand::distr::Alphanumeric;
     use rand::random;
     use rand::Rng;
     use serde_json::json;
@@ -159,7 +159,7 @@ mod test {
     fn test_config_serialize() {
         let client_port: u16 = random();
         let server_port: u16 = random();
-        let server_name: String = rand::thread_rng().sample_iter(&Alphanumeric).take(10).map(char::from).collect();
+        let server_name: String = rand::rng().sample_iter(&Alphanumeric).take(10).map(char::from).collect();
         let server_host = format!("www.{}.com", server_name);
         let json = json!({
           "port": client_port,

@@ -4,8 +4,6 @@ enum CodecState {
 }
 
 pub(super) mod tcp {
-    use bytes::BufMut;
-    use bytes::BytesMut;
     use octo_squirrel::protocol::address::Address;
     use octo_squirrel::protocol::socks5::address;
     use octo_squirrel::protocol::socks5::Socks5CommandType;
@@ -13,6 +11,8 @@ pub(super) mod tcp {
     use octo_squirrel::util::hex;
     use sha2::Digest;
     use sha2::Sha224;
+    use tokio_util::bytes::BufMut;
+    use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
@@ -79,9 +79,6 @@ pub(super) mod udp {
 
     use anyhow::anyhow;
     use anyhow::Result;
-    use bytes::Buf;
-    use bytes::BufMut;
-    use bytes::BytesMut;
     use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketFramed;
@@ -101,6 +98,9 @@ pub(super) mod udp {
     use tokio_rustls::rustls::ClientConfig;
     use tokio_rustls::rustls::RootCertStore;
     use tokio_rustls::TlsConnector;
+    use tokio_util::bytes::Buf;
+    use tokio_util::bytes::BufMut;
+    use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
     use tokio_util::codec::Framed;

@@ -1,11 +1,11 @@
 use anyhow::anyhow;
 use anyhow::bail;
 use byte_string::ByteStr;
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::Bytes;
-use bytes::BytesMut;
 use log::trace;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BufMut;
+use tokio_util::bytes::Bytes;
+use tokio_util::bytes::BytesMut;
 
 use super::now;
 use crate::codec::aead::CipherKind;
@@ -94,7 +94,7 @@ fn make_eih(kind: &CipherKind, sub_key: &[u8], ipsk: &[u8], out: &mut BytesMut) 
 mod test {
     use base64ct::Base64;
     use base64ct::Encoding;
-    use bytes::BytesMut;
+    use tokio_util::bytes::BytesMut;
 
     use super::with_eih;
     use crate::codec::aead::CipherKind;

@@ -5,9 +5,9 @@ use std::net::SocketAddrV4;
 use std::net::SocketAddrV6;
 
 use anyhow::Result;
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::BytesMut;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BufMut;
+use tokio_util::bytes::BytesMut;
 
 use super::Socks5AddressType;
 use crate::protocol::address::Address;

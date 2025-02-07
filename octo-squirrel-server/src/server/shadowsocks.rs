@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use anyhow::bail;
-use bytes::BytesMut;
 use log::debug;
 use log::error;
 use log::info;
@@ -34,6 +33,7 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio::time;
+use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 

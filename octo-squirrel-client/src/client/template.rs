@@ -381,7 +381,7 @@ fn new_ws_builder<'a>(ip: IpAddr, port: u16, ws_config: &WebSocketConfig) -> Res
         if k == "host" || k == "Host" {
             host = Some(v);
         } else {
-            builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?);
+            builder = builder.add_header(HeaderName::from_str(k)?, HeaderValue::from_str(v)?)?;
         }
     }
     if let Some(host) = host {

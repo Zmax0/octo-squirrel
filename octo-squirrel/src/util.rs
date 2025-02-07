@@ -7,7 +7,7 @@ pub mod dice {
     }
 
     pub fn fill_bytes(bytes: &mut [u8]) {
-        rand::thread_rng().fill_bytes(bytes);
+        rand::rng().fill_bytes(bytes);
     }
 }
 

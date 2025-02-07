@@ -10,9 +10,6 @@ use aes_gcm::KeyInit;
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Result;
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::BytesMut;
 use log::debug;
 use log::info;
 use octo_squirrel::codec::vmess::aead::AEADBodyCodec;
@@ -27,6 +24,9 @@ use octo_squirrel::util::dice;
 use octo_squirrel::util::fnv;
 use rand::Rng;
 use tokio::net::TcpStream;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BufMut;
+use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
@@ -58,7 +58,7 @@ impl Encoder<BytesMut> for ClientAEADCodec {
                 header.extend_from_slice(&self.session.request_body_key);
                 header.put_u8(self.session.response_header);
                 header.put_u8(RequestOption::get_mask(&self.header.option)); // option mask
-                let padding_len = rand::thread_rng().gen_range(0..16); // dice roll 16
+                let padding_len = rand::rng().random_range(0..16); // dice roll 16
                 let security = self.header.security;
                 header.put_u8((padding_len << 4) | security as u8);
                 header.put_u8(0);
@@ -153,7 +153,6 @@ pub(super) mod udp {
 
     use anyhow::anyhow;
     use anyhow::Result;
-    use bytes::BytesMut;
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
@@ -165,6 +164,7 @@ pub(super) mod udp {
     use octo_squirrel::protocol::vmess::header::SecurityType;
     use tokio::net::TcpStream;
     use tokio_rustls::client::TlsStream;
+    use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Framed;
 
     use super::ClientAEADCodec;
