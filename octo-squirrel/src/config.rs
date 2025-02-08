@@ -8,6 +8,13 @@ use serde::Serialize;
 use crate::codec::aead::CipherKind;
 use crate::protocol::Protocol;
 
+pub fn default_path() -> String {
+    let mut path = std::env::current_exe().expect("Can't get the current exe path");
+    path.pop();
+    path.push("config.json");
+    path.to_str().expect("Can't convert the path to string").to_owned()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Mode {
     #[serde(rename = "tcp")]

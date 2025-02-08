@@ -1,5 +1,6 @@
 use std::env::args;
 use std::fs::File;
+use std::io::Read;
 
 use octo_squirrel::config::ServerConfig;
 use serde::Deserialize;
@@ -16,8 +17,7 @@ pub struct SslConfig {
 }
 
 pub fn init() -> Result<Vec<ServerConfig<SslConfig>>, std::io::Error> {
-    use std::io::Read;
-    let path = args().nth(1).unwrap_or("config.json".to_owned());
+    let path = args().nth(1).unwrap_or(octo_squirrel::config::default_path());
     let mut json = String::new();
     File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path)).read_to_string(&mut json)?;
     let config: Vec<ServerConfig<SslConfig>> = serde_json::from_str(&json)?;
