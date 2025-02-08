@@ -16,13 +16,15 @@ pub(super) mod tcp {
     use tokio_util::codec::Decoder;
     use tokio_util::codec::Encoder;
 
+    use crate::client::config::SslConfig;
+
     #[derive(Clone)]
     pub struct ClientContext<const N: usize>(Arc<Context<N>>);
 
-    impl<const N: usize> TryFrom<&ServerConfig> for ClientContext<N> {
+    impl<const N: usize> TryFrom<&ServerConfig<SslConfig>> for ClientContext<N> {
         type Error = anyhow::Error;
 
-        fn try_from(value: &ServerConfig) -> Result<Self, Self::Error> {
+        fn try_from(value: &ServerConfig<SslConfig>) -> Result<Self, Self::Error> {
             let kind = value.cipher;
             let (key, identity_keys) = if kind.is_aead_2022() {
                 aead_2022::password_to_keys(&value.password).map_err(|e| anyhow!(e))?
@@ -95,6 +97,8 @@ pub(super) mod udp {
     use tokio_util::codec::Encoder;
     use tokio_util::udp::UdpFramed;
 
+    use crate::client::config::SslConfig;
+
     #[derive(Clone, Copy)]
     pub struct Client<'a, const N: usize> {
         kind: CipherKind,
@@ -103,7 +107,7 @@ pub(super) mod udp {
     }
 
     impl<const N: usize> Client<'_, N> {
-        pub fn new_static(config: ServerConfig) -> anyhow::Result<Client<'static, N>> {
+        pub fn new_static(config: ServerConfig<SslConfig>) -> anyhow::Result<Client<'static, N>> {
             let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
             let key: &'static [u8; N] = Box::leak::<'static>(Box::new(key));
             let identity_keys: &'static Vec<[u8; N]> = Box::leak::<'static>(Box::new(identity_keys));
@@ -112,7 +116,6 @@ pub(super) mod udp {
     }
 
     pub async fn new_plain_outbound<'a, const N: usize>(
-        _: SocketAddr,
         _: &Address,
         client: &Client<'a, N>,
     ) -> anyhow::Result<UdpFramed<DatagramPacketCodec<'a, N>>> {

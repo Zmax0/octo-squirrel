@@ -2,6 +2,7 @@ use std::env;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use config::SslConfig;
 use futures::future::join_all;
 use log::error;
 use log::info;
@@ -19,14 +20,15 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+mod config;
 mod shadowsocks;
 mod template;
 mod trojan;
 mod vmess;
 
 pub async fn main() -> anyhow::Result<()> {
-    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
-    let servers = octo_squirrel::config::init_server()?;
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let servers = config::init()?;
     if let Some(level) = env::args().nth(2) {
         octo_squirrel::log::init(&level)?;
     } else {
@@ -37,7 +39,7 @@ pub async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn startup(config: ServerConfig) {
+async fn startup(config: ServerConfig<SslConfig>) {
     match config.protocol {
         Protocol::Shadowsocks => shadowsocks::startup(&config).await,
         Protocol::VMess => {
@@ -59,7 +61,11 @@ fn merge_result(res: (anyhow::Result<()>, anyhow::Result<()>)) -> anyhow::Result
     }
 }
 
-async fn startup_tcp<RefContext, Context, NewCodec, Codec>(context: RefContext, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
+async fn startup_tcp<RefContext, Context, NewCodec, Codec>(
+    context: RefContext,
+    config: &ServerConfig<SslConfig>,
+    new_codec: NewCodec,
+) -> anyhow::Result<()>
 where
     RefContext: AsRef<Context>,
     NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
@@ -104,7 +110,11 @@ where
     Ok(())
 }
 
-async fn startup_quic<RefContext, Context, NewCodec, Codec>(context: RefContext, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
+async fn startup_quic<RefContext, Context, NewCodec, Codec>(
+    context: RefContext,
+    config: &ServerConfig<SslConfig>,
+    new_codec: NewCodec,
+) -> anyhow::Result<()>
 where
     RefContext: AsRef<Context>,
     NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,

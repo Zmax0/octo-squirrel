@@ -75,7 +75,6 @@ pub(super) mod tcp {
 
 pub(super) mod udp {
     use std::net::SocketAddr;
-    use std::sync::Arc;
 
     use anyhow::anyhow;
     use anyhow::Result;
@@ -92,12 +91,6 @@ pub(super) mod udp {
     use sha2::Sha224;
     use tokio::net::TcpStream;
     use tokio_rustls::client::TlsStream;
-    use tokio_rustls::rustls::pki_types::pem::PemObject;
-    use tokio_rustls::rustls::pki_types::CertificateDer;
-    use tokio_rustls::rustls::pki_types::ServerName;
-    use tokio_rustls::rustls::ClientConfig;
-    use tokio_rustls::rustls::RootCertStore;
-    use tokio_rustls::TlsConnector;
     use tokio_util::bytes::Buf;
     use tokio_util::bytes::BufMut;
     use tokio_util::bytes::BytesMut;
@@ -106,45 +99,33 @@ pub(super) mod udp {
     use tokio_util::codec::Framed;
 
     use super::CodecState;
+    use crate::client::config::SslConfig;
     use crate::client::template;
 
     pub fn new_key(sender: SocketAddr, _: &Address) -> SocketAddr {
         sender
     }
 
-    pub async fn new_quic_outbound(server_addr: SocketAddr, target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientCodec>> {
+    pub async fn new_quic_outbound(target: &Address, config: &ServerConfig<SslConfig>) -> Result<Framed<QuicStream, ClientCodec>> {
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
         let quic_config = config.quic.as_ref().ok_or(anyhow!("config.quic is empty"))?;
-        template::new_quic_outbound(server_addr, codec, quic_config).await
+        template::new_quic_outbound(&config.host, config.port, codec, quic_config).await
     }
 
-    pub async fn new_tls_outbound(
-        server_addr: SocketAddr,
-        target: &Address,
-        config: &ServerConfig,
-    ) -> Result<Framed<TlsStream<TcpStream>, ClientCodec>> {
+    pub async fn new_tls_outbound(target: &Address, config: &ServerConfig<SslConfig>) -> Result<Framed<TlsStream<TcpStream>, ClientCodec>> {
         let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
-        let outbound = TcpStream::connect(server_addr).await?;
-        let cert = CertificateDer::from_pem_file(ssl_config.certificate_file.as_str())?;
-        let mut roots = RootCertStore::empty();
-        roots.add(cert)?;
-        let tls_config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
-        let tls_connector = TlsConnector::from(Arc::new(tls_config));
-        let server_name = ServerName::try_from(ssl_config.server_name.clone())?;
-        let outbound = tls_connector.connect(server_name, outbound).await?;
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        Ok(Framed::new(outbound, codec))
+        template::new_tls_outbound(&config.host, config.port, codec, ssl_config).await
     }
 
     pub async fn new_wss_outbound(
-        addr: SocketAddr,
         target: &Address,
-        config: &ServerConfig,
+        config: &ServerConfig<SslConfig>,
     ) -> Result<WebSocketFramed<TlsStream<TcpStream>, ClientCodec, DatagramPacket, DatagramPacket>> {
         let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
         let ws_config = config.ws.as_ref().ok_or(anyhow!("require ws config"))?;
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        template::new_wss_outbound(addr, codec, ssl_config, ws_config).await
+        template::new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await
     }
 
     pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> DatagramPacket {

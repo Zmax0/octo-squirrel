@@ -80,30 +80,30 @@ impl CipherMethod {
         }
     }
 
-    pub fn encrypt(&self, nonce: &[u8], plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aes_gcm::aead::Error> {
+    pub fn encrypt(&self, nonce: &[u8], plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
         method_match_aead_fn!(self, encrypt, (nonce.into(), Payload { msg: plaintext, aad: associated_data }))
     }
 
-    pub fn encrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut dyn Buffer) -> Result<(), aes_gcm::aead::Error> {
+    pub fn encrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut dyn Buffer) -> Result<(), aead::Error> {
         method_match_aead_fn!(self, encrypt_in_place, (nonce.into(), associated_data, plaintext))
     }
 
-    pub fn encrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut [u8]) -> Result<(), aes_gcm::aead::Error> {
+    pub fn encrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut [u8]) -> Result<(), aead::Error> {
         let (buffer, tag) = plaintext.split_at_mut(plaintext.len() - self.tag_size());
         let _tag = method_match_aead_fn!(self, encrypt_in_place_detached, (nonce.into(), associated_data, buffer))?;
         tag.copy_from_slice(_tag.as_slice());
         Ok(())
     }
 
-    pub fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aes_gcm::aead::Error> {
+    pub fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
         method_match_aead_fn!(self, decrypt, (nonce.into(), Payload { msg: ciphertext, aad: associated_data }))
     }
 
-    pub fn decrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut dyn Buffer) -> Result<(), aes_gcm::aead::Error> {
+    pub fn decrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut dyn Buffer) -> Result<(), aead::Error> {
         method_match_aead_fn!(self, decrypt_in_place, (nonce.into(), associated_data, ciphertext))
     }
 
-    pub fn decrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut [u8]) -> Result<(), aes_gcm::aead::Error> {
+    pub fn decrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut [u8]) -> Result<(), aead::Error> {
         let (buffer, tag) = ciphertext.split_at_mut(ciphertext.len() - self.tag_size());
         method_match_aead_fn!(self, decrypt_in_place_detached, (nonce.into(), associated_data, buffer, GenericArray::from_mut_slice(tag)))
     }

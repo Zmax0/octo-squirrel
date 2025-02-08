@@ -26,10 +26,11 @@ use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use super::config::SslConfig;
 use super::template::message::InboundIn;
 use super::template::message::OutboundIn;
 
-pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerAeadCodec> {
+pub fn new_codec(config: &ServerConfig<SslConfig>) -> anyhow::Result<ServerAeadCodec> {
     ServerAeadCodec::try_from(config)
 }
 
@@ -207,10 +208,10 @@ impl Decoder for ServerAeadCodec {
     }
 }
 
-impl TryFrom<&ServerConfig> for ServerAeadCodec {
+impl TryFrom<&ServerConfig<SslConfig>> for ServerAeadCodec {
     type Error = anyhow::Error;
 
-    fn try_from(config: &ServerConfig) -> Result<Self, Self::Error> {
+    fn try_from(config: &ServerConfig<SslConfig>) -> Result<Self, Self::Error> {
         let uuid = config.user.iter().map(|u| &u.password).collect();
         let keys = id::from_passwords(uuid)?;
         Ok(Self { keys, decode_state: DecodeState::Init, encode_state: EncodeState::Init })

@@ -37,9 +37,10 @@ use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use super::config::SslConfig;
 use super::template;
 
-pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
+pub async fn startup(config: &ServerConfig<SslConfig>) -> anyhow::Result<()> {
     let res = match config.cipher {
         CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
             let mut user_manager: ServerUserManager<16> = ServerUserManager::new();
@@ -71,7 +72,7 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
     }
 }
 
-async fn startup_tcp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
+async fn startup_tcp<const N: usize>(config: &ServerConfig<SslConfig>, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
     if !config.mode.enable_tcp() {
         return Ok(());
     }
@@ -79,7 +80,7 @@ async fn startup_tcp<const N: usize>(config: &ServerConfig, user_manager: &Arc<S
     super::startup_tcp(context, config, |c| Ok(PayloadCodec::from(c))).await
 }
 
-async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
+async fn startup_udp<const N: usize>(config: &ServerConfig<SslConfig>, user_manager: &Arc<ServerUserManager<N>>) -> anyhow::Result<()> {
     if !config.mode.enable_udp() && !config.mode.enable_quic() {
         return Ok(());
     }
@@ -275,7 +276,7 @@ mod udp {
     use octo_squirrel::codec::shadowsocks::udp::SessionCodec;
 
     use super::*;
-    pub fn new_codec<'a, const N: usize>(config: &ServerConfig, context: Context<'a, N>) -> anyhow::Result<SessionCodec<'a, N>> {
+    pub fn new_codec<'a, const N: usize>(config: &ServerConfig<SslConfig>, context: Context<'a, N>) -> anyhow::Result<SessionCodec<'a, N>> {
         Ok(SessionCodec::<'a, N>::new(context, AEADCipherCodec::new(config.cipher)))
     }
 }
@@ -295,7 +296,7 @@ mod tcp {
     pub struct ServerContext<const N: usize>(Arc<Context<N>>);
 
     impl<const N: usize> ServerContext<N> {
-        pub fn init(config: &ServerConfig, user_manager: Arc<ServerUserManager<N>>) -> Result<Self> {
+        pub fn init(config: &ServerConfig<SslConfig>, user_manager: Arc<ServerUserManager<N>>) -> Result<Self> {
             let kind = config.cipher;
             let (key, identity_keys) = if kind.is_aead_2022() {
                 password_to_keys(&config.password).map_err(|e| anyhow!(e))?

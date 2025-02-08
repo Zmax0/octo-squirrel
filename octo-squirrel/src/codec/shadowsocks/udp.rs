@@ -219,7 +219,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                     Ok((server_session_id, packet_id, text))
                 }
                 CipherKind::Aead2022Blake3ChaCha8Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
-                    let (nonce, text) = src.split_at_mut(aead_2022::udp::nonce_length(kind));
+                    let (nonce, text) = src.split_at_mut(udp::nonce_length(kind));
                     let session_id = {
                         let slice = &text[..8];
                         let slice: &[u64] = unsafe { slice::from_raw_parts(slice.as_ptr() as *const _, 1) };

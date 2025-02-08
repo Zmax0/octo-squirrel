@@ -74,7 +74,7 @@ impl AEADBodyCodec {
         Self::new(header, session, |s| s.decoder_key(), |s| s.decoder_nonce())
     }
 
-    fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), aes_gcm::aead::Error> {
+    fn encode_chunk(&mut self, src: &mut BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), aead::Error> {
         let padding_length = self.next_padding_length();
         trace!("Encode payload; padding length={}", padding_length);
         let tag_size = self.auth.cipher.tag_size();
@@ -97,7 +97,7 @@ impl AEADBodyCodec {
         }
     }
 
-    fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Result<Vec<u8>, aes_gcm::aead::Error> {
+    fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Result<Vec<u8>, aead::Error> {
         match self.chunk {
             ChunkSizeParser::Plain => Ok(PlainSizeParser::encode_size(size)),
             ChunkSizeParser::Auth(ref mut parser) => parser.encode_size(size, nonce),
@@ -105,18 +105,18 @@ impl AEADBodyCodec {
         }
     }
 
-    pub fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), aes_gcm::aead::Error> {
+    pub fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), aead::Error> {
         while src.has_remaining() {
             self.encode_chunk(&mut src, dst, session)?;
         }
         Ok(())
     }
 
-    pub fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), aes_gcm::aead::Error> {
+    pub fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut, session: &mut dyn Session) -> Result<(), aead::Error> {
         self.encode_chunk(&mut src, dst, session)
     }
 
-    pub fn decode_packet(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, aes_gcm::aead::Error> {
+    pub fn decode_packet(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, aead::Error> {
         let padding_length = self.next_padding_length();
         let packet_length = self.decode_size(&mut src.split_to(self.chunk.size_bytes()), session.chunk_nonce())? - padding_length;
         let mut packet_bytes = src.split_to(packet_length);
@@ -125,7 +125,7 @@ impl AEADBodyCodec {
         Ok(Some(packet_bytes))
     }
 
-    pub fn decode_payload(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, aes_gcm::aead::Error> {
+    pub fn decode_payload(&mut self, src: &mut BytesMut, session: &mut dyn Session) -> Result<Option<BytesMut>, aead::Error> {
         let mut dst = BytesMut::new();
         loop {
             match self.state {
@@ -163,7 +163,7 @@ impl AEADBodyCodec {
         }
     }
 
-    fn decode_size(&mut self, data: &mut BytesMut, nonce: &mut [u8]) -> Result<usize, aes_gcm::aead::Error> {
+    fn decode_size(&mut self, data: &mut BytesMut, nonce: &mut [u8]) -> Result<usize, aead::Error> {
         match self.chunk {
             ChunkSizeParser::Plain => Ok(PlainSizeParser::decode_size(data)),
             ChunkSizeParser::Auth(ref mut parser) => parser.decode_size(data, nonce),
@@ -231,22 +231,22 @@ impl Authenticator {
         size_of::<u16>() + self.cipher.tag_size()
     }
 
-    fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Result<Vec<u8>, aes_gcm::aead::Error> {
+    fn encode_size(&mut self, size: usize, nonce: &mut [u8]) -> Result<Vec<u8>, aead::Error> {
         let mut buffer = ((size - self.cipher.tag_size()) as u16).to_be_bytes().to_vec();
         self.seal(&mut buffer, nonce)?;
         Ok(buffer)
     }
 
-    fn decode_size(&mut self, buffer: &mut BytesMut, nonce: &mut [u8]) -> Result<usize, aes_gcm::aead::Error> {
+    fn decode_size(&mut self, buffer: &mut BytesMut, nonce: &mut [u8]) -> Result<usize, aead::Error> {
         self.open(buffer, nonce)?;
         Ok(buffer.get_u16() as usize + self.cipher.tag_size())
     }
 
-    fn seal(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), aes_gcm::aead::Error> {
+    fn seal(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), aead::Error> {
         self.cipher.encrypt_in_place(self.counting.generate(nonce), &[], buffer)
     }
 
-    fn open(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), aes_gcm::aead::Error> {
+    fn open(&mut self, buffer: &mut dyn Buffer, nonce: &mut [u8]) -> Result<(), aead::Error> {
         self.cipher.decrypt_in_place(self.counting.generate(nonce), &[], buffer)
     }
 }

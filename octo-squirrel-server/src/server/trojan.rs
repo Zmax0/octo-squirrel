@@ -14,6 +14,7 @@ use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use super::config::SslConfig;
 use super::template::message::InboundIn;
 use super::template::message::OutboundIn;
 
@@ -23,7 +24,7 @@ enum CodecState {
     Udp,
 }
 
-pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerCodec> {
+pub fn new_codec(config: &ServerConfig<SslConfig>) -> anyhow::Result<ServerCodec> {
     let mut hasher = Sha224::new();
     hasher.update(config.password.as_bytes());
     let key = hasher.finalize().into();

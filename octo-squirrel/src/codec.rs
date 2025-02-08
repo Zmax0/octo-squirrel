@@ -138,7 +138,7 @@ impl QuicStream {
         QuicStream { send, recv }
     }
 
-    pub async fn close(mut self) -> anyhow::Result<()> {
+    pub async fn close(mut self) -> Result<()> {
         self.send.finish()?;
         match self.send.stopped().await {
             Ok(_) => Ok(()),

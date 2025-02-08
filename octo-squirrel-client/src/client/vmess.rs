@@ -1,6 +1,5 @@
 use std::io::Cursor;
 use std::mem::size_of;
-use std::net::SocketAddr;
 
 use aes_gcm::aes::cipher::Unsigned;
 use aes_gcm::AeadCore;
@@ -23,13 +22,11 @@ use octo_squirrel::protocol::vmess::VERSION;
 use octo_squirrel::util::dice;
 use octo_squirrel::util::fnv;
 use rand::Rng;
-use tokio::net::TcpStream;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
-use tokio_util::codec::Framed;
 
 pub struct ClientAEADCodec {
     header: RequestHeader,
@@ -168,58 +165,53 @@ pub(super) mod udp {
     use tokio_util::codec::Framed;
 
     use super::ClientAEADCodec;
+    use crate::client::config::SslConfig;
     use crate::client::template;
 
     pub fn new_key(sender: SocketAddr, target: &Address) -> (SocketAddr, Address) {
         (sender, target.clone())
     }
 
-    pub fn new_codec(addr: &Address, config: &ServerConfig) -> Result<ClientAEADCodec> {
+    pub fn new_codec(addr: &Address, config: &ServerConfig<SslConfig>) -> Result<ClientAEADCodec> {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
         let header = RequestHeader::default(RequestCommand::UDP, security, addr.clone(), &config.password)?;
         Ok(ClientAEADCodec::new(header))
     }
 
-    pub async fn new_quic_outbound(server_addr: SocketAddr, target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientAEADCodec>> {
+    pub async fn new_quic_outbound(target: &Address, config: &ServerConfig<SslConfig>) -> Result<Framed<QuicStream, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
         let quic_config = config.quic.as_ref().ok_or(anyhow!("config.quic is empty"))?;
-        template::new_quic_outbound(server_addr, codec, quic_config).await
+        template::new_quic_outbound(&config.host, config.port, codec, quic_config).await
     }
 
-    pub async fn new_plain_outbound(server_addr: SocketAddr, target: &Address, config: &ServerConfig) -> Result<Framed<TcpStream, ClientAEADCodec>> {
+    pub async fn new_plain_outbound(target: &Address, config: &ServerConfig<SslConfig>) -> Result<Framed<TcpStream, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        super::new_plain_outbound(server_addr, codec).await
+        template::new_plain_outbound(&config.host, config.port, codec).await
     }
 
     pub async fn new_ws_outbound(
-        server_addr: SocketAddr,
         target: &Address,
-        config: &ServerConfig,
+        config: &ServerConfig<SslConfig>,
     ) -> Result<WebSocketFramed<TcpStream, ClientAEADCodec, BytesMut, BytesMut>> {
         let codec = new_codec(target, config)?;
         let ws_config = config.ws.as_ref().ok_or(anyhow!("require ws config"))?;
-        template::new_ws_outbound(server_addr, codec, ws_config).await
+        template::new_ws_outbound(&config.host, config.port, codec, ws_config).await
     }
 
-    pub async fn new_tls_outbound(
-        server_addr: SocketAddr,
-        target: &Address,
-        config: &ServerConfig,
-    ) -> Result<Framed<TlsStream<TcpStream>, ClientAEADCodec>> {
+    pub async fn new_tls_outbound(target: &Address, config: &ServerConfig<SslConfig>) -> Result<Framed<TlsStream<TcpStream>, ClientAEADCodec>> {
         let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
         let codec = new_codec(target, config)?;
-        template::new_tls_outbound(server_addr, codec, ssl_config).await
+        template::new_tls_outbound(&config.host, config.port, codec, ssl_config).await
     }
 
     pub async fn new_wss_outbound(
-        server_addr: SocketAddr,
         target: &Address,
-        config: &ServerConfig,
+        config: &ServerConfig<SslConfig>,
     ) -> Result<WebSocketFramed<TlsStream<TcpStream>, ClientAEADCodec, BytesMut, BytesMut>> {
         let ssl_config = config.ssl.as_ref().ok_or(anyhow!("require ssl config"))?;
         let ws_config = config.ws.as_ref().ok_or(anyhow!("require ws config"))?;
         let codec = new_codec(target, config)?;
-        template::new_wss_outbound(server_addr, codec, ssl_config, ws_config).await
+        template::new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await
     }
 
     pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> BytesMut {
@@ -229,9 +221,4 @@ pub(super) mod udp {
     pub fn to_inbound_recv(item: BytesMut, recipient: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         ((item, recipient.clone()), sender)
     }
-}
-
-pub async fn new_plain_outbound(server_addr: SocketAddr, codec: ClientAEADCodec) -> Result<Framed<TcpStream, ClientAEADCodec>> {
-    let outbound = TcpStream::connect(server_addr).await?;
-    Ok(Framed::new(outbound, codec))
 }
