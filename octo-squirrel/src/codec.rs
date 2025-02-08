@@ -12,8 +12,6 @@ use std::task::Poll;
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Result;
-use bytes::Bytes;
-use bytes::BytesMut;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -21,6 +19,8 @@ use futures::StreamExt;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
+use tokio_util::bytes::Bytes;
+use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_websockets::WebSocketStream;
@@ -138,7 +138,7 @@ impl QuicStream {
         QuicStream { send, recv }
     }
 
-    pub async fn close(mut self) -> anyhow::Result<()> {
+    pub async fn close(mut self) -> Result<()> {
         self.send.finish()?;
         match self.send.stopped().await {
             Ok(_) => Ok(()),

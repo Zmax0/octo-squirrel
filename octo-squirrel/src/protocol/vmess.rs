@@ -21,7 +21,7 @@ pub fn crc32(bytes: &[u8]) -> u32 {
 }
 
 pub fn timestamp(delta: i32) -> Result<i64, SystemTimeError> {
-    let range_in_delta = rand::thread_rng().gen_range(0..delta * 2) - delta;
+    let range_in_delta = rand::rng().random_range(0..delta * 2) - delta;
     Ok(now()? - range_in_delta as i64)
 }
 
@@ -34,10 +34,10 @@ pub mod address {
     use std::net::SocketAddrV6;
     use std::string::FromUtf8Error;
 
-    use bytes::Buf;
-    use bytes::BufMut;
-    use bytes::Bytes;
-    use bytes::BytesMut;
+    use tokio_util::bytes::Buf;
+    use tokio_util::bytes::BufMut;
+    use tokio_util::bytes::Bytes;
+    use tokio_util::bytes::BytesMut;
 
     use crate::protocol::address::Address;
     use crate::protocol::vmess::header::AddressType;
@@ -121,8 +121,8 @@ mod test {
 
     use base64ct::Base64;
     use base64ct::Encoding;
-    use bytes::Buf;
-    use bytes::BytesMut;
+    use tokio_util::bytes::Buf;
+    use tokio_util::bytes::BytesMut;
 
     use super::address;
     use super::id;

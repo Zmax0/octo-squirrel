@@ -6,11 +6,12 @@ pub mod udp;
 use core::slice;
 use std::mem::size_of;
 
-use ::aead::Buffer;
+use aes_gcm::aead::Buffer;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use log::trace;
+use tokio_util::bytes;
 
 use super::aead::CipherMethod;
 use super::aead::IncreasingNonceGenerator;
@@ -29,21 +30,21 @@ impl Authenticator {
         size_of::<u16>() + self.method.tag_size()
     }
 
-    fn encode_size(&mut self, bytes: &mut [u8]) -> Result<(), ::aead::Error> {
+    fn encode_size(&mut self, bytes: &mut [u8]) -> Result<(), aes_gcm::aead::Error> {
         self.method.encrypt_in_place_detached(self.nonce_generator.generate(), &[], bytes)
     }
 
-    fn decode_size(&mut self, data: &mut BytesMut) -> Result<usize, ::aead::Error> {
+    fn decode_size(&mut self, data: &mut BytesMut) -> Result<usize, aes_gcm::aead::Error> {
         self.open(data)?;
         let size = data.get_u16();
         Ok(size as usize + self.method.tag_size())
     }
 
-    fn seal(&mut self, plaintext: &mut dyn Buffer) -> Result<(), ::aead::Error> {
+    fn seal(&mut self, plaintext: &mut dyn Buffer) -> Result<(), aes_gcm::aead::Error> {
         self.method.encrypt_in_place(self.nonce_generator.generate(), &[], plaintext)
     }
 
-    fn open(&mut self, ciphertext: &mut dyn Buffer) -> Result<(), ::aead::Error> {
+    fn open(&mut self, ciphertext: &mut dyn Buffer) -> Result<(), aes_gcm::aead::Error> {
         self.method.decrypt_in_place(self.nonce_generator.generate(), &[], ciphertext)
     }
 }
@@ -58,7 +59,7 @@ impl ChunkEncoder {
         Self { payload_limit, auth }
     }
 
-    fn encode_chunk(&mut self, src: &mut BytesMut, len: usize, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+    fn encode_chunk(&mut self, src: &mut BytesMut, len: usize, dst: &mut BytesMut) -> Result<(), aes_gcm::aead::Error> {
         trace!("Encode chunk; len={}", len);
         let tag_size = self.auth.method.tag_size();
         dst.reserve(2 + tag_size);
@@ -73,7 +74,7 @@ impl ChunkEncoder {
         Ok(())
     }
 
-    fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+    fn encode_payload(&mut self, mut src: BytesMut, dst: &mut BytesMut) -> Result<(), aes_gcm::aead::Error> {
         let limit = self.payload_limit - self.auth.method.tag_size() - self.size_bytes();
         while src.has_remaining() {
             let len = src.remaining().min(limit);
@@ -82,7 +83,7 @@ impl ChunkEncoder {
         Ok(())
     }
 
-    fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+    fn encode_packet(&mut self, mut src: BytesMut, dst: &mut BytesMut) -> Result<(), aes_gcm::aead::Error> {
         self.auth.seal(&mut src)?;
         dst.extend_from_slice(&src);
         Ok(())
@@ -92,7 +93,7 @@ impl ChunkEncoder {
         self.auth.size_bytes()
     }
 
-    fn encode_size(&mut self, size_bytes: &mut [u8]) -> Result<(), ::aead::Error> {
+    fn encode_size(&mut self, size_bytes: &mut [u8]) -> Result<(), aes_gcm::aead::Error> {
         self.auth.encode_size(size_bytes)
     }
 }
@@ -112,13 +113,13 @@ impl ChunkDecoder {
         Self { auth, state: DecodeState::Length }
     }
 
-    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<BytesMut, ::aead::Error> {
+    fn decode_packet(&mut self, src: &mut BytesMut) -> Result<BytesMut, aes_gcm::aead::Error> {
         let mut opening = src.split_off(0);
         self.auth.open(&mut opening)?;
         Ok(opening)
     }
 
-    fn decode_payload(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> Result<(), ::aead::Error> {
+    fn decode_payload(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> Result<(), aes_gcm::aead::Error> {
         loop {
             match self.state {
                 DecodeState::Length => {
@@ -148,7 +149,7 @@ impl ChunkDecoder {
         self.auth.size_bytes()
     }
 
-    fn decode_size(&mut self, data: &mut BytesMut) -> Result<usize, ::aead::Error> {
+    fn decode_size(&mut self, data: &mut BytesMut) -> Result<usize, aes_gcm::aead::Error> {
         self.auth.decode_size(data)
     }
 }

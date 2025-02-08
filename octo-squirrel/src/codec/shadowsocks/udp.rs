@@ -10,13 +10,13 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::bail;
 use byte_string::ByteStr;
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::BytesMut;
 use log::debug;
 use log::trace;
 use lru_time_cache::LruCache;
 use rand::random;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BufMut;
+use tokio_util::bytes::BytesMut;
 
 use super::aead_2022;
 use super::ChunkDecoder;
@@ -219,7 +219,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                     Ok((server_session_id, packet_id, text))
                 }
                 CipherKind::Aead2022Blake3ChaCha8Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
-                    let (nonce, text) = src.split_at_mut(aead_2022::udp::nonce_length(kind));
+                    let (nonce, text) = src.split_at_mut(udp::nonce_length(kind));
                     let session_id = {
                         let slice = &text[..8];
                         let slice: &[u64] = unsafe { slice::from_raw_parts(slice.as_ptr() as *const _, 1) };
@@ -468,11 +468,11 @@ mod test {
     use std::net::SocketAddrV4;
 
     use anyhow::anyhow;
-    use bytes::Buf;
-    use bytes::BytesMut;
-    use rand::distributions::Alphanumeric;
+    use rand::distr::Alphanumeric;
     use rand::random;
     use rand::Rng;
+    use tokio_util::bytes::Buf;
+    use tokio_util::bytes::BytesMut;
 
     use crate::codec::aead::CipherKind;
     use crate::codec::shadowsocks::udp::AEADCipherCodec;
@@ -488,9 +488,9 @@ mod test {
     fn test_udp() -> anyhow::Result<()> {
         fn test_udp(cipher: CipherKind) -> anyhow::Result<()> {
             fn test_udp<const N: usize>(cipher: CipherKind) -> anyhow::Result<()> {
-                let password: String = rand::thread_rng().sample_iter(&Alphanumeric).take(N).map(char::from).collect();
+                let password: String = rand::rng().sample_iter(&Alphanumeric).take(N).map(char::from).collect();
                 let codec = AEADCipherCodec::new(cipher);
-                let expect: String = rand::thread_rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
+                let expect: String = rand::rng().sample_iter(&Alphanumeric).take(0xffff).map(char::from).collect();
                 let keys = password_to_keys(&password).map_err(|e| anyhow!(e))?;
                 let codec: SessionCodec<N> = SessionCodec::new(Context::new(Mode::Server, None, &keys.0, &keys.1), codec);
                 let mut dst = BytesMut::new();

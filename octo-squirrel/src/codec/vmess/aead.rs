@@ -1,10 +1,8 @@
 use std::mem::size_of;
 
-use aead::Buffer;
+use aes_gcm::aead::Buffer;
 use base64ct::Base64;
 use base64ct::Encoding;
-use bytes::Buf;
-use bytes::BytesMut;
 use digest::core_api::XofReaderCoreWrapper;
 use digest::ExtendableOutput;
 use digest::InvalidLength;
@@ -13,6 +11,8 @@ use digest::XofReader;
 use log::trace;
 use sha3::Shake128;
 use sha3::Shake128ReaderCore;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BytesMut;
 
 use crate::codec::aead::CipherKind;
 use crate::codec::aead::CipherMethod;
@@ -295,9 +295,9 @@ impl ShakeSizeParser {
 mod test {
     use anyhow::anyhow;
     use anyhow::Result;
-    use bytes::BytesMut;
     use rand::random;
     use rand::Rng;
+    use tokio_util::bytes::BytesMut;
 
     use crate::codec::vmess::aead::AEADBodyCodec;
     use crate::codec::vmess::aead::ShakeSizeParser;
@@ -323,7 +323,7 @@ mod test {
         let mut p1 = new_parser();
         let mut p2 = new_parser();
         for _ in 0..100 {
-            let size = rand::thread_rng().gen_range(32768..65535);
+            let size = rand::rng().random_range(32768..65535);
             let bytes = p1.encode_size(size);
             assert_eq!(size, p2.decode_size(&bytes[..]))
         }
@@ -391,7 +391,7 @@ mod test {
             let mut server_encoder = AEADBodyCodec::new_encoder(&header, &mut server_session)?;
             let mut server_decoder = AEADBodyCodec::new_decoder(&header, &mut server_session)?;
             let mut msg = [0; 2048];
-            rand::thread_rng().fill(&mut msg);
+            rand::rng().fill(&mut msg);
             let mut src = BytesMut::new();
             src.extend_from_slice(&msg);
             let mut dst = BytesMut::new();

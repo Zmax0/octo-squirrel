@@ -5,7 +5,6 @@ use std::net::SocketAddrV4;
 
 use anyhow::anyhow;
 use anyhow::bail;
-use bytes::BytesMut;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -24,6 +23,7 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
+use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::udp::UdpFramed;
@@ -101,7 +101,7 @@ pub(super) mod tcp {
         C: Encoder<OutboundIn, Error = anyhow::Error> + Decoder<Item = InboundIn, Error = anyhow::Error> + Unpin + Send + 'static,
     {
         match ServerBuilder::new().accept(inbound).await {
-            Ok(inbound) => {
+            Ok((_, inbound)) => {
                 let (mut inbound_sink, mut inbound_stream) = WebSocketFramed::new(inbound, codec).split();
                 relay_to(&mut inbound_sink, &mut inbound_stream).await;
             }

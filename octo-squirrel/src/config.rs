@@ -1,15 +1,19 @@
 use std::collections::HashMap;
-use std::env::args;
 use std::fmt::Display;
-use std::fs::File;
-use std::io;
+use std::marker::PhantomData;
 
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::codec::aead::CipherKind;
-use crate::log::Logger;
 use crate::protocol::Protocol;
+
+pub fn default_path() -> String {
+    let mut path = std::env::current_exe().expect("Can't get the current exe path");
+    path.pop();
+    path.push("config.json");
+    path.to_str().expect("Can't convert the path to string").to_owned()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Mode {
@@ -58,7 +62,7 @@ impl Default for Mode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServerConfig {
+pub struct ServerConfig<S: Clone + Default> {
     pub host: String,
     pub port: u16,
     #[serde(default)]
@@ -68,48 +72,21 @@ pub struct ServerConfig {
     #[serde(default)]
     pub cipher: CipherKind,
     #[serde(default)]
-    pub ssl: Option<SslConfig>,
+    pub ssl: Option<S>,
     #[serde(default)]
     pub ws: Option<WebSocketConfig>,
     #[serde(default)]
-    pub quic: Option<SslConfig>,
+    pub quic: Option<S>,
     #[serde(default)]
     pub user: Vec<User>,
+    #[serde(skip)]
+    marker: PhantomData<S>,
 }
 
-impl AsRef<ServerConfig> for ServerConfig {
-    fn as_ref(&self) -> &ServerConfig {
+impl<S: Clone + Default> AsRef<ServerConfig<S>> for ServerConfig<S> {
+    fn as_ref(&self) -> &ServerConfig<S> {
         self
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClientConfig {
-    #[serde(default)]
-    pub host: Option<String>,
-    pub port: u16,
-    #[serde(default)]
-    pub mode: Mode,
-    pub index: usize,
-    #[serde(default)]
-    pub logger: Logger,
-    pub servers: Vec<ServerConfig>,
-}
-
-impl ClientConfig {
-    pub fn get_current(&mut self) -> ServerConfig {
-        self.servers.remove(self.index)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SslConfig {
-    #[serde(rename = "certificateFile")]
-    pub certificate_file: String,
-    #[serde(rename = "keyFile", default)]
-    pub key_file: String,
-    #[serde(rename = "serverName")]
-    pub server_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,71 +101,4 @@ pub struct WebSocketConfig {
 pub struct User {
     pub name: String,
     pub password: String,
-}
-
-pub fn init_client() -> Result<ClientConfig, io::Error> {
-    use std::io::Read;
-    let path = args().nth(1).unwrap_or("config.json".to_owned());
-    let mut json = String::new();
-    File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path)).read_to_string(&mut json)?;
-    let config: ClientConfig = serde_json::from_str(&json)?;
-    Ok(config)
-}
-
-pub fn init_server() -> Result<Vec<ServerConfig>, io::Error> {
-    use std::io::Read;
-    let path = args().nth(1).unwrap_or("config.json".to_owned());
-    let mut json = String::new();
-    File::open(&path).unwrap_or_else(|_| panic!("Can't find the config (by path {}). Please ensure the file path is the 1st start command arg (named 'config.json') and put the file into the same folder", &path)).read_to_string(&mut json)?;
-    let config: Vec<ServerConfig> = serde_json::from_str(&json)?;
-    Ok(config)
-}
-
-#[cfg(test)]
-mod test {
-    use rand::distributions::Alphanumeric;
-    use rand::random;
-    use rand::Rng;
-    use serde_json::json;
-
-    use crate::codec::aead::CipherKind;
-    use crate::config::ClientConfig;
-    use crate::protocol::Protocol;
-
-    #[test]
-    fn test_config_serialize() {
-        let client_port: u16 = random();
-        let server_port: u16 = random();
-        let server_name: String = rand::thread_rng().sample_iter(&Alphanumeric).take(10).map(char::from).collect();
-        let server_host = format!("www.{}.com", server_name);
-        let json = json!({
-          "port": client_port,
-          "index": 0,
-          "mode" : "tcp_and_udp",
-          "servers": [
-            {
-              "host": server_host,
-              "port": server_port,
-              "password": "{password}",
-              "cipher": "chacha20-ietf-poly1305",
-              "protocol": "vmess",
-              "ssl": {
-                "certificateFile": "/path/to/certificate.crt",
-                "keyFile": "/path/to/private.key",
-                "serverName": server_name
-              },
-              "mode": "tcp"
-            }
-          ]
-        });
-        let mut client_config: ClientConfig = serde_json::from_value(json).unwrap();
-        assert_eq!(client_port, client_config.port);
-        let current = client_config.get_current();
-        assert_eq!(server_host, current.host);
-        assert_eq!(server_port, current.port);
-        assert_eq!(CipherKind::ChaCha20Poly1305, current.cipher);
-        assert_eq!(Protocol::VMess, current.protocol);
-        assert!(current.ssl.is_some());
-        assert_eq!(current.ssl.as_ref().unwrap().server_name, server_name)
-    }
 }

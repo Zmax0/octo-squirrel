@@ -6,9 +6,6 @@ use aes_gcm::Aes128Gcm;
 use aes_gcm::KeyInit;
 use anyhow::anyhow;
 use anyhow::bail;
-use bytes::Buf;
-use bytes::Bytes;
-use bytes::BytesMut;
 use log::debug;
 use octo_squirrel::codec::vmess::aead::AEADBodyCodec;
 use octo_squirrel::config::ServerConfig;
@@ -23,13 +20,17 @@ use octo_squirrel::protocol::vmess::header::SecurityType;
 use octo_squirrel::protocol::vmess::id;
 use octo_squirrel::protocol::vmess::session::ServerSession;
 use octo_squirrel::util::fnv;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::Bytes;
+use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use super::config::SslConfig;
 use super::template::message::InboundIn;
 use super::template::message::OutboundIn;
 
-pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerAeadCodec> {
+pub fn new_codec(config: &ServerConfig<SslConfig>) -> anyhow::Result<ServerAeadCodec> {
     ServerAeadCodec::try_from(config)
 }
 
@@ -207,10 +208,10 @@ impl Decoder for ServerAeadCodec {
     }
 }
 
-impl TryFrom<&ServerConfig> for ServerAeadCodec {
+impl TryFrom<&ServerConfig<SslConfig>> for ServerAeadCodec {
     type Error = anyhow::Error;
 
-    fn try_from(config: &ServerConfig) -> Result<Self, Self::Error> {
+    fn try_from(config: &ServerConfig<SslConfig>) -> Result<Self, Self::Error> {
         let uuid = config.user.iter().map(|u| &u.password).collect();
         let keys = id::from_passwords(uuid)?;
         Ok(Self { keys, decode_state: DecodeState::Init, encode_state: EncodeState::Init })

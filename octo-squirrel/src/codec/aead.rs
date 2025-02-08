@@ -2,13 +2,13 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::mem::size_of;
 
-use aead::generic_array::GenericArray;
-use aead::Key;
-use aead::KeyInit;
-use aead::KeySizeUser;
 use aes::cipher::Unsigned;
+use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::Aead;
 use aes_gcm::aead::Buffer;
+use aes_gcm::aead::Key;
+use aes_gcm::aead::KeyInit;
+use aes_gcm::aead::KeySizeUser;
 use aes_gcm::aead::Payload;
 use aes_gcm::AeadCore;
 use aes_gcm::AeadInPlace;

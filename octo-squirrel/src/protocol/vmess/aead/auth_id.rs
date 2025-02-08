@@ -1,8 +1,8 @@
 use std::time::SystemTimeError;
 
-use bytes::BufMut;
-use bytes::BytesMut;
 use rand::random;
+use tokio_util::bytes::BufMut;
+use tokio_util::bytes::BytesMut;
 
 use super::kdf;
 use crate::crypto::Aes128EcbNoPadding;

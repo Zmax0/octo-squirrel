@@ -1,9 +1,6 @@
 use core::str;
 
 use anyhow::bail;
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::BytesMut;
 use octo_squirrel::config::ServerConfig;
 use octo_squirrel::protocol::socks5::address;
 use octo_squirrel::protocol::socks5::Socks5CommandType;
@@ -11,9 +8,13 @@ use octo_squirrel::protocol::trojan;
 use octo_squirrel::util::hex;
 use sha2::Digest;
 use sha2::Sha224;
+use tokio_util::bytes::Buf;
+use tokio_util::bytes::BufMut;
+use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use super::config::SslConfig;
 use super::template::message::InboundIn;
 use super::template::message::OutboundIn;
 
@@ -23,7 +24,7 @@ enum CodecState {
     Udp,
 }
 
-pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerCodec> {
+pub fn new_codec(config: &ServerConfig<SslConfig>) -> anyhow::Result<ServerCodec> {
     let mut hasher = Sha224::new();
     hasher.update(config.password.as_bytes());
     let key = hasher.finalize().into();
