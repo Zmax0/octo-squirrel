@@ -93,7 +93,7 @@ where
         match ready!(self.stream.poll_next_unpin(cx)) {
             Some(Ok(msg)) => match self.codec.decode(&mut msg.into_payload().into()) {
                 Ok(Some(item)) => Poll::Ready(Some(Ok(item))),
-                Ok(None) => Poll::Ready(None),
+                Ok(None) => Poll::Pending,
                 Err(e) => Poll::Ready(Some(Err(e))),
             },
             Some(Err(e)) => Poll::Ready(Some(Err(anyhow!(e)))),
