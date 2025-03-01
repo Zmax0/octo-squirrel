@@ -1,5 +1,5 @@
-use super::id;
 use super::VERSION;
+use super::id;
 use crate::codec::aead::CipherKind;
 use crate::protocol::address::Address;
 

@@ -1,20 +1,20 @@
-use anyhow::bail;
 use anyhow::Result;
+use anyhow::bail;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use super::Socks5AuthMethod;
+use super::Socks5CommandStatus;
+use super::Socks5CommandType;
+use super::VERSION;
 use super::address;
 use super::message::Socks5CommandRequest;
 use super::message::Socks5CommandResponse;
 use super::message::Socks5InitialRequest;
 use super::message::Socks5InitialResponse;
 use super::message::Socks5Message;
-use super::Socks5AuthMethod;
-use super::Socks5CommandStatus;
-use super::Socks5CommandType;
-use super::VERSION;
 use crate::codec::DatagramPacket;
 
 pub struct Socks5ClientEncoder;

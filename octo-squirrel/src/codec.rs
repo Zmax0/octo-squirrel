@@ -5,13 +5,13 @@ pub mod vmess;
 
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::task::ready;
 use std::task::Context;
 use std::task::Poll;
+use std::task::ready;
 
+use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use anyhow::Result;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;

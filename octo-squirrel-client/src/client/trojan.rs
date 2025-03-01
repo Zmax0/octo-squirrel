@@ -5,8 +5,8 @@ enum CodecState {
 
 pub(super) mod tcp {
     use octo_squirrel::protocol::address::Address;
-    use octo_squirrel::protocol::socks5::address;
     use octo_squirrel::protocol::socks5::Socks5CommandType;
+    use octo_squirrel::protocol::socks5::address;
     use octo_squirrel::protocol::trojan;
     use octo_squirrel::util::hex;
     use sha2::Digest;
@@ -76,15 +76,15 @@ pub(super) mod tcp {
 pub(super) mod udp {
     use std::net::SocketAddr;
 
-    use anyhow::anyhow;
     use anyhow::Result;
+    use anyhow::anyhow;
     use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketFramed;
     use octo_squirrel::config::ServerConfig;
     use octo_squirrel::protocol::address::Address;
-    use octo_squirrel::protocol::socks5::address;
     use octo_squirrel::protocol::socks5::Socks5CommandType;
+    use octo_squirrel::protocol::socks5::address;
     use octo_squirrel::protocol::trojan;
     use octo_squirrel::util::hex;
     use sha2::Digest;
@@ -199,10 +199,10 @@ pub(super) mod udp {
 #[cfg(test)]
 mod test {
     use octo_squirrel::util::hex;
-    use sha2::digest::typenum::Unsigned;
-    use sha2::digest::OutputSizeUser;
     use sha2::Digest;
     use sha2::Sha224;
+    use sha2::digest::OutputSizeUser;
+    use sha2::digest::typenum::Unsigned;
     #[test]
     fn test() {
         let mut hasher = Sha224::new();

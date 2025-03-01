@@ -42,11 +42,7 @@ pub(super) mod message {
         type Error = anyhow::Error;
 
         fn try_from(value: InboundIn) -> Result<Self, Self::Error> {
-            if let InboundIn::RelayTcp(value) = value {
-                Ok(value)
-            } else {
-                bail!("expect relay tcp message")
-            }
+            if let InboundIn::RelayTcp(value) = value { Ok(value) } else { bail!("expect relay tcp message") }
         }
     }
 
@@ -54,11 +50,7 @@ pub(super) mod message {
         type Error = anyhow::Error;
 
         fn try_from(value: InboundIn) -> Result<Self, Self::Error> {
-            if let InboundIn::RelayUdp(c, a) = value {
-                Ok((c, a.to_socket_addr()?))
-            } else {
-                bail!("expect relay tcp message")
-            }
+            if let InboundIn::RelayUdp(c, a) = value { Ok((c, a.to_socket_addr()?)) } else { bail!("expect relay tcp message") }
         }
     }
 
@@ -198,23 +190,36 @@ where
     OSink: Sink<O, Error = anyhow::Error> + Unpin,
     OStream: Stream<Item = Result<O, anyhow::Error>> + Unpin,
 {
-    let mut outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(O::into).map(Ok);
-    let c_s_p = async {
-        outbound_sink.send(first.try_into()?).await?;
-        let mut inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
-        outbound_sink.send_all(&mut inbound_stream).await
-    };
-    tokio::select! {
-        res = inbound_sink.send_all(&mut outbound_stream) => {
-            match res {
-                Ok(_) => relay::Result::Close(End::Peer, End::Server),
-                Err(e) => relay::Result::Err(End::Peer, End::Server, e),
-            }
+    match first.try_into() {
+        Ok(first) => match outbound_sink.send(first).await {
+            Ok(_) => (),
+            Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
         },
-        res = c_s_p => {
-            match res {
-                Ok(_) => relay::Result::Close(End::Client, End::Server),
-                Err(e) => relay::Result::Err(End::Client, End::Server, e),
+        Err(e) => return relay::Result::Err(End::Client, End::Server, e),
+    };
+    let mut outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(O::into).map(Ok);
+    let mut inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
+    loop {
+        tokio::select! {
+            c_s_p = inbound_stream.next() => {
+                match c_s_p {
+                    Some(Ok(next)) => match outbound_sink.send(next).await {
+                        Ok(_) => (),
+                        Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
+                    },
+                    Some(Err(e)) => return relay::Result::Err(End::Client, End::Server, e),
+                    None => return relay::Result::Close(End::Client, End::Server),
+                }
+            },
+            p_s_c = outbound_stream.next() => {
+                match p_s_c {
+                    Some(Ok(next)) => match inbound_sink.send(next).await {
+                        Ok(_) => (),
+                        Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
+                    },
+                    Some(Err(e)) => return relay::Result::Err(End::Peer, End::Server, e),
+                    None => return relay::Result::Close(End::Peer, End::Server),
+                }
             }
         }
     }

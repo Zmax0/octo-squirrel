@@ -3,21 +3,21 @@ use std::fmt::Formatter;
 use std::mem::size_of;
 
 use aes::cipher::Unsigned;
-use aes_gcm::aead::generic_array::GenericArray;
+use aes_gcm::AeadCore;
+use aes_gcm::AeadInPlace;
+use aes_gcm::Aes128Gcm;
+use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::Aead;
 use aes_gcm::aead::Buffer;
 use aes_gcm::aead::Key;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::KeySizeUser;
 use aes_gcm::aead::Payload;
-use aes_gcm::AeadCore;
-use aes_gcm::AeadInPlace;
-use aes_gcm::Aes128Gcm;
-use aes_gcm::Aes256Gcm;
-use chacha20poly1305::ChaCha20Poly1305;
+use aes_gcm::aead::generic_array::GenericArray;
 use chacha20poly1305::ChaCha8Poly1305;
-use chacha20poly1305::XChaCha20Poly1305;
+use chacha20poly1305::ChaCha20Poly1305;
 use chacha20poly1305::XChaCha8Poly1305;
+use chacha20poly1305::XChaCha20Poly1305;
 use serde::Deserialize;
 use serde::Serialize;
 

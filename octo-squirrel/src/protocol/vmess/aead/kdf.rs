@@ -1,5 +1,5 @@
-use digest::typenum::Unsigned;
 use digest::OutputSizeUser;
+use digest::typenum::Unsigned;
 use sha2::Digest;
 use sha2::Sha256;
 
@@ -111,10 +111,6 @@ struct HmacCreator<'a> {
 
 impl HmacCreator<'_> {
     fn create(&self) -> Hmac {
-        if let Some(parent) = self.parent.as_ref() {
-            Hmac::from_hmac(parent.create(), self.value)
-        } else {
-            Hmac::new(self.value)
-        }
+        if let Some(parent) = self.parent.as_ref() { Hmac::from_hmac(parent.create(), self.value) } else { Hmac::new(self.value) }
     }
 }

@@ -15,9 +15,9 @@ use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
 use tokio_util::bytes::BytesMut;
 
-use super::aead_2022;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
+use super::aead_2022;
 use crate::codec::aead::CipherKind;
 use crate::manager::shadowsocks::ServerUser;
 use crate::manager::shadowsocks::ServerUserManager;
@@ -135,11 +135,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             Some(ref mut decoder) => {
                 let mut dst = BytesMut::new();
                 decoder.decode_payload(src, &mut dst).map_err(|e| anyhow!(e))?;
-                if dst.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(dst))
-                }
+                if dst.is_empty() { Ok(None) } else { Ok(Some(dst)) }
             }
             None => self.init_payload_decoder(context, session, src),
         }
@@ -271,8 +267,8 @@ mod test {
     use anyhow::anyhow;
     use base64ct::Base64;
     use base64ct::Encoding;
-    use rand::distr::Alphanumeric;
     use rand::Rng;
+    use rand::distr::Alphanumeric;
     use tokio_util::bytes::Buf;
     use tokio_util::bytes::BytesMut;
 
@@ -282,8 +278,8 @@ mod test {
     use crate::codec::shadowsocks::tcp::Identity;
     use crate::codec::shadowsocks::tcp::Session;
     use crate::protocol::address::Address;
-    use crate::protocol::shadowsocks::aead_2022::password_to_keys;
     use crate::protocol::shadowsocks::Mode;
+    use crate::protocol::shadowsocks::aead_2022::password_to_keys;
 
     const KINDS: [CipherKind; 3] = [CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
 

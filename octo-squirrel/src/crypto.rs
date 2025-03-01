@@ -1,8 +1,8 @@
-use aes::cipher::block_padding::NoPadding;
-use aes::cipher::BlockDecryptMut;
-use aes::cipher::BlockEncryptMut;
 use aes::Aes128;
 use aes::Aes256;
+use aes::cipher::BlockDecryptMut;
+use aes::cipher::BlockEncryptMut;
+use aes::cipher::block_padding::NoPadding;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::KeySizeUser;
 use ecb::Decryptor;

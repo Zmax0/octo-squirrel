@@ -1,24 +1,24 @@
 use std::io::Cursor;
 use std::mem::size_of;
 
-use aes_gcm::aes::cipher::Unsigned;
 use aes_gcm::AeadCore;
 use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::KeyInit;
+use aes_gcm::aes::cipher::Unsigned;
+use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use anyhow::Result;
 use log::debug;
 use log::info;
 use octo_squirrel::codec::vmess::aead::AEADBodyCodec;
+use octo_squirrel::protocol::vmess::VERSION;
 use octo_squirrel::protocol::vmess::address;
 use octo_squirrel::protocol::vmess::aead::*;
 use octo_squirrel::protocol::vmess::header::RequestCommand;
 use octo_squirrel::protocol::vmess::header::RequestHeader;
 use octo_squirrel::protocol::vmess::header::RequestOption;
 use octo_squirrel::protocol::vmess::session::ClientSession;
-use octo_squirrel::protocol::vmess::VERSION;
 use octo_squirrel::util::dice;
 use octo_squirrel::util::fnv;
 use rand::Rng;
@@ -148,12 +148,12 @@ pub(super) mod tcp {
 pub(super) mod udp {
     use std::net::SocketAddr;
 
-    use anyhow::anyhow;
     use anyhow::Result;
-    use octo_squirrel::codec::aead::CipherKind;
+    use anyhow::anyhow;
     use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketFramed;
+    use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::config::ServerConfig;
     use octo_squirrel::protocol::address::Address;
     use octo_squirrel::protocol::vmess::header::RequestCommand;

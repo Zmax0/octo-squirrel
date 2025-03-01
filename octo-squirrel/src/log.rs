@@ -1,13 +1,13 @@
 use std::str::FromStr;
 
 use anyhow::Result;
-use log::info;
 use log::LevelFilter;
+use log::info;
+use log4rs::Config;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::config::Appender;
 use log4rs::config::Root;
 use log4rs::encode::pattern::PatternEncoder;
-use log4rs::Config;
 use serde::Deserialize;
 use serde::Serialize;
 

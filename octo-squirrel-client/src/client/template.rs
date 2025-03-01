@@ -1,20 +1,20 @@
 use core::fmt::Debug;
-use std::future::Future;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
+use std::ops::AsyncFn;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use bytes::BytesMut;
-use futures::stream::SplitSink;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
+use futures::stream::SplitSink;
 use http::HeaderName;
 use http::HeaderValue;
 use log::debug;
@@ -41,13 +41,13 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio::time;
+use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::pki_types::pem::PemObject;
-use tokio_rustls::rustls::pki_types::CertificateDer;
-use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::RootCertStore;
-use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::pki_types::CertificateDer;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 use tokio_util::codec::Framed;
@@ -162,20 +162,6 @@ where
     }
 }
 
-pub trait AsyncP2G2<P1, P2, G1, G2>: FnOnce(P1, P2) -> <Self as AsyncP2G2<P1, P2, G1, G2>>::Future {
-    type Future: Future<Output = <Self as AsyncP2G2<P1, P2, G1, G2>>::Output>;
-    type Output;
-}
-
-impl<P1, P2, G1, G2, Fn, Future> AsyncP2G2<P1, P2, G1, G2> for Fn
-where
-    Fn: FnOnce(P1, P2) -> Future,
-    Future: core::future::Future,
-{
-    type Future = Future;
-    type Output = Future::Output;
-}
-
 pub async fn transfer_udp<Context, NewContext, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv, OutRecv, OutSend>(
     inbound: UdpSocket,
     config: ServerConfig<SslConfig>,
@@ -189,7 +175,7 @@ where
     NewContext: FnOnce(ServerConfig<SslConfig>) -> Result<Context>,
     NewKey: FnOnce(SocketAddr, &Address) -> Key + Copy,
     Key: Ord + Clone + Debug + Send + Sync + 'static,
-    NewOut: for<'a> AsyncP2G2<&'a Address, &'a Context, Out, OutRecv, Output = Result<Out, anyhow::Error>> + Copy,
+    NewOut: AsyncFn(&Address, &Context) -> Result<Out, anyhow::Error> + Copy,
     Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
     ToOutSend: FnOnce(DatagramPacket, SocketAddr) -> OutSend + Copy,
     ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
@@ -301,7 +287,7 @@ struct Binding<Out, OutSend> {
 
 impl<Out, OutSend> Drop for Binding<Out, OutSend> {
     fn drop(&mut self) {
-        debug!("remove binding");
+        debug!("[udp] remove binding");
         self.relay_task.abort();
     }
 }

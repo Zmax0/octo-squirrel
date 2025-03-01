@@ -2,9 +2,9 @@ use core::slice;
 use std::io::Cursor;
 
 use bytes::Buf;
+use criterion::Criterion;
 use criterion::criterion_group;
 use criterion::criterion_main;
-use criterion::Criterion;
 use rand::Rng;
 
 fn by_raw_ptr(bytes: &mut [u8]) -> anyhow::Result<(u64, u64)> {
