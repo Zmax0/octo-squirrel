@@ -3,6 +3,7 @@ mod chunk;
 pub mod shadowsocks;
 pub mod vmess;
 
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::Context;
@@ -86,16 +87,23 @@ impl<T, C, E, D> Stream for WebSocketFramed<T, C, E, D>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
+    D: Debug,
 {
     type Item = Result<D>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match ready!(self.stream.poll_next_unpin(cx)) {
-            Some(Ok(msg)) => match self.codec.decode(&mut msg.into_payload().into()) {
-                Ok(Some(item)) => Poll::Ready(Some(Ok(item))),
-                Ok(None) => Poll::Pending,
-                Err(e) => Poll::Ready(Some(Err(e))),
-            },
+            Some(Ok(msg)) => {
+                if msg.is_binary() || msg.is_text() {
+                    match self.codec.decode(&mut msg.into_payload().into()) {
+                        Ok(Some(item)) => Poll::Ready(Some(Ok(item))),
+                        Ok(None) => Poll::Ready(None),
+                        Err(e) => Poll::Ready(Some(Err(e))),
+                    }
+                } else {
+                    Poll::Ready(None)
+                }
+            }
             Some(Err(e)) => Poll::Ready(Some(Err(anyhow!(e)))),
             None => Poll::Ready(None),
         }

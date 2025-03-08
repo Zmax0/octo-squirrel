@@ -30,6 +30,10 @@ use tokio_util::udp::UdpFramed;
 use tokio_websockets::ServerBuilder;
 
 pub(super) mod message {
+    use std::fmt::Debug;
+
+    use byte_string::ByteStr;
+
     use super::*;
 
     pub enum InboundIn {
@@ -51,6 +55,16 @@ pub(super) mod message {
 
         fn try_from(value: InboundIn) -> Result<Self, Self::Error> {
             if let InboundIn::RelayUdp(c, a) = value { Ok((c, a.to_socket_addr()?)) } else { bail!("expect relay tcp message") }
+        }
+    }
+
+    impl Debug for InboundIn {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                InboundIn::ConnectTcp(item, addr) => write!(f, "ConnectTcp({:?}, {})", ByteStr::new(item), addr),
+                InboundIn::RelayTcp(item) => write!(f, "RelayTcp({:?})", ByteStr::new(item)),
+                InboundIn::RelayUdp(item, addr) => write!(f, "RelayUdp({:?}, {})", ByteStr::new(item), addr),
+            }
         }
     }
 
@@ -208,7 +222,10 @@ where
                         Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
                     },
                     Some(Err(e)) => return relay::Result::Err(End::Client, End::Server, e),
-                    None => return relay::Result::Close(End::Client, End::Server),
+                    None => {
+                        outbound_sink.close().await.ok();
+                        return relay::Result::Close(End::Client, End::Server)
+                    },
                 }
             },
             p_s_c = outbound_stream.next() => {
@@ -218,7 +235,10 @@ where
                         Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
                     },
                     Some(Err(e)) => return relay::Result::Err(End::Peer, End::Server, e),
-                    None => return relay::Result::Close(End::Peer, End::Server),
+                    None => {
+                        inbound_sink.close().await.ok();
+                        return relay::Result::Close(End::Peer, End::Server)
+                    },
                 }
             }
         }

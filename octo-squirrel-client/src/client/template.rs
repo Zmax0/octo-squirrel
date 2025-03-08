@@ -138,27 +138,26 @@ where
     I: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = Result<BytesMut>>,
     O: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = Result<BytesMut>>,
 {
-    let (mut c_l, mut l_c) = local_client.split();
-    let (mut c_s, mut s_c) = client_server.split();
-    loop {
-        tokio::select! {
-            res = l_c.next() => match res {
-                Some(Ok(item)) => match c_s.send(item).await {
-                    Ok(_) => (),
-                    Err(e) => return relay::Result::Err(End::Client, End::Server, e),
-                },
-                Some(Err(e)) => return relay::Result::Err(End::Local, End::Client, e),
-                None => return relay::Result::Close(End::Local, End::Client),
-            },
-            res = s_c.next() => match res {
-                Some(Ok(item)) => match c_l.send(item).await {
-                    Ok(_) => (),
-                    Err(e) => return relay::Result::Err(End::Client, End::Local, e),
-                },
-                Some(Err(e)) => return relay::Result::Err(End::Server, End::Client, e),
-                None => return relay::Result::Close(End::Server, End::Client),
-            }
+    let (c_l, l_c) = local_client.split();
+    let (c_s, s_c) = client_server.split();
+
+    let l_c_s = async {
+        match l_c.forward(c_s).await {
+            Ok(_) => Err::<(), relay::Result>(relay::Result::Close(End::Local, End::Client)),
+            Err(e) => Err(relay::Result::Err(End::Local, End::Client, e)),
         }
+    };
+
+    let s_c_l = async {
+        match s_c.forward(c_l).await {
+            Ok(_) => Err::<(), relay::Result>(relay::Result::Close(End::Server, End::Client)),
+            Err(e) => Err(relay::Result::Err(End::Server, End::Client, e)),
+        }
+    };
+
+    match tokio::try_join!(l_c_s, s_c_l) {
+        Ok(_) => unreachable!("should never reach here"),
+        Err(e) => e,
     }
 }
 
@@ -387,5 +386,13 @@ fn rustls_client_config(ssl_config: &SslConfig) -> Result<ClientConfig> {
     } else {
         ClientConfig::with_platform_verifier()
     };
+    #[cfg(debug_assertions)]
+    {
+        use quinn::rustls::KeyLogFile;
+        let mut config = config;
+        config.key_log = Arc::new(KeyLogFile::new());
+        Ok(config)
+    }
+    #[cfg(not(debug_assertions))]
     Ok(config)
 }

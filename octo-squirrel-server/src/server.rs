@@ -34,7 +34,7 @@ pub async fn main() -> anyhow::Result<()> {
     } else {
         octo_squirrel::log::init("info")?;
     }
-    let tasks: Vec<JoinHandle<()>> = servers.into_iter().map(|server| tokio::spawn(async move { startup(server).await })).collect();
+    let tasks: Vec<JoinHandle<()>> = servers.into_iter().map(|server| tokio::spawn(startup(server))).collect();
     join_all(tasks).await;
     Ok(())
 }

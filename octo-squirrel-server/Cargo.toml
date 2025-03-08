@@ -10,6 +10,7 @@ octo-squirrel = { path = "../octo-squirrel", features = ["server"] }
 aes-gcm = "0.10.3"
 anyhow = "1.0.95"
 bytes = "1.10.0"
+byte_string = "1.0.0"
 futures = "0.3.31"
 log = "0.4.25"
 lru_time_cache = "0.11.11"
