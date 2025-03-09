@@ -18,9 +18,9 @@ use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
 use tokio_util::bytes::BytesMut;
 
-use super::aead_2022;
 use super::ChunkDecoder;
 use super::ChunkEncoder;
+use super::aead_2022;
 use crate::codec::aead::CipherKind;
 use crate::codec::aead::CipherMethod;
 use crate::codec::shadowsocks::aead_2022::udp;
@@ -453,7 +453,7 @@ static CACHE: OnceLock<LruCache<CipherKey, CipherMethod>> = OnceLock::new();
 
 unsafe fn get_cipher(kind: CipherKind, key: &[u8], session_id: u64) -> &CipherMethod {
     let cache = CACHE.get_or_init(|| LruCache::with_expiry_duration_and_capacity(Duration::from_secs(30), 102400));
-    let cache = std::ptr::from_ref(cache).cast_mut().as_mut().expect("empty cipher cache");
+    let cache = unsafe { std::ptr::from_ref(cache).cast_mut().as_mut().expect("empty cipher cache") };
     let key_ptr = key.as_ptr() as usize;
     cache.entry(CipherKey { kind, key: key_ptr, session_id }).or_insert_with(|| {
         debug!("[udp] new cache cipher {}|{}|{}", kind, key_ptr, session_id);
@@ -468,9 +468,9 @@ mod test {
     use std::net::SocketAddrV4;
 
     use anyhow::anyhow;
+    use rand::Rng;
     use rand::distr::Alphanumeric;
     use rand::random;
-    use rand::Rng;
     use tokio_util::bytes::Buf;
     use tokio_util::bytes::BytesMut;
 
@@ -480,8 +480,8 @@ mod test {
     use crate::codec::shadowsocks::udp::Session;
     use crate::codec::shadowsocks::udp::SessionCodec;
     use crate::protocol::address::Address;
-    use crate::protocol::shadowsocks::aead_2022::password_to_keys;
     use crate::protocol::shadowsocks::Mode;
+    use crate::protocol::shadowsocks::aead_2022::password_to_keys;
 
     const KINDS: [CipherKind; 3] = [CipherKind::Aes128Gcm, CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305];
     #[test]

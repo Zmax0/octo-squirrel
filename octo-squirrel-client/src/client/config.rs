@@ -49,9 +49,9 @@ pub fn init() -> Result<ClientConfig, std::io::Error> {
 mod test {
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::protocol::Protocol;
+    use rand::Rng;
     use rand::distr::Alphanumeric;
     use rand::random;
-    use rand::Rng;
     use serde_json::json;
 
     use super::*;

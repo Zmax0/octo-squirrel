@@ -12,11 +12,11 @@ use octo_squirrel::protocol::Protocol;
 use quinn::crypto::rustls::QuicServerConfig;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls;
-use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::CertificateDer;
 use tokio_rustls::rustls::pki_types::PrivateKeyDer;
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
@@ -34,7 +34,7 @@ pub async fn main() -> anyhow::Result<()> {
     } else {
         octo_squirrel::log::init("info")?;
     }
-    let tasks: Vec<JoinHandle<()>> = servers.into_iter().map(|server| tokio::spawn(async move { startup(server).await })).collect();
+    let tasks: Vec<JoinHandle<()>> = servers.into_iter().map(|server| tokio::spawn(startup(server))).collect();
     join_all(tasks).await;
     Ok(())
 }

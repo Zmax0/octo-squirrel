@@ -5,8 +5,8 @@ use anyhow::bail;
 use octo_squirrel::protocol::address::Address;
 use octo_squirrel::protocol::socks::SocksVersion;
 use octo_squirrel::protocol::socks5;
-use octo_squirrel::protocol::socks5::message::Socks5CommandResponse;
 use octo_squirrel::protocol::socks5::Socks5CommandStatus;
+use octo_squirrel::protocol::socks5::message::Socks5CommandResponse;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -73,11 +73,7 @@ fn recognize_http(method: &str, mut path: &str) -> Result<Proxy, anyhow::Error> 
         path = &path[..path.len() - 1];
     }
     if let Some(i) = path.find("://").map(|i| i + 3) {
-        if let Some(j) = path[i..].find('/').map(|j| j + i) {
-            path = &path[i..j]
-        } else {
-            path = &path[i..]
-        }
+        if let Some(j) = path[i..].find('/').map(|j| j + i) { path = &path[i..j] } else { path = &path[i..] }
     }
     if "CONNECT" == method {
         let h_end = path.rfind(':').ok_or_else(|| anyhow!("invalid http CONNECT uri"))?;
@@ -115,8 +111,8 @@ fn recognize_http(method: &str, mut path: &str) -> Result<Proxy, anyhow::Error> 
 
 #[cfg(test)]
 mod test {
-    use super::recognize_http;
     use super::Proxy;
+    use super::recognize_http;
 
     macro_rules! assert_parse {
         ($type:ident, $method:tt, $path:tt, $expect:tt) => {

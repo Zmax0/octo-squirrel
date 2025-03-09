@@ -1,22 +1,28 @@
 use std::str::FromStr;
 
 use anyhow::Result;
-use log::info;
 use log::LevelFilter;
+use log::info;
+use log::warn;
+use log4rs::Config;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::config::Appender;
 use log4rs::config::Root;
 use log4rs::encode::pattern::PatternEncoder;
-use log4rs::Config;
 use serde::Deserialize;
 use serde::Serialize;
 
 pub fn init(level: &str) -> Result<()> {
-    if let Ok(()) = log4rs::init_file("log4rs.yaml", Default::default()) {
-        info!("Init default logger");
-    } else {
-        log4rs::init_config(build_config(level))?;
-        info!("Init custom logger; level={}", level);
+    let mut path = std::env::current_exe().expect("Can't get the current exe path");
+    path.pop();
+    path.push("log4rs.yaml");
+    match log4rs::init_file(&path, Default::default()) {
+        Ok(_) => info!("Init log4rs.yaml, path={}", path.display()),
+        Err(e) => {
+            log4rs::init_config(build_config(level))?;
+            warn!("Init log4rs.yaml failed; {}", e);
+            info!("Init custom logger; level={}", level);
+        }
     }
     Ok(())
 }

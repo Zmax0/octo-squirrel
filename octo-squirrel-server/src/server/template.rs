@@ -30,6 +30,10 @@ use tokio_util::udp::UdpFramed;
 use tokio_websockets::ServerBuilder;
 
 pub(super) mod message {
+    use std::fmt::Debug;
+
+    use byte_string::ByteStr;
+
     use super::*;
 
     pub enum InboundIn {
@@ -42,11 +46,7 @@ pub(super) mod message {
         type Error = anyhow::Error;
 
         fn try_from(value: InboundIn) -> Result<Self, Self::Error> {
-            if let InboundIn::RelayTcp(value) = value {
-                Ok(value)
-            } else {
-                bail!("expect relay tcp message")
-            }
+            if let InboundIn::RelayTcp(value) = value { Ok(value) } else { bail!("expect relay tcp message") }
         }
     }
 
@@ -54,10 +54,16 @@ pub(super) mod message {
         type Error = anyhow::Error;
 
         fn try_from(value: InboundIn) -> Result<Self, Self::Error> {
-            if let InboundIn::RelayUdp(c, a) = value {
-                Ok((c, a.to_socket_addr()?))
-            } else {
-                bail!("expect relay tcp message")
+            if let InboundIn::RelayUdp(c, a) = value { Ok((c, a.to_socket_addr()?)) } else { bail!("expect relay tcp message") }
+        }
+    }
+
+    impl Debug for InboundIn {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                InboundIn::ConnectTcp(item, addr) => write!(f, "ConnectTcp({:?}, {})", ByteStr::new(item), addr),
+                InboundIn::RelayTcp(item) => write!(f, "RelayTcp({:?})", ByteStr::new(item)),
+                InboundIn::RelayUdp(item, addr) => write!(f, "RelayUdp({:?}, {})", ByteStr::new(item), addr),
             }
         }
     }
@@ -185,7 +191,7 @@ where
 }
 
 async fn relay_bidirectional<ISink, IStream, O, OSink, OStream>(
-    mut inbound_sink: ISink,
+    inbound_sink: ISink,
     inbound_stream: IStream,
     mut outbound_sink: OSink,
     outbound_stream: OStream,
@@ -198,24 +204,32 @@ where
     OSink: Sink<O, Error = anyhow::Error> + Unpin,
     OStream: Stream<Item = Result<O, anyhow::Error>> + Unpin,
 {
-    let mut outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(O::into).map(Ok);
-    let c_s_p = async {
-        outbound_sink.send(first.try_into()?).await?;
-        let mut inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
-        outbound_sink.send_all(&mut inbound_stream).await
-    };
-    tokio::select! {
-        res = inbound_sink.send_all(&mut outbound_stream) => {
-            match res {
-                Ok(_) => relay::Result::Close(End::Peer, End::Server),
-                Err(e) => relay::Result::Err(End::Peer, End::Server, e),
-            }
+    match first.try_into() {
+        Ok(first) => match outbound_sink.send(first).await {
+            Ok(_) => (),
+            Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
         },
-        res = c_s_p => {
-            match res {
-                Ok(_) => relay::Result::Close(End::Client, End::Server),
-                Err(e) => relay::Result::Err(End::Client, End::Server, e),
-            }
+        Err(e) => return relay::Result::Err(End::Client, End::Server, e),
+    };
+    let outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(O::into).map(Ok);
+    let inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
+
+    let p_s_c = async {
+        match outbound_stream.forward(inbound_sink).await {
+            Ok(_) => Err::<(), _>(relay::Result::Close(End::Peer, End::Server)),
+            Err(e) => Err(relay::Result::Err(End::Peer, End::Server, e)),
         }
+    };
+
+    let c_s_p = async {
+        match inbound_stream.forward(outbound_sink).await {
+            Ok(_) => Err::<(), _>(relay::Result::Close(End::Client, End::Server)),
+            Err(e) => Err(relay::Result::Err(End::Client, End::Server, e)),
+        }
+    };
+
+    match tokio::try_join!(p_s_c, c_s_p) {
+        Ok(_) => unreachable!("should not happen"),
+        Err(e) => e,
     }
 }

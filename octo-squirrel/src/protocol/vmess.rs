@@ -6,8 +6,8 @@ use std::time::SystemTime;
 use std::time::SystemTimeError;
 use std::time::UNIX_EPOCH;
 
-use crc::Crc;
 use crc::CRC_32_ISO_HDLC;
+use crc::Crc;
 use rand::Rng;
 
 pub const VERSION: u8 = 1;

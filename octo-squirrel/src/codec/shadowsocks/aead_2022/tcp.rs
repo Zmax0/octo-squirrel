@@ -9,9 +9,9 @@ use tokio_util::bytes::BytesMut;
 
 use super::now;
 use crate::codec::aead::CipherKind;
-use crate::codec::shadowsocks::tcp::Identity;
 use crate::codec::shadowsocks::Authenticator;
 use crate::codec::shadowsocks::ChunkDecoder;
+use crate::codec::shadowsocks::tcp::Identity;
 use crate::crypto::Aes128EcbNoPadding;
 use crate::crypto::Aes256EcbNoPadding;
 use crate::manager::shadowsocks::ServerUserManager;

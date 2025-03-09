@@ -2,8 +2,8 @@ use core::str;
 
 use anyhow::bail;
 use octo_squirrel::config::ServerConfig;
-use octo_squirrel::protocol::socks5::address;
 use octo_squirrel::protocol::socks5::Socks5CommandType;
+use octo_squirrel::protocol::socks5::address;
 use octo_squirrel::protocol::trojan;
 use octo_squirrel::util::hex;
 use sha2::Digest;

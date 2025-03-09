@@ -1,11 +1,11 @@
 use tokio_util::bytes::BufMut;
 use tokio_util::bytes::BytesMut;
 
-use super::address;
 use super::Socks5AuthMethod;
 use super::Socks5CommandStatus;
 use super::Socks5CommandType;
 use super::VERSION;
+use super::address;
 use crate::protocol::address::Address;
 
 pub trait Socks5Message: Send + Sync {

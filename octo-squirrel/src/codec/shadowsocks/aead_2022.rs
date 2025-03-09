@@ -31,19 +31,11 @@ pub fn now() -> Result<u64, SystemTimeError> {
 pub fn validate_timestamp(timestamp: u64) -> Result<(), String> {
     let now = now().map_err(|e| e.to_string())?;
     let diff = now.abs_diff(timestamp);
-    if diff > SERVER_STREAM_TIMESTAMP_MAX_DIFF {
-        Err(format!("invalid abs_diff(timestamp: {}, now: {}) = {}", timestamp, now, diff))
-    } else {
-        Ok(())
-    }
+    if diff > SERVER_STREAM_TIMESTAMP_MAX_DIFF { Err(format!("invalid abs_diff(timestamp: {}, now: {}) = {}", timestamp, now, diff)) } else { Ok(()) }
 }
 
 pub fn next_padding_length(msg: &BytesMut) -> u16 {
-    if msg.has_remaining() {
-        0
-    } else {
-        rand::rng().random_range(MIN_PADDING_LENGTH..=MAX_PADDING_LENGTH)
-    }
+    if msg.has_remaining() { 0 } else { rand::rng().random_range(MIN_PADDING_LENGTH..=MAX_PADDING_LENGTH) }
 }
 
 pub fn new_encoder(kind: CipherKind, key: &[u8], salt: &[u8]) -> ChunkEncoder {
@@ -64,11 +56,11 @@ mod test {
     use base64ct::Encoding;
     use tokio_util::bytes::BytesMut;
 
+    use super::SERVER_STREAM_TIMESTAMP_MAX_DIFF;
     use super::next_padding_length;
     use super::now;
     use super::session_sub_key;
     use super::validate_timestamp;
-    use super::SERVER_STREAM_TIMESTAMP_MAX_DIFF;
 
     #[test]
     fn test_session_sub_key() -> Result<(), base64ct::Error> {

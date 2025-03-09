@@ -3,11 +3,11 @@ use std::mem::size_of;
 use aes_gcm::aead::Buffer;
 use base64ct::Base64;
 use base64ct::Encoding;
-use digest::core_api::XofReaderCoreWrapper;
 use digest::ExtendableOutput;
 use digest::InvalidLength;
 use digest::Update;
 use digest::XofReader;
+use digest::core_api::XofReaderCoreWrapper;
 use log::trace;
 use sha3::Shake128;
 use sha3::Shake128ReaderCore;
@@ -156,11 +156,7 @@ impl AEADBodyCodec {
                 }
             }
         }
-        if dst.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(dst))
-        }
+        if dst.is_empty() { Ok(None) } else { Ok(Some(dst)) }
     }
 
     fn decode_size(&mut self, data: &mut BytesMut, nonce: &mut [u8]) -> Result<usize, aead::Error> {
@@ -204,7 +200,7 @@ impl ChunkSizeParser {
     fn size_bytes(&self) -> usize {
         match self {
             ChunkSizeParser::Plain => PlainSizeParser::size_bytes(),
-            ChunkSizeParser::Auth(ref parser) => parser.size_bytes(),
+            ChunkSizeParser::Auth(parser) => parser.size_bytes(),
             ChunkSizeParser::Shake => ShakeSizeParser::size_bytes(),
         }
     }
@@ -293,20 +289,20 @@ impl ShakeSizeParser {
 
 #[cfg(test)]
 mod test {
-    use anyhow::anyhow;
     use anyhow::Result;
-    use rand::random;
+    use anyhow::anyhow;
     use rand::Rng;
+    use rand::random;
     use tokio_util::bytes::BytesMut;
 
     use crate::codec::vmess::aead::AEADBodyCodec;
     use crate::codec::vmess::aead::ShakeSizeParser;
     use crate::protocol::address::Address;
+    use crate::protocol::vmess::VERSION;
     use crate::protocol::vmess::header::*;
     use crate::protocol::vmess::id;
     use crate::protocol::vmess::session::ClientSession;
     use crate::protocol::vmess::session::ServerSession;
-    use crate::protocol::vmess::VERSION;
 
     #[test]
     fn test_share_size_parser() {
