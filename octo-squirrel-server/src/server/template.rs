@@ -191,7 +191,7 @@ where
 }
 
 async fn relay_bidirectional<ISink, IStream, O, OSink, OStream>(
-    mut inbound_sink: ISink,
+    inbound_sink: ISink,
     inbound_stream: IStream,
     mut outbound_sink: OSink,
     outbound_stream: OStream,
@@ -211,36 +211,25 @@ where
         },
         Err(e) => return relay::Result::Err(End::Client, End::Server, e),
     };
-    let mut outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(O::into).map(Ok);
-    let mut inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
-    loop {
-        tokio::select! {
-            c_s_p = inbound_stream.next() => {
-                match c_s_p {
-                    Some(Ok(next)) => match outbound_sink.send(next).await {
-                        Ok(_) => (),
-                        Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
-                    },
-                    Some(Err(e)) => return relay::Result::Err(End::Client, End::Server, e),
-                    None => {
-                        outbound_sink.close().await.ok();
-                        return relay::Result::Close(End::Client, End::Server)
-                    },
-                }
-            },
-            p_s_c = outbound_stream.next() => {
-                match p_s_c {
-                    Some(Ok(next)) => match inbound_sink.send(next).await {
-                        Ok(_) => (),
-                        Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
-                    },
-                    Some(Err(e)) => return relay::Result::Err(End::Peer, End::Server, e),
-                    None => {
-                        inbound_sink.close().await.ok();
-                        return relay::Result::Close(End::Peer, End::Server)
-                    },
-                }
-            }
+    let outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(O::into).map(Ok);
+    let inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
+
+    let p_s_c = async {
+        match outbound_stream.forward(inbound_sink).await {
+            Ok(_) => Err::<(), _>(relay::Result::Close(End::Peer, End::Server)),
+            Err(e) => Err(relay::Result::Err(End::Peer, End::Server, e)),
         }
+    };
+
+    let c_s_p = async {
+        match inbound_stream.forward(outbound_sink).await {
+            Ok(_) => Err::<(), _>(relay::Result::Close(End::Client, End::Server)),
+            Err(e) => Err(relay::Result::Err(End::Client, End::Server, e)),
+        }
+    };
+
+    match tokio::try_join!(p_s_c, c_s_p) {
+        Ok(_) => unreachable!("should not happen"),
+        Err(e) => e,
     }
 }

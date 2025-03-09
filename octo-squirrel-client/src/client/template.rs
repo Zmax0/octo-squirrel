@@ -143,14 +143,14 @@ where
 
     let l_c_s = async {
         match l_c.forward(c_s).await {
-            Ok(_) => Err::<(), relay::Result>(relay::Result::Close(End::Local, End::Client)),
+            Ok(_) => Err::<(), _>(relay::Result::Close(End::Local, End::Client)),
             Err(e) => Err(relay::Result::Err(End::Local, End::Client, e)),
         }
     };
 
     let s_c_l = async {
         match s_c.forward(c_l).await {
-            Ok(_) => Err::<(), relay::Result>(relay::Result::Close(End::Server, End::Client)),
+            Ok(_) => Err::<(), _>(relay::Result::Close(End::Server, End::Client)),
             Err(e) => Err(relay::Result::Err(End::Server, End::Client, e)),
         }
     };
