@@ -34,8 +34,33 @@ jobs:
           overwrite: true
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+  build-on-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Setup rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --bin octo-squirrel-client --bin octo-squirrel-server
+      - name: Zip
+        run: |
+          cd target/release
+          zip -q octo-squirrel-client-macos-x64-${{ inputs.tag || github.ref_name }}.zip octo-squirrel-client
+          zip -q octo-squirrel-server-macos-x64-${{ inputs.tag || github.ref_name }}.zip octo-squirrel-server
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: octo-squirrel-macos
+          path: |
+            target/release/*.zip
+          retention-days: 1
+          overwrite: true
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
   build-on-linux:
-    needs: build-on-windows
+    needs: [build-on-windows, build-on-mac]
     runs-on: ubuntu-latest
     env:
       ARCH: x64
@@ -49,10 +74,15 @@ jobs:
         run: |
           zip -q -j target/release/octo-squirrel-client-linux-x64-${{ inputs.tag || github.ref_name }}.zip target/release/octo-squirrel-client
           zip -q -j target/release/octo-squirrel-server-linux-x64-${{ inputs.tag || github.ref_name }}.zip target/release/octo-squirrel-server
-      - name: Download artifact
+      - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
           name: octo-squirrel-windows
+          path: target/release
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: octo-squirrel-macos
           path: target/release
       - name: Release
         uses: softprops/action-gh-release@v2
