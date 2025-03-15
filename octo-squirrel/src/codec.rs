@@ -92,20 +92,21 @@ where
     type Item = Result<D>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match ready!(self.stream.poll_next_unpin(cx)) {
-            Some(Ok(msg)) => {
-                if msg.is_binary() || msg.is_text() {
-                    match self.codec.decode(&mut msg.into_payload().into()) {
-                        Ok(Some(item)) => Poll::Ready(Some(Ok(item))),
-                        Ok(None) => Poll::Ready(None),
-                        Err(e) => Poll::Ready(Some(Err(e))),
+        loop {
+            match ready!(self.stream.poll_next_unpin(cx)) {
+                Some(Ok(msg)) => {
+                    if msg.is_binary() || msg.is_text() {
+                        match self.codec.decode(&mut msg.into_payload().into()) {
+                            Ok(Some(item)) => return Poll::Ready(Some(Ok(item))),
+                            Ok(None) => continue,
+                            Err(e) => return Poll::Ready(Some(Err(e))),
+                        }
                     }
-                } else {
-                    Poll::Ready(None)
+                    continue;
                 }
+                Some(Err(e)) => return Poll::Ready(Some(Err(anyhow!(e)))),
+                None => return Poll::Ready(None),
             }
-            Some(Err(e)) => Poll::Ready(Some(Err(anyhow!(e)))),
-            None => Poll::Ready(None),
         }
     }
 }
