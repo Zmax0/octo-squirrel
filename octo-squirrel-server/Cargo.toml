@@ -8,18 +8,18 @@ edition = "2024"
 [dependencies]
 octo-squirrel = { path = "../octo-squirrel", features = ["server"] }
 aes-gcm = "0.10.3"
-anyhow = "1.0.95"
-bytes = "1.10.0"
+anyhow = "1.0.97"
+bytes = "1.10.1"
 byte_string = "1.0.0"
 futures = "0.3.31"
-log = "0.4.25"
+log = "0.4.26"
 lru_time_cache = "0.11.11"
 quinn = { version = "0.11.6", features = ["runtime-tokio"] }
 rand = { version = "0.9.0", features = ["small_rng"] }
-serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.138"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
 sha2 = "0.10.8"
-tokio = { version = "1.43.0", features = ["full"] }
-tokio-rustls = "0.26.1"
-tokio-util = { version = "0.7.13", features = ["codec", "net"] }
-tokio-websockets = { version = "0.11.1", features = ["server", "native-tls", "sha1_smol"] }
+tokio = { version = "1.44.1", features = ["full"] }
+tokio-rustls = "0.26.2"
+tokio-util = { version = "0.7.14", features = ["codec", "net"] }
+tokio-websockets = { version = "0.11.3", features = ["server", "native-tls", "sha1_smol"] }
