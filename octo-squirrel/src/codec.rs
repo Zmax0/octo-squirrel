@@ -69,6 +69,7 @@ pub struct WebSocketFramed<T, C, E, D> {
     codec: C,
     encode_item: PhantomData<E>,
     decode_item: PhantomData<D>,
+    buffer: Option<BytesMut>,
 }
 
 impl<T, C, E, D> Unpin for WebSocketFramed<T, C, E, D> {}
@@ -79,7 +80,7 @@ where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
     pub fn new(stream: WebSocketStream<T>, codec: C) -> Self {
-        Self { stream, codec, encode_item: PhantomData, decode_item: PhantomData }
+        Self { stream, codec, encode_item: PhantomData, decode_item: PhantomData, buffer: None }
     }
 }
 
@@ -92,20 +93,35 @@ where
     type Item = Result<D>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match ready!(self.stream.poll_next_unpin(cx)) {
-            Some(Ok(msg)) => {
-                if msg.is_binary() || msg.is_text() {
-                    match self.codec.decode(&mut msg.into_payload().into()) {
-                        Ok(Some(item)) => Poll::Ready(Some(Ok(item))),
-                        Ok(None) => Poll::Ready(None),
-                        Err(e) => Poll::Ready(Some(Err(e))),
+        loop {
+            match ready!(self.stream.poll_next_unpin(cx)) {
+                Some(Ok(msg)) => {
+                    if msg.is_binary() || msg.is_text() {
+                        let mut payload = match self.buffer.take() {
+                            Some(buffer) => {
+                                let msg_payload = msg.as_payload();
+                                let mut payload = BytesMut::with_capacity(buffer.len() + msg_payload.len());
+                                payload.extend_from_slice(&buffer);
+                                payload.extend_from_slice(msg_payload);
+                                payload
+                            }
+                            None => BytesMut::from(msg.into_payload()),
+                        };
+                        let decoded = self.codec.decode(&mut payload);
+                        if !payload.is_empty() {
+                            self.buffer = Some(payload);
+                        }
+                        match decoded {
+                            Ok(Some(item)) => return Poll::Ready(Some(Ok(item))),
+                            Ok(None) => return Poll::Pending,
+                            Err(e) => return Poll::Ready(Some(Err(e))),
+                        }
                     }
-                } else {
-                    Poll::Ready(None)
+                    continue;
                 }
+                Some(Err(e)) => return Poll::Ready(Some(Err(anyhow!(e)))),
+                None => return Poll::Ready(None),
             }
-            Some(Err(e)) => Poll::Ready(Some(Err(anyhow!(e)))),
-            None => Poll::Ready(None),
         }
     }
 }
