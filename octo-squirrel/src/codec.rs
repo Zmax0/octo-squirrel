@@ -72,12 +72,10 @@ pub struct WebSocketFramed<T, C, E, D> {
     buffer: Option<BytesMut>,
 }
 
-impl<T, C, E, D> Unpin for WebSocketFramed<T, C, E, D> {}
-
 impl<T, C, E, D> WebSocketFramed<T, C, E, D>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
-    C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
+    T: AsyncRead + AsyncWrite,
+    C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error>,
 {
     pub fn new(stream: WebSocketStream<T>, codec: C) -> Self {
         Self { stream, codec, encode_item: PhantomData, decode_item: PhantomData, buffer: None }
@@ -88,7 +86,8 @@ impl<T, C, E, D> Stream for WebSocketFramed<T, C, E, D>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
-    D: Debug,
+    E: Unpin,
+    D: Debug + Unpin,
 {
     type Item = Result<D>;
 
@@ -130,6 +129,8 @@ impl<T, C, E, D> Sink<E> for WebSocketFramed<T, C, E, D>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
+    E: Unpin,
+    D: Unpin,
 {
     type Error = anyhow::Error;
 

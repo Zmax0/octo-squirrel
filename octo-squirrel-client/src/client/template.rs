@@ -68,31 +68,42 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
     NewCodec: FnOnce(&Address, Context) -> Result<Codec> + Copy + Send + 'static,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
-    let context = new_context(&config);
-    let config = Arc::new(config);
-    match context {
+    match new_context(&config) {
         Ok(context) => {
-            while let Ok((mut inbound, local_addr)) = listener.accept().await {
+            let config = Arc::new(config);
+            while let Ok((inbound, local_addr)) = listener.accept().await {
                 let context = context.clone();
                 let config = config.clone();
-                tokio::spawn(async move {
-                    let handshake = handshake::get_request_addr(&mut inbound).await;
-                    if let Ok(peer_addr) = handshake {
-                        info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
-                        match try_transfer_tcp(inbound, &peer_addr, &config, context, new_codec).await {
-                            Ok(res) => info!(
-                                "[tcp] relay complete, local={}, server={}:{}, peer={}, {:?}",
-                                &local_addr, &config.host, config.port, peer_addr, res
-                            ),
-                            Err(e) => error!("[tcp] transfer failed; error={}", e),
-                        }
-                    } else {
-                        error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
-                    }
-                });
+                tokio::spawn(transfer_tcp(new_codec, context, config, inbound, local_addr));
             }
         }
         Err(e) => error!("create client context failed; error={e}"),
+    }
+
+    async fn transfer_tcp<Context, NewCodec, Codec>(
+        new_codec: NewCodec,
+        context: Context,
+        config: Arc<ServerConfig<SslConfig>>,
+        mut inbound: TcpStream,
+        local_addr: SocketAddr,
+    ) where
+        Context: Clone + Send + 'static,
+        NewCodec: FnOnce(&Address, Context) -> Result<Codec> + Copy + Send + 'static,
+        Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
+    {
+        match tokio::time::timeout(Duration::from_secs(30), handshake::get_request_addr(&mut inbound)).await {
+            Ok(Ok(peer_addr)) => {
+                info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
+                match try_transfer_tcp(inbound, &peer_addr, &config, context, new_codec).await {
+                    Ok(res) => {
+                        info!("[tcp] relay complete, local={}, server={}:{}, peer={}, {:?}", &local_addr, &config.host, config.port, peer_addr, res)
+                    }
+                    Err(e) => error!("[tcp] transfer failed; error={}", e),
+                }
+            }
+            Ok(Err(e)) => error!("[tcp] local handshake failed; error={}", e),
+            Err(_) => info!("[tcp] local handshake timeout, local={}", &local_addr),
+        }
     }
 }
 

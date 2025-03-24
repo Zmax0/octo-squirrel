@@ -114,7 +114,7 @@ Only support IPv4 at this time.
     * Windows
 
     ```shell
-    octo-squirrel-client.exe {config path}
+    octo-squirrel-client.exe '{config path}'
     ```
 
 ### Server

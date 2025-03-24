@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::anyhow;
 use anyhow::bail;
 use octo_squirrel::protocol::address::Address;
@@ -20,26 +18,22 @@ pub enum Proxy {
 }
 
 pub async fn get_request_addr(stream: &mut TcpStream) -> anyhow::Result<Address> {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        let next = recognize(stream).await?;
-        match next {
-            Proxy::Http(address) => Ok(address),
-            Proxy::Https(address) => {
-                let _ = stream.read(&mut [0; 1024]).await?;
-                stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await?;
-                Ok(address)
-            }
-            Proxy::Socks5 => {
-                let local_addr = stream.local_addr()?;
-                let response = Socks5CommandResponse::new(Socks5CommandStatus::Success, local_addr.into());
-                let handshake = socks5::handshake::server::no_auth(stream, response).await?;
-                Ok(handshake.dst_addr)
-            }
-            Proxy::Unknown => bail!("unknown type of handshake"),
-            Proxy::Error(msg) => bail!(msg),
+    match recognize(stream).await? {
+        Proxy::Http(address) => Ok(address),
+        Proxy::Https(address) => {
+            let _ = stream.read(&mut [0; 1024]).await?;
+            stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await?;
+            Ok(address)
         }
-    })
-    .await?
+        Proxy::Socks5 => {
+            let local_addr = stream.local_addr()?;
+            let response = Socks5CommandResponse::new(Socks5CommandStatus::Success, local_addr.into());
+            let handshake = socks5::handshake::server::no_auth(stream, response).await?;
+            Ok(handshake.dst_addr)
+        }
+        Proxy::Unknown => bail!("unknown type of handshake"),
+        Proxy::Error(msg) => bail!(msg),
+    }
 }
 
 async fn recognize(stream: &mut TcpStream) -> Result<Proxy, anyhow::Error> {

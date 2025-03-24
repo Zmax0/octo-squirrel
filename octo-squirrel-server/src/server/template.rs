@@ -229,7 +229,7 @@ where
     };
 
     match tokio::try_join!(p_s_c, c_s_p) {
-        Ok(_) => unreachable!("should not happen"),
+        Ok(_) => unreachable!("should never reach here"),
         Err(e) => e,
     }
 }
