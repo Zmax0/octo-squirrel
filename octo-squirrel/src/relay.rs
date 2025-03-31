@@ -1,14 +1,14 @@
 use std::fmt::Debug;
 use std::fmt::Formatter;
 
-pub enum End {
+pub enum Side {
     Local,
     Client,
     Server,
     Peer,
 }
 
-impl Debug for End {
+impl Debug for Side {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Local => write!(f, "local"),
@@ -20,8 +20,8 @@ impl Debug for End {
 }
 
 pub enum Result {
-    Close(End, End),
-    Err(End, End, anyhow::Error),
+    Close(Side, Side),
+    Err(Side, Side, anyhow::Error),
 }
 
 impl Debug for Result {

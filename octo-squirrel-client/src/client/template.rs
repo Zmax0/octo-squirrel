@@ -31,7 +31,7 @@ use octo_squirrel::config::WebSocketConfig;
 use octo_squirrel::protocol::address::Address;
 use octo_squirrel::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::relay;
-use octo_squirrel::relay::End;
+use octo_squirrel::relay::Side;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
 use tokio::net::TcpListener;
@@ -154,15 +154,15 @@ where
 
     let l_c_s = async {
         match l_c.forward(c_s).await {
-            Ok(_) => Err::<(), _>(relay::Result::Close(End::Local, End::Client)),
-            Err(e) => Err(relay::Result::Err(End::Local, End::Client, e)),
+            Ok(_) => Err::<(), _>(relay::Result::Close(Side::Local, Side::Client)),
+            Err(e) => Err(relay::Result::Err(Side::Local, Side::Client, e)),
         }
     };
 
     let s_c_l = async {
         match s_c.forward(c_l).await {
-            Ok(_) => Err::<(), _>(relay::Result::Close(End::Server, End::Client)),
-            Err(e) => Err(relay::Result::Err(End::Server, End::Client, e)),
+            Ok(_) => Err::<(), _>(relay::Result::Close(Side::Server, Side::Client)),
+            Err(e) => Err(relay::Result::Err(Side::Server, Side::Client, e)),
         }
     };
 
