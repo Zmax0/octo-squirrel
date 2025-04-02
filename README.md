@@ -16,12 +16,12 @@ Only support IPv4 at this time.
 
 ```
 ┌───────────┬──────────┬──────────┬──────────┐
-│   local  ─┼> client ─┼> server ─┼>  peer   |
+│   local  ─┼> client ─┼> server ─┼>  peer   │
 ├───────────┼──────────┴──────────┼──────────┤
-│ local app │    octo-squirrel    │ peer app |
+│ local app │    octo-squirrel    │ peer app │
 ├───────────┼──────────┬──────────┼──────────┤
-│   local  <┼─ client <┼─ server <┼─  peer   |
-└───────────┴─────────-┴──────────┴──────────┘
+│   local  <┼─ client <┼─ server <┼─  peer   │
+└───────────┴──────────┴──────────┴──────────┘
 ```
 
 | Local-Peer | Client-Server | Shadowsocks | VMess | Trojan |
