@@ -2,12 +2,11 @@ use std::env;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use config::SslConfig;
+use config::ServerConfig;
 use futures::future::join_all;
 use log::error;
 use log::info;
 use octo_squirrel::codec::QuicStream;
-use octo_squirrel::config::ServerConfig;
 use octo_squirrel::protocol::Protocol;
 use quinn::crypto::rustls::QuicServerConfig;
 use tokio::net::TcpListener;
@@ -39,7 +38,7 @@ pub async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn startup(config: ServerConfig<SslConfig>) {
+async fn startup(config: ServerConfig) {
     match config.protocol {
         Protocol::Shadowsocks => shadowsocks::startup(&config).await,
         Protocol::VMess => {
@@ -61,11 +60,7 @@ fn merge_result(res: (anyhow::Result<()>, anyhow::Result<()>)) -> anyhow::Result
     }
 }
 
-async fn startup_tcp<RefContext, Context, NewCodec, Codec>(
-    context: RefContext,
-    config: &ServerConfig<SslConfig>,
-    new_codec: NewCodec,
-) -> anyhow::Result<()>
+async fn startup_tcp<RefContext, Context, NewCodec, Codec>(context: RefContext, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
 where
     RefContext: AsRef<Context>,
     NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
@@ -110,11 +105,7 @@ where
     Ok(())
 }
 
-async fn startup_quic<RefContext, Context, NewCodec, Codec>(
-    context: RefContext,
-    config: &ServerConfig<SslConfig>,
-    new_codec: NewCodec,
-) -> anyhow::Result<()>
+async fn startup_quic<RefContext, Context, NewCodec, Codec>(context: RefContext, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
 where
     RefContext: AsRef<Context>,
     NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,

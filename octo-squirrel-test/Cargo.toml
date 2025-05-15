@@ -9,21 +9,24 @@ edition = "2024"
 octo-squirrel = { path = "../octo-squirrel", features = ["client", "server"] }
 octo-squirrel-client = { path = "../octo-squirrel-client" }
 octo-squirrel-server = { path = "../octo-squirrel-server" }
-anyhow = "1.0.95"
-console-subscriber = "0.4.1"
-rand = { version = "0.9.0", features = ["small_rng"] }
-tokio = { version = "1.43.0", features = ["full", "tracing"] }
+anyhow.workspace = true
+bytes.workspace = true
+console-subscriber.workspace = true
+hickory-resolver.workspace = true
+hickory-client = { version = "0.25.2", features = ["https-aws-lc-rs"] }
+rand.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls-platform-verifier.workspace = true
 
 [dev-dependencies]
-bytes = { version = "1.10.0" }
-criterion = { version = "0.5.1", features = ["html_reports"] }
+bytes.workspace = true
+criterion.workspace = true
 
 [[bench]]
 name = "encrypt"
-path = "src/benches/encrypt.rs"
 harness = false
 
 [[bench]]
 name = "read_bytes"
-path = "src/benches/read_bytes.rs"
 harness = false

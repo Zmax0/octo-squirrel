@@ -14,19 +14,29 @@ A network tool for improved privacy and security.
 
 Only support IPv4 at this time.
 
-| Local-Peer | Client-Server | Shadowsocks | VMess | Trojan |
-|:----------:|:-------------:|:-----------:|:-----:|:------:|
-|   `tcp`    |     `tcp`     |      ✔      |   ✔   |   ✔    |
-|   `tcp`    |     `tls`     |      ✔      |   ✔   |   ✔    |
-|   `tcp`    |     `ws`      |      ✔      |   ✔   |   ✔    |
-|   `tcp`    |     `wss`     |      ✔      |   ✔   |   ✔    |
-|   `tcp`    |    `quic`     |      ✔      |   ✔   |   ✔    |
-|   `udp`    |     `udp`     |      ✔      |       |        |
-|   `udp`    |     `tcp`     |             |   ✔   |        |
-|   `udp`    |     `tls`     |             |   ✔   |   ✔    |
-|   `udp`    |     `ws`      |             |   ✔   |        |
-|   `udp`    |     `wss`     |             |   ✔   |   ✔    |
-|   `ucp`    |    `quic`     |             |   ✔   |   ✔    |
+```
+┌───────────┬──────────┬──────────┬──────────┐
+│   local  ─┼> client ─┼> server ─┼>  peer   │
+├───────────┼──────────┴──────────┼──────────┤
+│ local app │    octo-squirrel    │ peer app │
+├───────────┼──────────┬──────────┼──────────┤
+│   local  <┼─ client <┼─ server <┼─  peer   │
+└───────────┴──────────┴──────────┴──────────┘
+```
+
+| Local-Peer | Client-Server | Peer DoH | Shadowsocks | VMess | Trojan |
+|:----------:|:-------------:|:--------:|:-----------:|:-----:|:------:|
+|   `tcp`    |     `tcp`     |    ✔     |      ✔      |   ✔   |   ✔    |
+|   `tcp`    |     `tls`     |    ✔     |      ✔      |   ✔   |   ✔    |
+|   `tcp`    |     `ws`      |    ✔     |      ✔      |   ✔   |   ✔    |
+|   `tcp`    |     `wss`     |    ✔     |      ✔      |   ✔   |   ✔    |
+|   `tcp`    |    `quic`     |    ✔     |      ✔      |   ✔   |   ✔    |
+|   `udp`    |     `udp`     |          |      ✔      |       |        |
+|   `udp`    |     `tcp`     |          |             |   ✔   |        |
+|   `udp`    |     `tls`     |          |             |   ✔   |   ✔    |
+|   `udp`    |     `ws`      |          |             |   ✔   |        |
+|   `udp`    |     `wss`     |          |             |   ✔   |   ✔    |
+|   `ucp`    |    `quic`     |          |             |   ✔   |   ✔    |
 
 ### Ciphers
 
@@ -70,6 +80,10 @@ Only support IPv4 at this time.
                 "Host": "example.com"
             },
             "path": "/ws"
+        },
+        "dns": {
+             "url": "https://…/dns-query",
+             "ssl": {}
         }
     }
     ```
@@ -79,11 +93,12 @@ Only support IPv4 at this time.
    > index: `servers[index]` will be the client config
 
    > mode: (OPTIONAL) listening mode
-   
-   1. `client`: options are "tcp"(default), "udp", "tcp_and_udp"
-   2. `shadowsocks server`: options are "tcp"(default), "udp", "quic", "tcp_and_udp", "tcp_and_quic", priority: "udp" > "
-      quic"
-   3. `shadowsocks quic server`: bind udp socket but process shadowsocks tcp payload
+
+    1. `client`: options are "tcp"(default), "udp", "tcp_and_udp"
+    2. `shadowsocks server`: options are "tcp"(default), "udp", "quic", "tcp_and_udp", "tcp_and_quic", priority: "
+       udp" > "
+       quic"
+    3. `shadowsocks quic server`: bind udp socket but process shadowsocks tcp payload
 
    > protocol: "shadowsocks" | "vmess" | "trojan"
 
@@ -109,12 +124,19 @@ Only support IPv4 at this time.
 
    > > serverName: the Server Name Indication field in the SSL handshake.
 
+   > dns: (OPTIONAL) DNS specific configurations
+
+   > > url: The DoH (DNS over HTTPS - [RFC 8484](https://datatracker.ietf.org/doc/html/rfc8484)) resolver endpoint URL
+
+   > > ssl: SSL specific configurations for connecting dns server only
+
+
 2. running command
 
     * Windows
 
     ```shell
-    octo-squirrel-client.exe {config path}
+    octo-squirrel-client.exe '{config path}'
     ```
 
 ### Server

@@ -15,10 +15,9 @@ use message::InboundIn;
 use message::OutboundIn;
 use octo_squirrel::codec::BytesCodec;
 use octo_squirrel::codec::QuicStream;
-use octo_squirrel::codec::WebSocketFramed;
 use octo_squirrel::protocol::address::Address;
 use octo_squirrel::relay;
-use octo_squirrel::relay::End;
+use octo_squirrel::relay::Side;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
@@ -98,6 +97,8 @@ pub(super) mod message {
 pub(super) mod tcp {
     use message::InboundIn;
     use message::OutboundIn;
+    use octo_squirrel::codec::WebSocketStream;
+    use tokio_util::codec::Framed;
 
     use super::*;
 
@@ -108,7 +109,7 @@ pub(super) mod tcp {
     {
         match ServerBuilder::new().accept(inbound).await {
             Ok((_, inbound)) => {
-                let (mut inbound_sink, mut inbound_stream) = WebSocketFramed::new(inbound, codec).split();
+                let (mut inbound_sink, mut inbound_stream) = Framed::new(WebSocketStream::new(inbound), codec).split();
                 relay_to(&mut inbound_sink, &mut inbound_stream).await;
             }
             Err(e) => error!("[tcp] websocket handshake failed; error={}", e),
@@ -207,29 +208,29 @@ where
     match first.try_into() {
         Ok(first) => match outbound_sink.send(first).await {
             Ok(_) => (),
-            Err(e) => return relay::Result::Err(End::Server, End::Peer, e),
+            Err(e) => return relay::Result::Err(Side::Server, Side::Peer, e),
         },
-        Err(e) => return relay::Result::Err(End::Client, End::Server, e),
+        Err(e) => return relay::Result::Err(Side::Client, Side::Server, e),
     };
     let outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(O::into).map(Ok);
     let inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
 
     let p_s_c = async {
         match outbound_stream.forward(inbound_sink).await {
-            Ok(_) => Err::<(), _>(relay::Result::Close(End::Peer, End::Server)),
-            Err(e) => Err(relay::Result::Err(End::Peer, End::Server, e)),
+            Ok(_) => Err::<(), _>(relay::Result::Close(Side::Peer, Side::Server)),
+            Err(e) => Err(relay::Result::Err(Side::Peer, Side::Server, e)),
         }
     };
 
     let c_s_p = async {
         match inbound_stream.forward(outbound_sink).await {
-            Ok(_) => Err::<(), _>(relay::Result::Close(End::Client, End::Server)),
-            Err(e) => Err(relay::Result::Err(End::Client, End::Server, e)),
+            Ok(_) => Err::<(), _>(relay::Result::Close(Side::Client, Side::Server)),
+            Err(e) => Err(relay::Result::Err(Side::Client, Side::Server, e)),
         }
     };
 
     match tokio::try_join!(p_s_c, c_s_p) {
-        Ok(_) => unreachable!("should not happen"),
+        Ok(_) => unreachable!("should never reach here"),
         Err(e) => e,
     }
 }

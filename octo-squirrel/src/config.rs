@@ -1,12 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::marker::PhantomData;
 
 use serde::Deserialize;
 use serde::Serialize;
-
-use crate::codec::aead::CipherKind;
-use crate::protocol::Protocol;
 
 pub fn default_path() -> String {
     let mut path = std::env::current_exe().expect("Can't get the current exe path");
@@ -58,34 +54,6 @@ impl Display for Mode {
 impl Default for Mode {
     fn default() -> Self {
         Self::Tcp
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServerConfig<S: Clone + Default> {
-    pub host: String,
-    pub port: u16,
-    #[serde(default)]
-    pub mode: Mode,
-    pub password: String,
-    pub protocol: Protocol,
-    #[serde(default)]
-    pub cipher: CipherKind,
-    #[serde(default)]
-    pub ssl: Option<S>,
-    #[serde(default)]
-    pub ws: Option<WebSocketConfig>,
-    #[serde(default)]
-    pub quic: Option<S>,
-    #[serde(default)]
-    pub user: Vec<User>,
-    #[serde(skip)]
-    marker: PhantomData<S>,
-}
-
-impl<S: Clone + Default> AsRef<ServerConfig<S>> for ServerConfig<S> {
-    fn as_ref(&self) -> &ServerConfig<S> {
-        self
     }
 }
 

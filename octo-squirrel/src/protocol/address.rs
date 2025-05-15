@@ -15,10 +15,22 @@ pub enum Address {
 impl Address {
     pub fn to_socket_addr(&self) -> io::Result<SocketAddr> {
         match self {
-            Address::Domain(host, port) => {
-                format!("{host}:{port}").to_socket_addrs()?.next().ok_or(io::Error::new(io::ErrorKind::AddrNotAvailable, ""))
-            }
-            Address::Socket(addr) => Ok(*addr),
+            Self::Domain(host, port) => format!("{host}:{port}").to_socket_addrs()?.next().ok_or(io::Error::new(io::ErrorKind::AddrNotAvailable, "")),
+            Self::Socket(addr) => Ok(*addr),
+        }
+    }
+
+    pub fn get_host(&self) -> String {
+        match self {
+            Self::Domain(host, _) => host.to_owned(),
+            Self::Socket(addr) => addr.ip().to_string(),
+        }
+    }
+
+    pub fn get_port(&self) -> u16 {
+        match self {
+            Self::Domain(_, port) => *port,
+            Self::Socket(addr) => addr.port(),
         }
     }
 }

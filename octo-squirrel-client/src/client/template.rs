@@ -1,4 +1,5 @@
 use core::fmt::Debug;
+use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
@@ -6,15 +7,21 @@ use std::ops::AsyncFn;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use anyhow::bail;
 use bytes::BytesMut;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::SplitSink;
+use hickory_resolver::Name;
+use hickory_resolver::lookup_ip::LookupIp;
+use hickory_resolver::proto::op::Query;
+use hickory_resolver::proto::rr::RecordType;
 use http::HeaderName;
 use http::HeaderValue;
 use log::debug;
@@ -25,15 +32,16 @@ use lru_time_cache::LruCache;
 use octo_squirrel::codec::BytesCodec;
 use octo_squirrel::codec::DatagramPacket;
 use octo_squirrel::codec::QuicStream;
-use octo_squirrel::codec::WebSocketFramed;
-use octo_squirrel::config::ServerConfig;
+use octo_squirrel::codec::WebSocketStream;
 use octo_squirrel::config::WebSocketConfig;
 use octo_squirrel::protocol::address::Address;
 use octo_squirrel::protocol::socks5::codec::Socks5UdpCodec;
 use octo_squirrel::relay;
-use octo_squirrel::relay::End;
+use octo_squirrel::relay::Side;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
@@ -56,81 +64,118 @@ use tokio_websockets::ClientBuilder;
 
 use super::config::SslConfig;
 use super::handshake;
+use crate::client::config::ServerConfig;
 
 pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
     listener: TcpListener,
-    config: ServerConfig<SslConfig>,
+    config: ServerConfig,
     new_context: NewContext,
     new_codec: NewCodec,
 ) where
-    NewContext: FnOnce(&ServerConfig<SslConfig>) -> Result<Context> + 'static,
+    NewContext: FnOnce(&ServerConfig) -> Result<Context> + 'static,
     Context: Clone + Send + 'static,
-    NewCodec: FnOnce(&Address, Context) -> Result<Codec> + Copy + Send + 'static,
+    NewCodec: FnMut(&Address, Context) -> Result<Codec> + Copy + Send + 'static,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
-    let context = new_context(&config);
-    let config = Arc::new(config);
-    match context {
+    match new_context(&config) {
         Ok(context) => {
-            while let Ok((mut inbound, local_addr)) = listener.accept().await {
+            let config = Arc::new(config);
+            while let Ok((inbound, local_addr)) = listener.accept().await {
                 let context = context.clone();
                 let config = config.clone();
-                tokio::spawn(async move {
-                    let handshake = handshake::get_request_addr(&mut inbound).await;
-                    if let Ok(peer_addr) = handshake {
-                        info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
-                        match try_transfer_tcp(inbound, &peer_addr, &config, context, new_codec).await {
-                            Ok(res) => info!(
-                                "[tcp] relay complete, local={}, server={}:{}, peer={}, {:?}",
-                                &local_addr, &config.host, config.port, peer_addr, res
-                            ),
-                            Err(e) => error!("[tcp] transfer failed; error={}", e),
-                        }
-                    } else {
-                        error!("[tcp] local handshake failed; error={}", handshake.unwrap_err());
-                    }
-                });
+                tokio::spawn(transfer_tcp(new_codec, context, config, inbound, local_addr));
             }
         }
         Err(e) => error!("create client context failed; error={e}"),
+    }
+
+    async fn transfer_tcp<Context, NewCodec, Codec>(
+        new_codec: NewCodec,
+        context: Context,
+        config: Arc<ServerConfig>,
+        mut inbound: TcpStream,
+        local_addr: SocketAddr,
+    ) where
+        Context: Clone + Send + 'static,
+        NewCodec: FnMut(&Address, Context) -> Result<Codec> + Copy + Send + 'static,
+        Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
+    {
+        match tokio::time::timeout(Duration::from_secs(30), handshake::get_request_addr(&mut inbound)).await {
+            Ok(Ok(peer_addr)) => {
+                info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
+                match try_transfer_tcp(inbound, &peer_addr, &config, context, new_codec).await {
+                    Ok(res) => {
+                        info!("[tcp] relay complete, local={}, server={}:{}, peer={}, {:?}", &local_addr, &config.host, config.port, peer_addr, res)
+                    }
+                    Err(e) => error!("[tcp] transfer failed; error={}", e),
+                }
+            }
+            Ok(Err(e)) => error!("[tcp] local handshake failed; error={}", e),
+            Err(_) => info!("[tcp] local handshake timeout, local={}", &local_addr),
+        }
     }
 }
 
 pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
     inbound: TcpStream,
     peer_addr: &Address,
-    config: &ServerConfig<SslConfig>,
+    config: &ServerConfig,
     context: Context,
     new_codec: NewCodec,
 ) -> Result<relay::Result>
 where
-    NewCodec: FnOnce(&Address, Context) -> Result<Codec>,
+    Context: Clone,
+    NewCodec: FnMut(&Address, Context) -> Result<Codec>,
     Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
-    let local_client = Framed::new(inbound, BytesCodec);
-    let codec = new_codec(peer_addr, context)?;
     Ok(match (&config.ssl, &config.ws, &config.quic) {
-        (None, None, None) => {
-            let client_server = new_plain_outbound(&config.host, config.port, codec).await?;
-            relay_tcp(local_client, client_server).await
-        }
-        (_, _, Some(quic_config)) => {
-            let client_server = new_quic_outbound(&config.host, config.port, codec, quic_config).await?;
-            relay_tcp(local_client, client_server).await
-        }
-        (None, Some(ws_config), None) => {
-            let client_server = new_ws_outbound(&config.host, config.port, codec, ws_config).await?;
-            relay_tcp(local_client, client_server).await
-        }
-        (Some(ssl_config), None, None) => {
-            let client_server = new_tls_outbound(&config.host, config.port, codec, ssl_config).await?;
-            relay_tcp(local_client, client_server).await
-        }
-        (Some(ssl_config), Some(ws_config), None) => {
-            let client_server = new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await?;
-            relay_tcp(local_client, client_server).await
-        }
+        (None, None, None) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_plain_outbound).await?,
+        (_, _, Some(_)) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_quic_outbound).await?,
+        (None, Some(_), None) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_ws_outbound).await?,
+        (Some(_), None, None) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_tls_outbound).await?,
+        (Some(_), Some(_), None) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_wss_outbound).await?,
     })
+}
+
+async fn try_relay_tcp<Context, NewCodec, Codec, NewOutbound, Stream>(
+    inbound: TcpStream,
+    peer_addr: &Address,
+    config: &ServerConfig,
+    context: Context,
+    mut new_codec: NewCodec,
+    new_outbound: NewOutbound,
+) -> Result<relay::Result>
+where
+    Context: Clone,
+    NewCodec: FnMut(&Address, Context) -> Result<Codec>,
+    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
+    NewOutbound: AsyncFn(&str, u16, Codec, &ServerConfig) -> Result<Framed<Stream, Codec>, anyhow::Error> + Copy,
+    Stream: AsyncRead + AsyncWrite + Send + 'static + Unpin,
+{
+    let codec = if let (Some(dns_config), Err(_)) = (&config.dns, IpAddr::from_str(&peer_addr.get_host())) {
+        let query = Query::query(Name::from_str(&format!("{}.", &peer_addr.get_host()))?, RecordType::A);
+        let peer_ip = if let Some(ip) = dns_config.cache.get(&query, Instant::now()) {
+            debug!("[dns] dns cached; {} => {:?}", &peer_addr.get_host(), ip);
+            ip
+        } else {
+            let query_a = super::dns::A::new(dns_config)?;
+            let codec = new_codec(&Address::Domain(query_a.host.clone(), query_a.port), context.clone())?;
+            let dns_outbound = new_outbound(&config.host, config.port, codec, config).await?;
+            let lookup = super::dns::a_query(dns_outbound, query_a, query.clone()).await?;
+            let ttl = lookup.records().iter().next().map(|r| r.ttl()).ok_or(anyhow!("[dns] no ttl found"))?;
+            let ip = LookupIp::from(lookup).iter().next().ok_or(anyhow!("[dns] no ip found"))?;
+            dns_config.cache.insert(query, ip, ttl, Instant::now());
+            debug!("[dns] new query; {} => {:?}", &peer_addr.get_host(), ip);
+            ip
+        };
+        let resolved_peer_addr = Address::Socket(SocketAddr::new(peer_ip, peer_addr.get_port()));
+        new_codec(&resolved_peer_addr, context)?
+    } else {
+        new_codec(peer_addr, context)?
+    };
+    let local_client = Framed::new(inbound, BytesCodec);
+    let client_server = new_outbound(&config.host, config.port, codec, config).await?;
+    Ok(relay_tcp(local_client, client_server).await)
 }
 
 async fn relay_tcp<I, O>(local_client: I, client_server: O) -> relay::Result
@@ -143,15 +188,15 @@ where
 
     let l_c_s = async {
         match l_c.forward(c_s).await {
-            Ok(_) => Err::<(), _>(relay::Result::Close(End::Local, End::Client)),
-            Err(e) => Err(relay::Result::Err(End::Local, End::Client, e)),
+            Ok(_) => Err::<(), _>(relay::Result::Close(Side::Local, Side::Client)),
+            Err(e) => Err(relay::Result::Err(Side::Local, Side::Client, e)),
         }
     };
 
     let s_c_l = async {
         match s_c.forward(c_l).await {
-            Ok(_) => Err::<(), _>(relay::Result::Close(End::Server, End::Client)),
-            Err(e) => Err(relay::Result::Err(End::Server, End::Client, e)),
+            Ok(_) => Err::<(), _>(relay::Result::Close(Side::Server, Side::Client)),
+            Err(e) => Err(relay::Result::Err(Side::Server, Side::Client, e)),
         }
     };
 
@@ -163,7 +208,7 @@ where
 
 pub async fn transfer_udp<Context, NewContext, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv, OutRecv, OutSend>(
     inbound: UdpSocket,
-    config: ServerConfig<SslConfig>,
+    config: ServerConfig,
     new_context: NewContext,
     new_key: NewKey,
     new_out: NewOut,
@@ -171,7 +216,7 @@ pub async fn transfer_udp<Context, NewContext, Key, NewKey, Out, NewOut, ToOutSe
     to_outbound_send: ToOutSend,
 ) -> Result<()>
 where
-    NewContext: FnOnce(ServerConfig<SslConfig>) -> Result<Context>,
+    NewContext: FnOnce(ServerConfig) -> Result<Context>,
     NewKey: FnOnce(SocketAddr, &Address) -> Key + Copy,
     Key: Ord + Clone + Debug + Send + Sync + 'static,
     NewOut: AsyncFn(&Address, &Context) -> Result<Out, anyhow::Error> + Copy,
@@ -291,7 +336,7 @@ impl<Out, OutSend> Drop for Binding<Out, OutSend> {
     }
 }
 
-pub async fn new_plain_outbound<C, E, D>(host: &str, port: u16, codec: C) -> Result<Framed<TcpStream, C>, anyhow::Error>
+pub async fn new_plain_outbound<C, E, D>(host: &str, port: u16, codec: C, _: &ServerConfig) -> Result<Framed<TcpStream, C>, anyhow::Error>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
@@ -300,51 +345,68 @@ where
     Ok(client_server)
 }
 
-pub async fn new_quic_outbound<C, E, D>(host: &str, port: u16, codec: C, config: &SslConfig) -> Result<Framed<QuicStream, C>>
+pub async fn new_quic_outbound<C, E, D>(host: &str, port: u16, codec: C, config: &ServerConfig) -> Result<Framed<QuicStream, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    let mut tls_config = rustls_client_config(config)?;
-    tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    let mut endpoint = quinn::Endpoint::client(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
-    let quic_client_config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_config)?));
-    endpoint.set_default_client_config(quic_client_config);
-    let server_name = if let Some(server_name) = &config.server_name { server_name } else { &host.to_owned() };
-    let conn = endpoint.connect(format!("{host}:{port}").parse()?, server_name)?.await?;
-    let (send, recv) = conn.open_bi().await?;
-    Ok(codec.framed(QuicStream::new(send, recv)))
+    if let Some(config) = &config.ssl {
+        let mut tls_config = rustls_client_config(config)?;
+        tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let mut endpoint = quinn::Endpoint::client(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
+        let quic_client_config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_config)?));
+        endpoint.set_default_client_config(quic_client_config);
+        let server_name = if let Some(server_name) = &config.server_name { server_name } else { &host.to_owned() };
+        let conn = endpoint.connect(format!("{host}:{port}").parse()?, server_name)?.await?;
+        let (send, recv) = conn.open_bi().await?;
+        Ok(codec.framed(QuicStream::new(send, recv)))
+    } else {
+        bail!("ssl config is required for quic outbound");
+    }
 }
 
-pub async fn new_tls_outbound<C, E, D>(host: &str, port: u16, codec: C, ssl_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
+pub async fn new_tls_outbound<C, E, D>(host: &str, port: u16, codec: C, config: &ServerConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    let outbound = rustls_stream(host, port, ssl_config).await?;
-    Ok(codec.framed(outbound))
+    if let Some(config) = &config.ssl {
+        let outbound = rustls_stream(host, port, config).await?;
+        Ok(codec.framed(outbound))
+    } else {
+        bail!("ssl config is required for tls outbound");
+    }
 }
 
-pub async fn new_ws_outbound<C, E, D>(host: &str, port: u16, codec: C, ws_config: &WebSocketConfig) -> Result<WebSocketFramed<TcpStream, C, E, D>>
+pub async fn new_ws_outbound<C, E, D>(host: &str, port: u16, codec: C, config: &ServerConfig) -> Result<Framed<WebSocketStream<TcpStream>, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    let outbound = TcpStream::connect((host, port)).await?;
-    let (outbound, _) = new_ws_builder(host, port, ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
-    Ok(WebSocketFramed::new(outbound, codec))
+    if let Some(config) = &config.ws {
+        let outbound = TcpStream::connect((host, port)).await?;
+        let (outbound, _) = new_ws_builder(host, port, config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
+        let outbound = WebSocketStream::new(outbound);
+        Ok(Framed::new(outbound, codec))
+    } else {
+        bail!("ws config is required for ws outbound");
+    }
 }
 
-pub async fn new_wss_outbound<C, E, D>(
+pub async fn new_wss_outbound<C, D, E>(
     host: &str,
     port: u16,
     codec: C,
-    ssl_config: &SslConfig,
-    ws_config: &WebSocketConfig,
-) -> Result<WebSocketFramed<TlsStream<TcpStream>, C, E, D>>
+    config: &ServerConfig,
+) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    let outbound = rustls_stream(host, port, ssl_config).await?;
-    let (outbound, _) = new_ws_builder(host, port, ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
-    Ok(WebSocketFramed::new(outbound, codec))
+    if let (Some(ws_config), Some(ssl_config)) = (&config.ws, &config.ssl) {
+        let outbound = rustls_stream(host, port, ssl_config).await?;
+        let (outbound, _) = new_ws_builder(host, port, ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
+        let outbound = WebSocketStream::new(outbound);
+        Ok(Framed::new(outbound, codec))
+    } else {
+        bail!("ws config and ssl config are required for wss outbound");
+    }
 }
 
 fn new_ws_builder<'a>(host: &str, port: u16, ws_config: &WebSocketConfig) -> Result<ClientBuilder<'a>> {
@@ -377,7 +439,7 @@ pub async fn rustls_stream(host: &str, port: u16, ssl_config: &SslConfig) -> Res
     connector.connect(server_name, stream).await.map_err(|e| anyhow!(e))
 }
 
-fn rustls_client_config(ssl_config: &SslConfig) -> Result<ClientConfig> {
+pub fn rustls_client_config(ssl_config: &SslConfig) -> Result<ClientConfig> {
     let config = if let Some(certificate_file) = &ssl_config.certificate_file {
         let mut roots = RootCertStore::empty();
         let cert = CertificateDer::from_pem_file(certificate_file)?;

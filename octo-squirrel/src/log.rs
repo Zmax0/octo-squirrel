@@ -31,12 +31,14 @@ fn build_config(level: &str) -> Config {
     let quinn_logger = log4rs::config::Logger::builder().build("quinn", LevelFilter::Info);
     let quinn_proto_logger = log4rs::config::Logger::builder().build("quinn_proto", LevelFilter::Info);
     let rustls_logger = log4rs::config::Logger::builder().build("rustls", LevelFilter::Info);
+    let h2_logger = log4rs::config::Logger::builder().build("h2", LevelFilter::Info);
+    let hickory_proto_logger = log4rs::config::Logger::builder().build("hickory_proto", LevelFilter::Info);
     let name = "stdout";
     Config::builder()
-        .loggers(vec![quinn_logger, quinn_proto_logger, rustls_logger])
+        .loggers(vec![quinn_logger, quinn_proto_logger, rustls_logger, h2_logger, hickory_proto_logger])
         .appender(Appender::builder().build(
             name,
-            Box::new(ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} {h({l}):<6} {m}{n}"))).build()),
+            Box::new(ConsoleAppender::builder().encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} [{t}] {h({l}):<5} {m}{n}"))).build()),
         ))
         .build(Root::builder().appender(name).build(LevelFilter::from_str(level).unwrap()))
         .unwrap()
