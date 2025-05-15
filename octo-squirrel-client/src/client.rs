@@ -1,16 +1,16 @@
 use std::net::Ipv4Addr;
 use std::net::SocketAddrV4;
 
-use config::SslConfig;
+use config::ServerConfig;
 use log::error;
 use log::info;
 use octo_squirrel::codec::aead::CipherKind;
-use octo_squirrel::config::ServerConfig;
 use octo_squirrel::protocol::Protocol::*;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
 
 mod config;
+mod dns;
 mod handshake;
 mod shadowsocks;
 mod template;
@@ -39,7 +39,7 @@ pub async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn transfer_tcp(listener: TcpListener, current: ServerConfig<SslConfig>) {
+async fn transfer_tcp(listener: TcpListener, current: ServerConfig) {
     match current.protocol {
         Shadowsocks => match current.cipher {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
@@ -71,7 +71,7 @@ async fn transfer_tcp(listener: TcpListener, current: ServerConfig<SslConfig>) {
     }
 }
 
-async fn transfer_udp(socket: UdpSocket, current: ServerConfig<SslConfig>) {
+async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
     match (current.protocol, &current.ssl, &current.ws, &current.quic) {
         (Shadowsocks, _, _, _) => match current.cipher {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {

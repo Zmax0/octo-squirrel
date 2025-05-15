@@ -10,9 +10,16 @@ octo-squirrel = { path = "../octo-squirrel", features = ["client", "server"] }
 octo-squirrel-client = { path = "../octo-squirrel-client" }
 octo-squirrel-server = { path = "../octo-squirrel-server" }
 anyhow.workspace = true
+bytes.workspace = true
 console-subscriber.workspace = true
+h2.workspace = true
+hickory-resolver.workspace = true
+hickory-client = { version = "0.25.2", features = ["https-aws-lc-rs"] }
+http.workspace = true
 rand.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
+rustls-platform-verifier.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true

@@ -15,7 +15,6 @@ use message::InboundIn;
 use message::OutboundIn;
 use octo_squirrel::codec::BytesCodec;
 use octo_squirrel::codec::QuicStream;
-use octo_squirrel::codec::WebSocketFramed;
 use octo_squirrel::protocol::address::Address;
 use octo_squirrel::relay;
 use octo_squirrel::relay::Side;
@@ -98,6 +97,8 @@ pub(super) mod message {
 pub(super) mod tcp {
     use message::InboundIn;
     use message::OutboundIn;
+    use octo_squirrel::codec::WebSocketStream;
+    use tokio_util::codec::Framed;
 
     use super::*;
 
@@ -108,7 +109,7 @@ pub(super) mod tcp {
     {
         match ServerBuilder::new().accept(inbound).await {
             Ok((_, inbound)) => {
-                let (mut inbound_sink, mut inbound_stream) = WebSocketFramed::new(inbound, codec).split();
+                let (mut inbound_sink, mut inbound_stream) = Framed::new(WebSocketStream::new(inbound), codec).split();
                 relay_to(&mut inbound_sink, &mut inbound_stream).await;
             }
             Err(e) => error!("[tcp] websocket handshake failed; error={}", e),

@@ -6,15 +6,19 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-octo-squirrel = { path = "../octo-squirrel", features = ["server"] }
+octo-squirrel = { path = "../octo-squirrel", features = ["client"] }
 aes-gcm.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
 futures.workspace = true
+h2.workspace = true
+hickory-client = { version = "0.25.2", features = ["https-aws-lc-rs"] }
+hickory-resolver.workspace = true
 http.workspace = true
 httparse.workspace = true
 log.workspace = true
 lru_time_cache.workspace = true
+moka.workspace = true
 quinn.workspace = true
 rand.workspace = true
 rustls-platform-verifier.workspace = true

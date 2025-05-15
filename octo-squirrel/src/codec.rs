@@ -3,19 +3,16 @@ mod chunk;
 pub mod shadowsocks;
 pub mod vmess;
 
-use std::fmt::Debug;
-use std::marker::PhantomData;
+use std::io;
+use std::mem::take;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use std::task::ready;
 
 use anyhow::Result;
-use anyhow::anyhow;
 use anyhow::bail;
-use futures::Sink;
 use futures::SinkExt;
-use futures::Stream;
 use futures::StreamExt;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
@@ -24,7 +21,7 @@ use tokio_util::bytes::Bytes;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
-use tokio_websockets::WebSocketStream;
+use tokio_websockets::Payload;
 
 use super::protocol::address::Address;
 
@@ -63,93 +60,71 @@ impl Encoder<BytesMut> for BytesCodec {
 }
 
 pub type DatagramPacket = (BytesMut, Address);
-
-pub struct WebSocketFramed<T, C, E, D> {
-    stream: WebSocketStream<T>,
-    codec: C,
-    encode_item: PhantomData<E>,
-    decode_item: PhantomData<D>,
-    buffer: Option<BytesMut>,
+pub struct WebSocketStream<T> {
+    inner: tokio_websockets::proto::WebSocketStream<T>,
+    buffer: BytesMut,
 }
 
-impl<T, C, E, D> WebSocketFramed<T, C, E, D>
-where
-    T: AsyncRead + AsyncWrite,
-    C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error>,
-{
-    pub fn new(stream: WebSocketStream<T>, codec: C) -> Self {
-        Self { stream, codec, encode_item: PhantomData, decode_item: PhantomData, buffer: None }
+impl<T> WebSocketStream<T> {
+    pub fn new(inner: tokio_websockets::proto::WebSocketStream<T>) -> Self {
+        Self { inner, buffer: BytesMut::new() }
     }
 }
 
-impl<T, C, E, D> Stream for WebSocketFramed<T, C, E, D>
+impl<T> AsyncRead for WebSocketStream<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
-    C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
-    E: Unpin,
-    D: Debug + Unpin,
 {
-    type Item = Result<D>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        loop {
-            match ready!(self.stream.poll_next_unpin(cx)) {
-                Some(Ok(msg)) => {
-                    if msg.is_binary() || msg.is_text() {
-                        let mut payload = match self.buffer.take() {
-                            Some(buffer) => {
-                                let msg_payload = msg.as_payload();
-                                let mut payload = BytesMut::with_capacity(buffer.len() + msg_payload.len());
-                                payload.extend_from_slice(&buffer);
-                                payload.extend_from_slice(msg_payload);
-                                payload
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<Result<(), std::io::Error>> {
+        if !self.buffer.is_empty() {
+            let cur = if self.buffer.len() <= buf.remaining() { take(&mut self.buffer) } else { self.buffer.split_to(buf.remaining()) };
+            buf.put_slice(&cur);
+            Poll::Ready(Ok(()))
+        } else {
+            match ready!(self.inner.poll_ready_unpin(cx)) {
+                Ok(_) => match ready!(self.inner.poll_next_unpin(cx)) {
+                    Some(Ok(msg)) => {
+                        if msg.is_binary() || msg.is_text() {
+                            let payload = msg.as_payload();
+                            if payload.len() <= buf.remaining() {
+                                buf.put_slice(payload);
+                            } else {
+                                let (left, right) = payload.split_at(buf.remaining());
+                                buf.put_slice(left);
+                                self.buffer.extend_from_slice(right);
                             }
-                            None => BytesMut::from(msg.into_payload()),
-                        };
-                        let decoded = self.codec.decode(&mut payload);
-                        if !payload.is_empty() {
-                            self.buffer = Some(payload);
                         }
-                        match decoded {
-                            Ok(Some(item)) => return Poll::Ready(Some(Ok(item))),
-                            Ok(None) => return Poll::Pending,
-                            Err(e) => return Poll::Ready(Some(Err(e))),
-                        }
+                        Poll::Ready(Ok(()))
                     }
-                    continue;
-                }
-                Some(Err(e)) => return Poll::Ready(Some(Err(anyhow!(e)))),
-                None => return Poll::Ready(None),
+                    Some(Err(e)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+                    None => Poll::Pending,
+                },
+                Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
             }
         }
     }
 }
 
-impl<T, C, E, D> Sink<E> for WebSocketFramed<T, C, E, D>
+impl<T> AsyncWrite for WebSocketStream<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
-    C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
-    E: Unpin,
-    D: Unpin,
 {
-    type Error = anyhow::Error;
-
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.stream.poll_ready_unpin(cx).map_err(|e| anyhow!(e))
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::result::Result<usize, io::Error>> {
+        match ready!(self.inner.poll_ready_unpin(cx)) {
+            Ok(_) => match self.inner.start_send_unpin(tokio_websockets::Message::binary(Payload::from(buf.to_vec()))) {
+                Ok(_) => Poll::Ready(Ok(buf.len())),
+                Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+            },
+            Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+        }
     }
 
-    fn start_send(mut self: Pin<&mut Self>, item: E) -> Result<(), Self::Error> {
-        let mut dst = BytesMut::new();
-        self.codec.encode(item, &mut dst)?;
-        self.stream.start_send_unpin(tokio_websockets::Message::binary(dst)).map_err(|e| anyhow!(e))
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), io::Error>> {
+        self.inner.poll_flush_unpin(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.stream.poll_flush_unpin(cx).map_err(|e| anyhow!(e))
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.stream.poll_close_unpin(cx).map_err(|e| anyhow!(e))
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), io::Error>> {
+        self.inner.poll_close_unpin(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 }
 

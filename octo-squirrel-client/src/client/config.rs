@@ -2,9 +2,11 @@ use std::env::args;
 use std::fs::File;
 use std::io::Read;
 
+use octo_squirrel::codec::aead::CipherKind;
 use octo_squirrel::config::Mode;
-use octo_squirrel::config::ServerConfig;
+use octo_squirrel::config::WebSocketConfig;
 use octo_squirrel::log::Logger;
+use octo_squirrel::protocol::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -18,12 +20,62 @@ pub struct ClientConfig {
     pub index: usize,
     #[serde(default)]
     pub logger: Logger,
-    pub servers: Vec<ServerConfig<SslConfig>>,
+    pub servers: Vec<ServerConfig>,
 }
 
 impl ClientConfig {
-    pub fn get_current(&mut self) -> ServerConfig<SslConfig> {
+    pub fn get_current(&mut self) -> ServerConfig {
         self.servers.remove(self.index)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub mode: Mode,
+    pub password: String,
+    pub protocol: Protocol,
+    #[serde(default)]
+    pub cipher: CipherKind,
+    #[serde(default)]
+    pub ssl: Option<SslConfig>,
+    #[serde(default)]
+    pub ws: Option<WebSocketConfig>,
+    #[serde(default)]
+    pub quic: Option<SslConfig>,
+    pub dns: Option<DnsConfig>,
+}
+
+impl AsRef<ServerConfig> for ServerConfig {
+    fn as_ref(&self) -> &ServerConfig {
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DnsConfig {
+    pub url: String,
+    pub ssl: Option<SslConfig>,
+    pub cache_size: usize,
+    #[serde(skip_serializing)]
+    pub cache: super::dns::Cache,
+}
+
+impl<'de> Deserialize<'de> for DnsConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let map = serde_json::Map::deserialize(deserializer)?;
+        let url = map.get("url").ok_or(serde::de::Error::missing_field("url"))?;
+        let url = String::deserialize(url).map_err(serde::de::Error::custom)?;
+        let ssl = if let Some(ssl) = map.get("ssl") { Some(SslConfig::deserialize(ssl).map_err(serde::de::Error::custom)?) } else { None };
+        let cache_size =
+            if let Some(cache_size) = map.get("cache_size") { usize::deserialize(cache_size).map_err(serde::de::Error::custom)? } else { 100 };
+        let cache = super::dns::Cache::new(cache_size);
+        Ok(DnsConfig { url, ssl, cache_size, cache })
     }
 }
 
@@ -49,8 +101,6 @@ pub fn init() -> Result<ClientConfig, std::io::Error> {
 mod test {
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::protocol::Protocol;
-    use rand::Rng;
-    use rand::distr::Alphanumeric;
     use rand::random;
     use serde_json::json;
 
@@ -60,8 +110,7 @@ mod test {
     fn test_config_serialize() {
         let client_port: u16 = random();
         let server_port: u16 = random();
-        let server_name: String = rand::rng().sample_iter(&Alphanumeric).take(10).map(char::from).collect();
-        let server_host = format!("www.{}.com", server_name);
+        let server_host = "www.example.com";
         let json = json!({
           "port": client_port,
           "index": 0,
@@ -76,9 +125,17 @@ mod test {
                   "ssl": {
                       "certificateFile": "/path/to/certificate.crt",
                       "keyFile": "/path/to/private.key",
-                      "serverName": server_name
+                      "serverName": server_host
                   },
-                  "mode": "tcp"
+                  "mode": "tcp",
+                  "dns": {
+                      "url": "https://8.8.8.8/dns-query",
+                      "ssl": {
+                        "certificateFile": "/path/to/certificate.crt",
+                        "keyFile": "/path/to/private.key",
+                        "serverName": server_host
+                    }
+                  }
               }
           ]
         });
@@ -90,6 +147,10 @@ mod test {
         assert_eq!(CipherKind::ChaCha20Poly1305, current.cipher);
         assert_eq!(Protocol::VMess, current.protocol);
         assert!(current.ssl.is_some());
-        assert_eq!(current.ssl.as_ref().unwrap().server_name.as_ref().unwrap(), &server_name)
+        assert_eq!(current.ssl.as_ref().unwrap().server_name.as_ref().unwrap(), &server_host);
+        assert!(current.dns.is_some());
+        assert_eq!(current.dns.as_ref().unwrap().url, "https://8.8.8.8/dns-query");
+        assert!(current.dns.as_ref().unwrap().ssl.is_some());
+        assert_eq!(current.dns.as_ref().unwrap().ssl.as_ref().unwrap().server_name.as_ref().unwrap(), &server_host);
     }
 }
