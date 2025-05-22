@@ -192,7 +192,7 @@ where
 }
 
 async fn relay_bidirectional<ISink, IStream, O, OSink, OStream>(
-    inbound_sink: ISink,
+    mut inbound_sink: ISink,
     inbound_stream: IStream,
     mut outbound_sink: OSink,
     outbound_stream: OStream,
@@ -216,7 +216,7 @@ where
     let inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
 
     let p_s_c = async {
-        match outbound_stream.forward(inbound_sink).await {
+        match outbound_stream.forward(&mut inbound_sink).await {
             Ok(_) => Err::<(), _>(relay::Result::Close(Side::Peer, Side::Server)),
             Err(e) => Err(relay::Result::Err(Side::Peer, Side::Server, e)),
         }
@@ -229,8 +229,12 @@ where
         }
     };
 
-    match tokio::try_join!(p_s_c, c_s_p) {
+    let res = match tokio::try_join!(p_s_c, c_s_p) {
         Ok(_) => unreachable!("should never reach here"),
         Err(e) => e,
+    };
+    if let Err(e) = inbound_sink.close().await {
+        error!("[tcp] close inbound failed; {}", e);
     }
+    res
 }
