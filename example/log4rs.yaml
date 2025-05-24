@@ -20,11 +20,11 @@ appenders:
         base: 1
         count: 5
 loggers:
-  quinn:
+  octo_squirrel:
     level: info
-  quinn_proto: 
+  octo_squirrel_client: 
     level: info
-  rustls:
+  octo_squirrel_server:
     level: info
 root:
   level: info

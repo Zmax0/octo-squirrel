@@ -183,36 +183,27 @@ where
     I: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = Result<BytesMut>>,
     O: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = Result<BytesMut>>,
 {
-    let (mut c_l, l_c) = local_client.split();
-    let (mut c_s, s_c) = client_server.split();
+    let (c_l, l_c) = local_client.split();
+    let (c_s, s_c) = client_server.split();
 
     let l_c_s = async {
-        match l_c.forward(&mut c_s).await {
+        match l_c.forward(c_s).await {
             Ok(_) => Err::<(), _>(relay::Result::Close(Side::Local, Side::Client)),
             Err(e) => Err(relay::Result::Err(Side::Local, Side::Client, e)),
         }
     };
 
     let s_c_l = async {
-        match s_c.forward(&mut c_l).await {
+        match s_c.forward(c_l).await {
             Ok(_) => Err::<(), _>(relay::Result::Close(Side::Server, Side::Client)),
             Err(e) => Err(relay::Result::Err(Side::Server, Side::Client, e)),
         }
     };
 
-    let res = match tokio::try_join!(l_c_s, s_c_l) {
+    match tokio::try_join!(l_c_s, s_c_l) {
         Ok(_) => unreachable!("should never reach here"),
         Err(e) => e,
-    };
-
-    match tokio::join!(c_s.close(), c_l.close()) {
-        (Ok(_), Ok(_)) => (),
-        (Ok(_), Err(e)) => error!("[tcp] close local_client failed; {}", e),
-        (Err(e), Ok(_)) => error!("[tcp] close server_client failed; {}", e),
-        (Err(e1), Err(e2)) => error!("[tcp] close local_client and server_client failed; {}|{}", e1, e2),
-    };
-
-    res
+    }
 }
 
 pub async fn transfer_udp<Context, NewContext, Key, NewKey, Out, NewOut, ToOutSend, ToInRecv, OutRecv, OutSend>(

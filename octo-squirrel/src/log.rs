@@ -68,3 +68,9 @@ impl Logger {
         "info".to_owned()
     }
 }
+
+impl Default for Logger {
+    fn default() -> Self {
+        Self { level: Self::default_level(), root_level: Self::default_level() }
+    }
+}

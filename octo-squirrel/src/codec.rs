@@ -81,25 +81,22 @@ where
             buf.put_slice(&cur);
             Poll::Ready(Ok(()))
         } else {
-            match ready!(self.inner.poll_ready_unpin(cx)) {
-                Ok(_) => match ready!(self.inner.poll_next_unpin(cx)) {
-                    Some(Ok(msg)) => {
-                        if msg.is_binary() || msg.is_text() {
-                            let payload = msg.as_payload();
-                            if payload.len() <= buf.remaining() {
-                                buf.put_slice(payload);
-                            } else {
-                                let (left, right) = payload.split_at(buf.remaining());
-                                buf.put_slice(left);
-                                self.buffer.extend_from_slice(right);
-                            }
+            match ready!(self.inner.poll_next_unpin(cx)) {
+                Some(Ok(msg)) => {
+                    if msg.is_binary() || msg.is_text() {
+                        let payload = msg.as_payload();
+                        if payload.len() <= buf.remaining() {
+                            buf.put_slice(payload);
+                        } else {
+                            let (left, right) = payload.split_at(buf.remaining());
+                            buf.put_slice(left);
+                            self.buffer.extend_from_slice(right);
                         }
-                        Poll::Ready(Ok(()))
                     }
-                    Some(Err(e)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
-                    None => Poll::Pending,
-                },
-                Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+                    Poll::Ready(Ok(()))
+                }
+                Some(Err(e)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+                None => Poll::Pending,
             }
         }
     }
