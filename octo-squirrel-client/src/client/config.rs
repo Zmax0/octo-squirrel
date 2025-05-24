@@ -18,7 +18,6 @@ pub struct ClientConfig {
     #[serde(default)]
     pub mode: Mode,
     pub index: usize,
-    #[serde(default)]
     pub logger: Logger,
     pub servers: Vec<ServerConfig>,
 }

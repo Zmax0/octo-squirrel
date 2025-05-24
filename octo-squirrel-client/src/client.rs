@@ -21,7 +21,7 @@ pub async fn main() -> anyhow::Result<()> {
     let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
     let mut config = config::init()?;
     let current = config.get_current();
-    octo_squirrel::log::init(config.logger.level())?;
+    octo_squirrel::log::init(config.logger.root_level(), config.logger.level())?;
     let listen_addr: SocketAddrV4 = match config.host.as_ref() {
         Some(host) => format!("{}:{}", host, config.port).parse()?,
         None => SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port),

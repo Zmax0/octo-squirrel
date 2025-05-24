@@ -122,7 +122,8 @@ pub(super) mod tcp {
         C: Encoder<OutboundIn, Error = anyhow::Error> + Decoder<Item = InboundIn, Error = anyhow::Error> + Send + 'static,
     {
         let (mut inbound_sink, mut inbound_stream) = codec.framed(inbound).split();
-        relay_to(&mut inbound_sink, &mut inbound_stream).await
+        relay_to(&mut inbound_sink, &mut inbound_stream).await;
+        let _ = inbound_sink.close().await;
     }
 }
 
@@ -229,12 +230,8 @@ where
         }
     };
 
-    let res = match tokio::try_join!(p_s_c, c_s_p) {
+    match tokio::try_join!(p_s_c, c_s_p) {
         Ok(_) => unreachable!("should never reach here"),
         Err(e) => e,
-    };
-    if let Err(e) = inbound_sink.close().await {
-        error!("[tcp] close inbound failed; {}", e);
     }
-    res
 }
