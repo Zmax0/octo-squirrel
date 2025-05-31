@@ -183,18 +183,18 @@ where
     I: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = Result<BytesMut>>,
     O: Sink<BytesMut, Error = anyhow::Error> + Stream<Item = Result<BytesMut>>,
 {
-    let (c_l, l_c) = local_client.split();
-    let (c_s, s_c) = client_server.split();
+    let (mut c_l, l_c) = local_client.split();
+    let (mut c_s, s_c) = client_server.split();
 
     let l_c_s = async {
-        match l_c.forward(c_s).await {
+        match l_c.forward(&mut c_s).await {
             Ok(_) => Err::<(), _>(relay::Result::Close(Side::Local, Side::Client)),
             Err(e) => Err(relay::Result::Err(Side::Local, Side::Client, e)),
         }
     };
 
     let s_c_l = async {
-        match s_c.forward(c_l).await {
+        match s_c.forward(&mut c_l).await {
             Ok(_) => Err::<(), _>(relay::Result::Close(Side::Server, Side::Client)),
             Err(e) => Err(relay::Result::Err(Side::Server, Side::Client, e)),
         }
@@ -202,7 +202,15 @@ where
 
     match tokio::try_join!(l_c_s, s_c_l) {
         Ok(_) => unreachable!("should never reach here"),
-        Err(e) => e,
+        Err(e) => {
+            if let Err(e) = c_s.close().await {
+                error!("[tcp] close client-server failed; error={}", e);
+            }
+            if let Err(e) = c_l.close().await {
+                error!("[tcp] close local-client failed; error={}", e);
+            }
+            e
+        }
     }
 }
 
