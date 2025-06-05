@@ -202,14 +202,14 @@ where
 
     match tokio::try_join!(l_c_s, s_c_l) {
         Ok(_) => unreachable!("should never reach here"),
-        Err(e) => {
-            if let Err(e) = c_s.close().await {
-                error!("[tcp] close client-server failed; error={}", e);
+        Err(res) => {
+            match tokio::join!(c_s.close(), c_l.close()) {
+                (Ok(_), Ok(_)) => (),
+                (Ok(_), Err(e)) => error!("[tcp] close client*-local failed; error={}", e),
+                (Err(e), Ok(_)) => error!("[tcp] close client*-server failed; error={}", e),
+                (Err(e1), Err(e2)) => error!("[tcp] close error; client*-server={} client*-local={}", e1, e2),
             }
-            if let Err(e) = c_l.close().await {
-                error!("[tcp] close local-client failed; error={}", e);
-            }
-            e
+            res
         }
     }
 }
