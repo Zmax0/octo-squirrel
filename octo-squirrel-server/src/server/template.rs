@@ -159,6 +159,9 @@ where
                 }
             } else {
                 error!("[*-tcp] DNS resolve failed: peer={addr}");
+                if let Err(e) = inbound_sink.close().await {
+                    error!("[*-tcp] close inbound sink failed; error={}", e);
+                }
             }
         }
         Some(Ok(InboundIn::RelayUdp(msg, addr))) => match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await {

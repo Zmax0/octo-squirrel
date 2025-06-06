@@ -357,7 +357,7 @@ pub async fn new_quic_outbound<C, E, D>(host: &str, port: u16, codec: C, config:
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    if let Some(config) = &config.ssl {
+    if let Some(config) = &config.quic {
         let mut tls_config = rustls_client_config(config)?;
         tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
         let mut endpoint = quinn::Endpoint::client(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
