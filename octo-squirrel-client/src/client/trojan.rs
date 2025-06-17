@@ -77,6 +77,7 @@ pub(super) mod udp {
     use std::net::SocketAddr;
 
     use anyhow::Result;
+    use anyhow::bail;
     use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketStream;
@@ -106,17 +107,29 @@ pub(super) mod udp {
 
     pub async fn new_quic_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientCodec>> {
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        template::new_quic_outbound(&config.host, config.port, codec, config).await
+        if let Some(ssl_config) = &config.quic {
+            template::new_quic_outbound(&config.host, config.port, codec, ssl_config).await
+        } else {
+            bail!("ssl config is required for quic outbound");
+        }
     }
 
     pub async fn new_tls_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<TlsStream<TcpStream>, ClientCodec>> {
         let codec: ClientCodec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        template::new_tls_outbound(&config.host, config.port, codec, config).await
+        if let Some(ssl_config) = &config.ssl {
+            template::new_tls_outbound(&config.host, config.port, codec, ssl_config).await
+        } else {
+            bail!("ssl config is required for tls outbound");
+        }
     }
 
     pub async fn new_wss_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, ClientCodec>> {
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        template::new_wss_outbound(&config.host, config.port, codec, config).await
+        if let (Some(ssl_config), Some(ws_config)) = (&config.ssl, &config.ws) {
+            template::new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await
+        } else {
+            bail!("ws config and ssl config are required for wss outbound");
+        }
     }
 
     pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> DatagramPacket {

@@ -149,6 +149,7 @@ pub(super) mod udp {
     use std::net::SocketAddr;
 
     use anyhow::Result;
+    use anyhow::bail;
     use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketStream;
@@ -178,27 +179,43 @@ pub(super) mod udp {
 
     pub async fn new_quic_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_quic_outbound(&config.host, config.port, codec, config).await
+        if let Some(ssl_config) = &config.quic {
+            template::new_quic_outbound(&config.host, config.port, codec, ssl_config).await
+        } else {
+            bail!("ssl config is required for quic outbound");
+        }
     }
 
     pub async fn new_plain_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<TcpStream, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_plain_outbound(&config.host, config.port, codec, config).await
+        template::new_plain_outbound(&config.host, config.port, codec).await
     }
 
     pub async fn new_ws_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TcpStream>, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_ws_outbound(&config.host, config.port, codec, config).await
+        if let Some(ws_config) = &config.ws {
+            template::new_ws_outbound(&config.host, config.port, codec, ws_config).await
+        } else {
+            bail!("ws config is required for ws outbound");
+        }
     }
 
     pub async fn new_tls_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<TlsStream<TcpStream>, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_tls_outbound(&config.host, config.port, codec, config).await
+        if let Some(ssl_config) = &config.ssl {
+            template::new_tls_outbound(&config.host, config.port, codec, ssl_config).await
+        } else {
+            bail!("ssl config is required for tls outbound");
+        }
     }
 
     pub async fn new_wss_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_wss_outbound(&config.host, config.port, codec, config).await
+        if let (Some(ssl_config), Some(ws_config)) = (&config.ssl, &config.ws) {
+            template::new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await
+        } else {
+            bail!("ws config and ssl config are required for wss outbound");
+        }
     }
 
     pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> BytesMut {

@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use anyhow::Result;
 use anyhow::anyhow;
-use anyhow::bail;
 use bytes::BytesMut;
 use futures::Sink;
 use futures::SinkExt;
@@ -40,8 +39,6 @@ use octo_squirrel::relay;
 use octo_squirrel::relay::Side;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
@@ -64,6 +61,7 @@ use tokio_websockets::ClientBuilder;
 
 use super::config::SslConfig;
 use super::handshake;
+use crate::client::config::DnsConfig;
 use crate::client::config::ServerConfig;
 
 pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
@@ -103,7 +101,7 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
         match tokio::time::timeout(Duration::from_secs(30), handshake::get_request_addr(&mut inbound)).await {
             Ok(Ok(peer_addr)) => {
                 info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
-                match try_transfer_tcp(inbound, &peer_addr, &config, context, new_codec).await {
+                match Outbound::new(&config).relay_tcp(inbound, &peer_addr, &config, context, new_codec).await {
                     Ok(res) => {
                         info!("[tcp] relay complete, local={}, server={}:{}, peer={}, {:?}", &local_addr, &config.host, config.port, peer_addr, res)
                     }
@@ -116,66 +114,120 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
     }
 }
 
-pub async fn try_transfer_tcp<Context, NewCodec, Codec>(
-    inbound: TcpStream,
-    peer_addr: &Address,
-    config: &ServerConfig,
-    context: Context,
-    new_codec: NewCodec,
-) -> Result<relay::Result>
-where
-    Context: Clone,
-    NewCodec: FnMut(&Address, Context) -> Result<Codec>,
-    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
-{
-    Ok(match (&config.ssl, &config.ws, &config.quic) {
-        (None, None, None) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_plain_outbound).await?,
-        (_, _, Some(_)) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_quic_outbound).await?,
-        (None, Some(_), None) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_ws_outbound).await?,
-        (Some(_), None, None) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_tls_outbound).await?,
-        (Some(_), Some(_), None) => try_relay_tcp(inbound, peer_addr, config, context, new_codec, new_wss_outbound).await?,
-    })
+enum Outbound<'a> {
+    Plain,
+    Tls(&'a SslConfig),
+    Ws(&'a WebSocketConfig),
+    Wss(&'a SslConfig, &'a WebSocketConfig),
+    Quic(&'a SslConfig),
 }
 
-async fn try_relay_tcp<Context, NewCodec, Codec, NewOutbound, Stream>(
-    inbound: TcpStream,
-    peer_addr: &Address,
-    config: &ServerConfig,
-    context: Context,
-    mut new_codec: NewCodec,
-    new_outbound: NewOutbound,
-) -> Result<relay::Result>
-where
-    Context: Clone,
-    NewCodec: FnMut(&Address, Context) -> Result<Codec>,
-    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
-    NewOutbound: AsyncFn(&str, u16, Codec, &ServerConfig) -> Result<Framed<Stream, Codec>, anyhow::Error> + Copy,
-    Stream: AsyncRead + AsyncWrite + Send + 'static + Unpin,
-{
-    let codec = if let (Some(dns_config), Err(_)) = (&config.dns, IpAddr::from_str(&peer_addr.get_host())) {
-        let query = Query::query(Name::from_str(&format!("{}.", &peer_addr.get_host()))?, RecordType::A);
-        let peer_ip = if let Some(ip) = dns_config.cache.get(&query, Instant::now()) {
-            debug!("[dns] dns cached; {} => {:?}", &peer_addr.get_host(), ip);
-            ip
+impl Outbound<'_> {
+    pub fn new(config: &ServerConfig) -> Outbound<'_> {
+        match (&config.ssl, &config.ws, &config.quic) {
+            (None, None, None) => Outbound::Plain,
+            (_, _, Some(quic_config)) => Outbound::Quic(quic_config),
+            (None, Some(ws_config), None) => Outbound::Ws(ws_config),
+            (Some(ssl_config), None, None) => Outbound::Tls(ssl_config),
+            (Some(ssl_config), Some(ws_config), None) => Outbound::Wss(ssl_config, ws_config),
+        }
+    }
+
+    pub async fn relay_tcp<Context, NewCodec, Codec>(
+        self,
+        inbound: TcpStream,
+        peer_addr: &Address,
+        config: &ServerConfig,
+        context: Context,
+        mut new_codec: NewCodec,
+    ) -> Result<relay::Result>
+    where
+        Context: Clone,
+        NewCodec: FnMut(&Address, Context) -> Result<Codec>,
+        Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
+    {
+        let codec = if let (Some(dns_config), Err(_)) = (&config.dns, IpAddr::from_str(&peer_addr.get_host())) {
+            let resolved_peer_ip = self.lookup(&config.host, config.port, peer_addr, context.clone(), &mut new_codec, dns_config).await?;
+            let resolved_peer_addr = Address::Socket(SocketAddr::new(resolved_peer_ip, peer_addr.get_port()));
+            new_codec(&resolved_peer_addr, context)?
+        } else {
+            new_codec(peer_addr, context)?
+        };
+        let local_client = Framed::new(inbound, BytesCodec);
+        match self {
+            Outbound::Plain => {
+                let client_server = new_plain_outbound(&config.host, config.port, codec).await?;
+                Ok(relay_tcp(local_client, client_server).await)
+            }
+            Outbound::Tls(ssl_config) => {
+                let client_server = new_tls_outbound(&config.host, config.port, codec, ssl_config).await?;
+                Ok(relay_tcp(local_client, client_server).await)
+            }
+            Outbound::Ws(ws_config) => {
+                let client_server = new_ws_outbound(&config.host, config.port, codec, ws_config).await?;
+                Ok(relay_tcp(local_client, client_server).await)
+            }
+            Outbound::Wss(ssl_config, ws_config) => {
+                let client_server = new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await?;
+                Ok(relay_tcp(local_client, client_server).await)
+            }
+            Outbound::Quic(ssl_config) => {
+                let client_server = new_quic_outbound(&config.host, config.port, codec, ssl_config).await?;
+                Ok(relay_tcp(local_client, client_server).await)
+            }
+        }
+    }
+
+    async fn lookup<Context, NewCodec, Codec>(
+        &self,
+        host: &str,
+        port: u16,
+        peer_addr: &Address,
+        context: Context,
+        new_codec: &mut NewCodec,
+        dns_config: &DnsConfig,
+    ) -> Result<IpAddr>
+    where
+        Context: Clone,
+        NewCodec: FnMut(&Address, Context) -> Result<Codec>,
+        Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
+    {
+        let query = Query::query(Name::from_str(&format!("{}.", peer_addr.get_host()))?, RecordType::A);
+        if let Some(ip) = dns_config.cache.get(&query, Instant::now()) {
+            debug!("[dns] dns cached; {} => {:?}", peer_addr.get_host(), ip);
+            Ok(ip)
         } else {
             let query_a = super::dns::A::new(dns_config)?;
             let codec = new_codec(&Address::Domain(query_a.host.clone(), query_a.port), context.clone())?;
-            let dns_outbound = new_outbound(&config.host, config.port, codec, config).await?;
-            let lookup = super::dns::a_query(dns_outbound, query_a, query.clone()).await?;
+            let lookup = match *self {
+                Outbound::Plain => {
+                    let outbound = new_plain_outbound(host, port, codec).await?;
+                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                }
+                Outbound::Tls(ssl_config) => {
+                    let outbound = new_tls_outbound(host, port, codec, ssl_config).await?;
+                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                }
+                Outbound::Ws(ws_config) => {
+                    let outbound = new_ws_outbound(host, port, codec, ws_config).await?;
+                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                }
+                Outbound::Wss(ssl_config, ws_config) => {
+                    let outbound = new_wss_outbound(host, port, codec, ssl_config, ws_config).await?;
+                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                }
+                Outbound::Quic(ssl_config) => {
+                    let outbound = new_quic_outbound(host, port, codec, ssl_config).await?;
+                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                }
+            };
             let ttl = lookup.records().iter().next().map(|r| r.ttl()).ok_or(anyhow!("[dns] no ttl found"))?;
             let ip = LookupIp::from(lookup).iter().next().ok_or(anyhow!("[dns] no ip found"))?;
             dns_config.cache.insert(query, ip, ttl, Instant::now());
             debug!("[dns] new query; {} => {:?}", &peer_addr.get_host(), ip);
-            ip
-        };
-        let resolved_peer_addr = Address::Socket(SocketAddr::new(peer_ip, peer_addr.get_port()));
-        new_codec(&resolved_peer_addr, context)?
-    } else {
-        new_codec(peer_addr, context)?
-    };
-    let local_client = Framed::new(inbound, BytesCodec);
-    let client_server = new_outbound(&config.host, config.port, codec, config).await?;
-    Ok(relay_tcp(local_client, client_server).await)
+            Ok(ip)
+        }
+    }
 }
 
 async fn relay_tcp<I, O>(local_client: I, client_server: O) -> relay::Result
@@ -344,7 +396,7 @@ impl<Out, OutSend> Drop for Binding<Out, OutSend> {
     }
 }
 
-pub async fn new_plain_outbound<C, E, D>(host: &str, port: u16, codec: C, _: &ServerConfig) -> Result<Framed<TcpStream, C>, anyhow::Error>
+pub async fn new_plain_outbound<C, E, D>(host: &str, port: u16, codec: C) -> Result<Framed<TcpStream, C>, anyhow::Error>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
@@ -353,68 +405,53 @@ where
     Ok(client_server)
 }
 
-pub async fn new_quic_outbound<C, E, D>(host: &str, port: u16, codec: C, config: &ServerConfig) -> Result<Framed<QuicStream, C>>
+pub async fn new_quic_outbound<C, E, D>(host: &str, port: u16, codec: C, ssl_config: &SslConfig) -> Result<Framed<QuicStream, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    if let Some(config) = &config.quic {
-        let mut tls_config = rustls_client_config(config)?;
-        tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        let mut endpoint = quinn::Endpoint::client(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
-        let quic_client_config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_config)?));
-        endpoint.set_default_client_config(quic_client_config);
-        let server_name = if let Some(server_name) = &config.server_name { server_name } else { &host.to_owned() };
-        let conn = endpoint.connect(format!("{host}:{port}").parse()?, server_name)?.await?;
-        let (send, recv) = conn.open_bi().await?;
-        Ok(codec.framed(QuicStream::new(send, recv)))
-    } else {
-        bail!("ssl config is required for quic outbound");
-    }
+    let mut tls_config = rustls_client_config(ssl_config)?;
+    tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let mut endpoint = quinn::Endpoint::client(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
+    let quic_client_config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_config)?));
+    endpoint.set_default_client_config(quic_client_config);
+    let server_name = if let Some(server_name) = &ssl_config.server_name { server_name } else { &host.to_owned() };
+    let conn = endpoint.connect(format!("{host}:{port}").parse()?, server_name)?.await?;
+    let (send, recv) = conn.open_bi().await?;
+    Ok(codec.framed(QuicStream::new(send, recv)))
 }
 
-pub async fn new_tls_outbound<C, E, D>(host: &str, port: u16, codec: C, config: &ServerConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
+pub async fn new_tls_outbound<C, E, D>(host: &str, port: u16, codec: C, ssl_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    if let Some(config) = &config.ssl {
-        let outbound = rustls_stream(host, port, config).await?;
-        Ok(codec.framed(outbound))
-    } else {
-        bail!("ssl config is required for tls outbound");
-    }
+    let outbound = rustls_stream(host, port, ssl_config).await?;
+    Ok(codec.framed(outbound))
 }
 
-pub async fn new_ws_outbound<C, E, D>(host: &str, port: u16, codec: C, config: &ServerConfig) -> Result<Framed<WebSocketStream<TcpStream>, C>>
+pub async fn new_ws_outbound<C, E, D>(host: &str, port: u16, codec: C, ws_config: &WebSocketConfig) -> Result<Framed<WebSocketStream<TcpStream>, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    if let Some(config) = &config.ws {
-        let outbound = TcpStream::connect((host, port)).await?;
-        let (outbound, _) = new_ws_builder(host, port, config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
-        let outbound = WebSocketStream::new(outbound);
-        Ok(Framed::new(outbound, codec))
-    } else {
-        bail!("ws config is required for ws outbound");
-    }
+    let outbound = TcpStream::connect((host, port)).await?;
+    let (outbound, _) = new_ws_builder(host, port, ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
+    let outbound = WebSocketStream::new(outbound);
+    Ok(Framed::new(outbound, codec))
 }
 
 pub async fn new_wss_outbound<C, D, E>(
     host: &str,
     port: u16,
     codec: C,
-    config: &ServerConfig,
+    ssl_config: &SslConfig,
+    ws_config: &WebSocketConfig,
 ) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
-    if let (Some(ws_config), Some(ssl_config)) = (&config.ws, &config.ssl) {
-        let outbound = rustls_stream(host, port, ssl_config).await?;
-        let (outbound, _) = new_ws_builder(host, port, ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
-        let outbound = WebSocketStream::new(outbound);
-        Ok(Framed::new(outbound, codec))
-    } else {
-        bail!("ws config and ssl config are required for wss outbound");
-    }
+    let outbound = rustls_stream(host, port, ssl_config).await?;
+    let (outbound, _) = new_ws_builder(host, port, ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
+    let outbound = WebSocketStream::new(outbound);
+    Ok(Framed::new(outbound, codec))
 }
 
 fn new_ws_builder<'a>(host: &str, port: u16, ws_config: &WebSocketConfig) -> Result<ClientBuilder<'a>> {

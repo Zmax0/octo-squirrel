@@ -159,6 +159,7 @@ where
                 }
             } else {
                 error!("[*-tcp] DNS resolve failed: peer={addr}");
+                debug!("[*-tcp] close inbound sink");
                 if let Err(e) = inbound_sink.close().await {
                     error!("[*-tcp] close inbound sink failed; error={}", e);
                 }
