@@ -491,7 +491,7 @@ pub fn rustls_client_config(ssl_config: &SslConfig) -> Result<ClientConfig> {
         roots.add(cert)?;
         ClientConfig::builder().with_root_certificates(roots).with_no_client_auth()
     } else {
-        ClientConfig::with_platform_verifier()
+        ClientConfig::with_platform_verifier()?
     };
     #[cfg(debug_assertions)]
     {

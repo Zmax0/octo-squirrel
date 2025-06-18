@@ -319,7 +319,7 @@ where
             server_name = ServerName::try_from(a.host)?;
         }
     } else {
-        client_config = ClientConfig::with_platform_verifier();
+        client_config = ClientConfig::with_platform_verifier()?;
         #[cfg(debug_assertions)]
         {
             use quinn::rustls::KeyLogFile;

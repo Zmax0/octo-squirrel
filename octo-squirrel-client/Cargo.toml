@@ -27,4 +27,4 @@ sha2.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 tokio-util.workspace = true
-tokio-websockets = { version = "0.11.1", features = ["client", "native-tls", "sha1_smol", "rand"] }
+tokio-websockets = { workspace = true, features = ["client", "native-tls", "sha1_smol", "rand"] }

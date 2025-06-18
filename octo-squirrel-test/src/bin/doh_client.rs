@@ -21,7 +21,7 @@ async fn main() {
     const NAME: &str = "example.com.";
     const IP_ADDR: Ipv4Addr = Ipv4Addr::new(8, 8, 8, 8);
     let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
-    let mut client_config = ClientConfig::with_platform_verifier();
+    let mut client_config = ClientConfig::with_platform_verifier().unwrap();
     client_config.key_log = Arc::new(KeyLogFile::new());
     client_config.alpn_protocols = vec![b"h2".to_vec()];
 
