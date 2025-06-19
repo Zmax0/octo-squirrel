@@ -62,12 +62,12 @@ impl Encoder<BytesMut> for BytesCodec {
 pub type DatagramPacket = (BytesMut, Address);
 pub struct WebSocketStream<T> {
     inner: tokio_websockets::proto::WebSocketStream<T>,
-    buffer: BytesMut,
+    read_buffer: BytesMut,
 }
 
 impl<T> WebSocketStream<T> {
     pub fn new(inner: tokio_websockets::proto::WebSocketStream<T>) -> Self {
-        Self { inner, buffer: BytesMut::new() }
+        Self { inner, read_buffer: BytesMut::new() }
     }
 }
 
@@ -76,8 +76,9 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<Result<(), std::io::Error>> {
-        if !self.buffer.is_empty() {
-            let cur = if self.buffer.len() <= buf.remaining() { take(&mut self.buffer) } else { self.buffer.split_to(buf.remaining()) };
+        if !self.read_buffer.is_empty() {
+            let cur =
+                if self.read_buffer.len() <= buf.remaining() { take(&mut self.read_buffer) } else { self.read_buffer.split_to(buf.remaining()) };
             buf.put_slice(&cur);
             Poll::Ready(Ok(()))
         } else {
@@ -90,7 +91,7 @@ where
                         } else {
                             let (left, right) = payload.split_at(buf.remaining());
                             buf.put_slice(left);
-                            self.buffer.extend_from_slice(right);
+                            self.read_buffer.extend_from_slice(right);
                         }
                     }
                     Poll::Ready(Ok(()))
