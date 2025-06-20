@@ -129,15 +129,15 @@ where
     }
 }
 
-pub struct A<'a> {
+pub struct DnsRequestContext<'a> {
     ssl: Option<&'a SslConfig>,
     uri: Uri,
     pub host: String,
     pub port: u16,
 }
 
-impl<'a> A<'a> {
-    pub fn new(config: &'a DnsConfig) -> anyhow::Result<A<'a>> {
+impl<'a> DnsRequestContext<'a> {
+    pub fn new(config: &'a DnsConfig) -> anyhow::Result<DnsRequestContext<'a>> {
         let uri = Uri::from_str(&config.url)?;
         let ssl = config.ssl.as_ref();
         let host = uri.host().ok_or(anyhow!("[dns] url has no host"))?.to_owned();
@@ -300,19 +300,19 @@ impl DnsRequestSender for DnsHandle {
     }
 }
 
-pub async fn a_query<T, C>(framed: Framed<T, C>, a: A<'_>, query: Query) -> anyhow::Result<Lookup>
+pub async fn a_query<T, C>(framed: Framed<T, C>, context: DnsRequestContext<'_>, query: Query) -> anyhow::Result<Lookup>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     C: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
     let mut client_config;
     let server_name;
-    if let Some(ssl) = a.ssl {
+    if let Some(ssl) = context.ssl {
         client_config = super::template::rustls_client_config(ssl)?;
         if let Some(name) = ssl.server_name.as_ref() {
             server_name = ServerName::try_from(name.to_owned())?;
         } else {
-            server_name = ServerName::try_from(a.host)?;
+            server_name = ServerName::try_from(context.host)?;
         }
     } else {
         client_config = ClientConfig::with_platform_verifier()?;
@@ -321,12 +321,12 @@ where
             use quinn::rustls::KeyLogFile;
             client_config.key_log = Arc::new(KeyLogFile::new());
         }
-        server_name = ServerName::try_from(a.host)?;
+        server_name = ServerName::try_from(context.host)?;
     }
     client_config.alpn_protocols = vec![b"h2".to_vec()];
     let tls_connector = TlsConnector::from(Arc::new(client_config));
     let tls_stream = tls_connector.connect(server_name, FramedWrapper::new(framed)).await?;
-    let stream = DnsHandle::new(a.uri.clone(), tls_stream).await?;
+    let stream = DnsHandle::new(context.uri, tls_stream).await?;
     let (dns_exchange, background) = DnsExchange::from_stream::<_, TokioTime>(stream);
     tokio::spawn(async move {
         background.await.unwrap_or_else(|e| error!("[dns] exchange background failed: {}", e));
@@ -373,8 +373,8 @@ impl Cache {
         self.0.insert(query, CacheValue { ip, valid_until });
     }
 
-    pub fn get(&self, qurey: &Query, now: Instant) -> Option<IpAddr> {
-        if let Some(value) = self.0.get(qurey) {
+    pub fn get(&self, query: &Query, now: Instant) -> Option<IpAddr> {
+        if let Some(value) = self.0.get(query) {
             if !value.is_current(now) {
                 return None;
             }

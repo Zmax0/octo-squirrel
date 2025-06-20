@@ -197,28 +197,28 @@ impl Outbound<'_> {
             debug!("[dns] dns cached; {} => {:?}", peer_addr.get_host(), ip);
             Ok(ip)
         } else {
-            let query_a = super::dns::A::new(dns_config)?;
-            let codec = new_codec(&Address::Domain(query_a.host.clone(), query_a.port), context.clone())?;
+            let dns_request_context = super::dns::DnsRequestContext::new(dns_config)?;
+            let codec = new_codec(&Address::Domain(dns_request_context.host.clone(), dns_request_context.port), context.clone())?;
             let lookup = match *self {
                 Outbound::Plain => {
                     let outbound = new_plain_outbound(host, port, codec).await?;
-                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                    super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
                 Outbound::Tls(ssl_config) => {
                     let outbound = new_tls_outbound(host, port, codec, ssl_config).await?;
-                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                    super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
                 Outbound::Ws(ws_config) => {
                     let outbound = new_ws_outbound(host, port, codec, ws_config).await?;
-                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                    super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
                 Outbound::Wss(ssl_config, ws_config) => {
                     let outbound = new_wss_outbound(host, port, codec, ssl_config, ws_config).await?;
-                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                    super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
                 Outbound::Quic(ssl_config) => {
                     let outbound = new_quic_outbound(host, port, codec, ssl_config).await?;
-                    super::dns::a_query(outbound, query_a, query.clone()).await?
+                    super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
             };
             let ttl = lookup.records().iter().next().map(|r| r.ttl()).ok_or(anyhow!("[dns] no ttl found"))?;
