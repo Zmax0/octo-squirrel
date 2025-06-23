@@ -138,9 +138,13 @@ pub(super) mod tcp {
 
     use super::ClientAEADCodec;
 
-    pub fn new_codec(addr: &Address, (kind, password): (CipherKind, String)) -> anyhow::Result<ClientAEADCodec> {
+    pub fn new_codec(addr: &Address, (kind, password, opt_mask): (CipherKind, String, Option<u8>)) -> anyhow::Result<ClientAEADCodec> {
         let security = if kind == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::TCP, security, addr.clone(), &password)?;
+        let header = if let Some(opt_mask) = opt_mask {
+            RequestHeader::client(RequestCommand::TCP, opt_mask, security, addr.clone(), &password)?
+        } else {
+            RequestHeader::client_with_default_opt(RequestCommand::TCP, security, addr.clone(), &password)?
+        };
         Ok(ClientAEADCodec::new(header))
     }
 }
@@ -173,7 +177,7 @@ pub(super) mod udp {
 
     pub fn new_codec(addr: &Address, config: &ServerConfig) -> Result<ClientAEADCodec> {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::UDP, security, addr.clone(), &config.password)?;
+        let header = RequestHeader::client_with_default_opt(RequestCommand::UDP, security, addr.clone(), &config.password)?;
         Ok(ClientAEADCodec::new(header))
     }
 

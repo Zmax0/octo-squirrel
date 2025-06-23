@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env::args;
 use std::fs::File;
 use std::io::Read;
@@ -45,7 +46,10 @@ pub struct ServerConfig {
     pub ws: Option<WebSocketConfig>,
     #[serde(default)]
     pub quic: Option<SslConfig>,
+    #[serde(default)]
     pub dns: Option<DnsConfig>,
+    #[serde(default)]
+    pub extra: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl AsRef<ServerConfig> for ServerConfig {
@@ -135,6 +139,9 @@ mod test {
                         "keyFile": "/path/to/private.key",
                         "serverName": server_host
                     }
+                  },
+                  "extra": {
+                      "opt_mask": 13,
                   }
               }
           ]
@@ -152,5 +159,6 @@ mod test {
         assert_eq!(current.dns.as_ref().unwrap().url, "https://8.8.8.8/dns-query");
         assert!(current.dns.as_ref().unwrap().ssl.is_some());
         assert_eq!(current.dns.as_ref().unwrap().ssl.as_ref().unwrap().server_name.as_ref().unwrap(), &server_host);
+        assert_eq!(current.extra.as_ref().unwrap().get("opt_mask").unwrap().as_u64().unwrap(), 13);
     }
 }

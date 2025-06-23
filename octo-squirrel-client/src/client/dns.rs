@@ -89,7 +89,7 @@ where
                     }
                     Poll::Ready(Ok(()))
                 }
-                Some(Err(e)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+                Some(Err(e)) => Poll::Ready(Err(io::Error::other(e))),
                 None => Poll::Pending,
             }
         } else {
@@ -114,18 +114,18 @@ where
         match ready!(self.framed.poll_ready_unpin(cx)) {
             Ok(_) => match self.framed.start_send_unpin(buf.into()) {
                 Ok(_) => Poll::Ready(Ok(buf.len())),
-                Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+                Err(e) => Poll::Ready(Err(io::Error::other(e))),
             },
-            Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+            Err(e) => Poll::Ready(Err(io::Error::other(e))),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        self.framed.poll_flush_unpin(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        self.framed.poll_flush_unpin(cx).map_err(io::Error::other)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        self.framed.poll_close_unpin(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        self.framed.poll_close_unpin(cx).map_err(io::Error::other)
     }
 }
 

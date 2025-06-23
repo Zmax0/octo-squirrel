@@ -332,12 +332,13 @@ mod test {
         }
 
         fn test_by_security(security: SecurityType) -> Result<()> {
-            let header = RequestHeader::default(RequestCommand::TCP, security, new_address(), &uuid::Uuid::new_v4().to_string())?;
+            let header = RequestHeader::client_with_default_opt(RequestCommand::TCP, security, new_address(), &uuid::Uuid::new_v4().to_string())?;
             test_by_header(header)
         }
 
         fn test_by_command(command: RequestCommand) -> Result<()> {
-            let header = RequestHeader::default(command, SecurityType::Chacha20Poly1305, new_address(), &uuid::Uuid::new_v4().to_string())?;
+            let header =
+                RequestHeader::client_with_default_opt(command, SecurityType::Chacha20Poly1305, new_address(), &uuid::Uuid::new_v4().to_string())?;
             test_by_header(header)
         }
 
