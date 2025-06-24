@@ -110,7 +110,7 @@ where
     E: for<'a> From<&'a [u8]> + Unpin,
     D: Unpin,
 {
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, std::io::Error>> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
         match ready!(self.framed.poll_ready_unpin(cx)) {
             Ok(_) => match self.framed.start_send_unpin(buf.into()) {
                 Ok(_) => Poll::Ready(Ok(buf.len())),
@@ -120,11 +120,11 @@ where
         }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         self.framed.poll_flush_unpin(cx).map_err(io::Error::other)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         self.framed.poll_close_unpin(cx).map_err(io::Error::other)
     }
 }

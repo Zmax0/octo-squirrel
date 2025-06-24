@@ -84,7 +84,7 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
                 tokio::spawn(transfer_tcp(new_codec, context, config, inbound, local_addr));
             }
         }
-        Err(e) => error!("create client context failed; error={e}"),
+        Err(e) => error!("create context failed; error={e}"),
     }
 
     async fn transfer_tcp<Context, NewCodec, Codec>(

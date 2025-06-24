@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::env::args;
 use std::fs::File;
 use std::io::Read;
@@ -49,7 +48,12 @@ pub struct ServerConfig {
     #[serde(default)]
     pub dns: Option<DnsConfig>,
     #[serde(default)]
-    pub extra: Option<HashMap<String, serde_json::Value>>,
+    pub ext: Option<ServerConfigExt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServerConfigExt {
+    pub opt_mask: Option<u8>,
 }
 
 impl AsRef<ServerConfig> for ServerConfig {
@@ -140,7 +144,7 @@ mod test {
                         "serverName": server_host
                     }
                   },
-                  "extra": {
+                  "ext": {
                       "opt_mask": 13,
                   }
               }
@@ -159,6 +163,6 @@ mod test {
         assert_eq!(current.dns.as_ref().unwrap().url, "https://8.8.8.8/dns-query");
         assert!(current.dns.as_ref().unwrap().ssl.is_some());
         assert_eq!(current.dns.as_ref().unwrap().ssl.as_ref().unwrap().server_name.as_ref().unwrap(), &server_host);
-        assert_eq!(current.extra.as_ref().unwrap().get("opt_mask").unwrap().as_u64().unwrap(), 13);
+        assert_eq!(current.ext.as_ref().unwrap().opt_mask.unwrap(), 13);
     }
 }

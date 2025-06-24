@@ -67,7 +67,7 @@ async fn transfer_tcp(listener: TcpListener, current: ServerConfig) {
             CipherKind::Unknown => error!("unknown cipher kind"),
         },
         VMess => {
-            let opt_mask = current.extra.as_ref().map(|e| e.get("opt_mask")).and_then(|v| v.and_then(serde_json::Value::as_u64)).map(|v| v as u8);
+            let opt_mask = current.ext.as_ref().and_then(|e| e.opt_mask);
             template::transfer_tcp(listener, current, move |c| Ok((c.cipher, c.password.clone(), opt_mask)), vmess::tcp::new_codec).await
         }
         Trojan => template::transfer_tcp(listener, current, |c| Ok(c.password.clone()), trojan::tcp::new_codec).await,
