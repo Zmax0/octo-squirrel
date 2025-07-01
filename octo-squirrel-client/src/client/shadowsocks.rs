@@ -105,7 +105,7 @@ pub(super) mod udp {
     }
 
     impl<const N: usize> Client<'_, N> {
-        pub fn new_static(config: ServerConfig) -> anyhow::Result<Client<'static, N>> {
+        pub fn new_static(config: &ServerConfig) -> anyhow::Result<Client<'static, N>> {
             let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
             let key: &'static [u8; N] = Box::leak::<'static>(Box::new(key));
             let identity_keys: &'static Vec<[u8; N]> = Box::leak::<'static>(Box::new(identity_keys));
