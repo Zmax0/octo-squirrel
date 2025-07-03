@@ -81,14 +81,10 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
                 template::transfer_udp(
                     socket,
                     current,
-                    shadowsocks::udp::new_key,
-                    (|c| shadowsocks::tcp::ClientContext::<16>::try_from(c), shadowsocks::tcp::new_payload_codec),
-                    (
-                        shadowsocks::udp::Client::new_static,
-                        shadowsocks::udp::new_plain_outbound::<16>,
-                        shadowsocks::udp::to_inbound_recv,
-                        shadowsocks::udp::to_outbound_send,
-                    ),
+                    shadowsocks::Impl::<16>,
+                    shadowsocks::udp::new_plain_outbound::<16>,
+                    shadowsocks::udp::to_inbound_recv,
+                    shadowsocks::udp::to_outbound_send,
                 )
                 .await
             }
@@ -100,14 +96,10 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
                 template::transfer_udp(
                     socket,
                     current,
-                    shadowsocks::udp::new_key,
-                    (|c| shadowsocks::tcp::ClientContext::<32>::try_from(c), shadowsocks::tcp::new_payload_codec),
-                    (
-                        shadowsocks::udp::Client::new_static,
-                        shadowsocks::udp::new_plain_outbound::<32>,
-                        shadowsocks::udp::to_inbound_recv,
-                        shadowsocks::udp::to_outbound_send,
-                    ),
+                    shadowsocks::Impl::<32>,
+                    shadowsocks::udp::new_plain_outbound::<32>,
+                    shadowsocks::udp::to_inbound_recv,
+                    shadowsocks::udp::to_outbound_send,
                 )
                 .await
             }
@@ -117,57 +109,62 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             }
         },
         (VMess, None, None, None) => {
-            let opt_mask = current.ext.as_ref().and_then(|e| e.opt_mask);
             template::transfer_udp(
                 socket,
                 current,
-                vmess::udp::new_key,
-                (move |c| Ok((c.cipher, c.password.clone(), opt_mask)), vmess::tcp::new_codec),
-                (|c| Ok(c.clone()), vmess::udp::new_plain_outbound, vmess::udp::to_inbound_recv, vmess::udp::to_outbound_send),
+                vmess::Impl,
+                // // |c| Ok(c.clone()),
+                vmess::udp::new_plain_outbound,
+                vmess::udp::to_inbound_recv,
+                vmess::udp::to_outbound_send,
             )
             .await
         }
         (VMess, _, _, Some(_)) => {
-            let opt_mask = current.ext.as_ref().and_then(|e| e.opt_mask);
             template::transfer_udp(
                 socket,
                 current,
-                vmess::udp::new_key,
-                (move |c| Ok((c.cipher, c.password.clone(), opt_mask)), vmess::tcp::new_codec),
-                (|c| Ok(c.clone()), vmess::udp::new_quic_outbound, vmess::udp::to_inbound_recv, vmess::udp::to_outbound_send),
+                vmess::Impl,
+                // |c| Ok(c.clone()),
+                vmess::udp::new_quic_outbound,
+                vmess::udp::to_inbound_recv,
+                vmess::udp::to_outbound_send,
             )
             .await
         }
         (VMess, None, Some(_), None) => {
-            let opt_mask = current.ext.as_ref().and_then(|e| e.opt_mask);
             template::transfer_udp(
                 socket,
                 current,
-                vmess::udp::new_key,
-                (move |c| Ok((c.cipher, c.password.clone(), opt_mask)), vmess::tcp::new_codec),
-                (|c| Ok(c.clone()), vmess::udp::new_ws_outbound, vmess::udp::to_inbound_recv, vmess::udp::to_outbound_send),
+                vmess::Impl,
+                // |c| Ok(c.clone()),
+                vmess::udp::new_ws_outbound,
+                vmess::udp::to_inbound_recv,
+                vmess::udp::to_outbound_send,
             )
             .await
         }
         (VMess, Some(_), None, None) => {
-            let opt_mask = current.ext.as_ref().and_then(|e| e.opt_mask);
             template::transfer_udp(
                 socket,
                 current,
-                vmess::udp::new_key,
-                (move |c| Ok((c.cipher, c.password.clone(), opt_mask)), vmess::tcp::new_codec),
-                (|c| Ok(c.clone()), vmess::udp::new_tls_outbound, vmess::udp::to_inbound_recv, vmess::udp::to_outbound_send),
+                vmess::Impl,
+                // |c| Ok(c.clone()),
+                vmess::udp::new_tls_outbound,
+                vmess::udp::to_inbound_recv,
+                vmess::udp::to_outbound_send,
             )
             .await
         }
         (VMess, Some(_), Some(_), None) => {
-            let opt_mask = current.ext.as_ref().and_then(|e| e.opt_mask);
             template::transfer_udp(
                 socket,
                 current,
-                vmess::udp::new_key,
-                (move |c| Ok((c.cipher, c.password.clone(), opt_mask)), vmess::tcp::new_codec),
-                (|c| Ok(c.clone()), vmess::udp::new_wss_outbound, vmess::udp::to_inbound_recv, vmess::udp::to_outbound_send),
+                vmess::Impl,
+                // |c| Ok(c.clone()),
+                vmess::udp::new_wss_outbound,
+                vmess::udp::to_inbound_recv,
+                vmess::udp::to_outbound_send,
             )
             .await
         }
@@ -175,9 +172,11 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                trojan::udp::new_key,
-                (|c| Ok(c.password.clone()), trojan::tcp::new_codec),
-                (|c| Ok(c.clone()), trojan::udp::new_quic_outbound, trojan::udp::to_inbound_recv, trojan::udp::to_outbound_send),
+                trojan::Impl,
+                // |c| Ok(c.clone()),
+                trojan::udp::new_quic_outbound,
+                trojan::udp::to_inbound_recv,
+                trojan::udp::to_outbound_send,
             )
             .await
         }
@@ -185,9 +184,11 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                trojan::udp::new_key,
-                (|c| Ok(c.password.clone()), trojan::tcp::new_codec),
-                (|c| Ok(c.clone()), trojan::udp::new_tls_outbound, trojan::udp::to_inbound_recv, trojan::udp::to_outbound_send),
+                trojan::Impl,
+                // |c| Ok(c.clone()),
+                trojan::udp::new_tls_outbound,
+                trojan::udp::to_inbound_recv,
+                trojan::udp::to_outbound_send,
             )
             .await
         }
@@ -195,9 +196,11 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             template::transfer_udp(
                 socket,
                 current,
-                trojan::udp::new_key,
-                (|c| Ok(c.password.clone()), trojan::tcp::new_codec),
-                (|c| Ok(c.clone()), trojan::udp::new_wss_outbound, trojan::udp::to_inbound_recv, trojan::udp::to_outbound_send),
+                trojan::Impl,
+                // |c| Ok(c.clone()),
+                trojan::udp::new_wss_outbound,
+                trojan::udp::to_inbound_recv,
+                trojan::udp::to_outbound_send,
             )
             .await
         }

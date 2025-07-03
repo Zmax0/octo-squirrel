@@ -101,7 +101,7 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
         match tokio::time::timeout(Duration::from_secs(30), handshake::get_request_addr(&mut inbound)).await {
             Ok(Ok(peer_addr)) => {
                 info!("[tcp] accept {}, peer={}, local={}", config.protocol, peer_addr, &local_addr);
-                match Outbound::new(&config).relay_tcp(inbound, &peer_addr, &config, context, new_codec).await {
+                match TcpOutbound::new(&config).relay_tcp(inbound, &peer_addr, &config, context, new_codec).await {
                     Ok(res) => {
                         info!("[tcp] relay complete, local={}, server={}:{}, peer={}, {:?}", &local_addr, &config.host, config.port, peer_addr, res)
                     }
@@ -114,7 +114,7 @@ pub async fn transfer_tcp<NewContext, Context, NewCodec, Codec>(
     }
 }
 
-enum Outbound<'a> {
+enum TcpOutbound<'a> {
     Plain,
     Tls(&'a SslConfig),
     Ws(&'a WebSocketConfig),
@@ -122,14 +122,14 @@ enum Outbound<'a> {
     Quic(&'a SslConfig),
 }
 
-impl Outbound<'_> {
-    pub fn new(config: &ServerConfig) -> Outbound<'_> {
+impl TcpOutbound<'_> {
+    pub fn new(config: &ServerConfig) -> TcpOutbound<'_> {
         match (&config.ssl, &config.ws, &config.quic) {
-            (None, None, None) => Outbound::Plain,
-            (_, _, Some(quic_config)) => Outbound::Quic(quic_config),
-            (None, Some(ws_config), None) => Outbound::Ws(ws_config),
-            (Some(ssl_config), None, None) => Outbound::Tls(ssl_config),
-            (Some(ssl_config), Some(ws_config), None) => Outbound::Wss(ssl_config, ws_config),
+            (None, None, None) => TcpOutbound::Plain,
+            (_, _, Some(quic_config)) => TcpOutbound::Quic(quic_config),
+            (None, Some(ws_config), None) => TcpOutbound::Ws(ws_config),
+            (Some(ssl_config), None, None) => TcpOutbound::Tls(ssl_config),
+            (Some(ssl_config), Some(ws_config), None) => TcpOutbound::Wss(ssl_config, ws_config),
         }
     }
 
@@ -155,23 +155,23 @@ impl Outbound<'_> {
         };
         let local_client = Framed::new(inbound, BytesCodec);
         match self {
-            Outbound::Plain => {
+            TcpOutbound::Plain => {
                 let client_server = new_plain_outbound(&config.host, config.port, codec).await?;
                 Ok(relay_tcp(local_client, client_server).await)
             }
-            Outbound::Tls(ssl_config) => {
+            TcpOutbound::Tls(ssl_config) => {
                 let client_server = new_tls_outbound(&config.host, config.port, codec, ssl_config).await?;
                 Ok(relay_tcp(local_client, client_server).await)
             }
-            Outbound::Ws(ws_config) => {
+            TcpOutbound::Ws(ws_config) => {
                 let client_server = new_ws_outbound(&config.host, config.port, codec, ws_config).await?;
                 Ok(relay_tcp(local_client, client_server).await)
             }
-            Outbound::Wss(ssl_config, ws_config) => {
+            TcpOutbound::Wss(ssl_config, ws_config) => {
                 let client_server = new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await?;
                 Ok(relay_tcp(local_client, client_server).await)
             }
-            Outbound::Quic(ssl_config) => {
+            TcpOutbound::Quic(ssl_config) => {
                 let client_server = new_quic_outbound(&config.host, config.port, codec, ssl_config).await?;
                 Ok(relay_tcp(local_client, client_server).await)
             }
@@ -199,23 +199,23 @@ impl Outbound<'_> {
             let dns_request_context = super::dns::DnsRequestContext::new(dns_config)?;
             let codec = new_codec(&Address::Domain(dns_request_context.host.clone(), dns_request_context.port), context)?;
             let lookup = match *self {
-                Outbound::Plain => {
+                TcpOutbound::Plain => {
                     let outbound = new_plain_outbound(host, port, codec).await?;
                     super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
-                Outbound::Tls(ssl_config) => {
+                TcpOutbound::Tls(ssl_config) => {
                     let outbound = new_tls_outbound(host, port, codec, ssl_config).await?;
                     super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
-                Outbound::Ws(ws_config) => {
+                TcpOutbound::Ws(ws_config) => {
                     let outbound = new_ws_outbound(host, port, codec, ws_config).await?;
                     super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
-                Outbound::Wss(ssl_config, ws_config) => {
+                TcpOutbound::Wss(ssl_config, ws_config) => {
                     let outbound = new_wss_outbound(host, port, codec, ssl_config, ws_config).await?;
                     super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
-                Outbound::Quic(ssl_config) => {
+                TcpOutbound::Quic(ssl_config) => {
                     let outbound = new_quic_outbound(host, port, codec, ssl_config).await?;
                     super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
@@ -265,45 +265,72 @@ where
     }
 }
 
+pub(crate) trait UdpOutboundContext {
+    type Key;
+    type Context;
+
+    fn new_key(sender: SocketAddr, target: &Address) -> Self::Key;
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context>;
+}
+
+pub(crate) trait UdpDnsContext {
+    type Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Unpin + Send + 'static;
+    type Context;
+
+    fn new_context(config: &ServerConfig) -> Result<Self::Context>;
+
+    fn new_codec(target: &Address, context: Self::Context) -> Result<Self::Codec>;
+
+    async fn lookup(target: &Address, config: &ServerConfig) -> Option<IpAddr> {
+        if let (Some(dns_config), Err(_)) = (&config.dns, IpAddr::from_str(&target.get_host())) {
+            let context = Self::new_context(config).expect("[dns] new context failed");
+            TcpOutbound::new(config)
+                .lookup(&config.host, config.port, target, context, &mut Self::new_codec, dns_config)
+                .await
+                .map(Some)
+                .unwrap_or_else(|e| {
+                    error!("[dns] lookup failed for target={:?}; error={}", target, e);
+                    None
+                })
+        } else {
+            None
+        }
+    }
+}
+
 pub async fn transfer_udp<
-    Context,
-    NewContext,
+    NewOutboundContext,
     Key,
-    NewKey,
-    TcpContext,
-    NewTcpContext,
-    NewTcpCodec,
-    Out,
-    NewOut,
-    Codec,
-    ToOutSend,
-    ToInRecv,
-    OutRecv,
-    OutSend,
+    OutboundContext,
+    DnsContext,
+    NewOutbound,
+    Outbound,
+    ToOutboundOut,
+    ToInboundIn,
+    OutboundIn,
+    OutboundOut,
 >(
     inbound: UdpSocket,
     config: ServerConfig,
-    new_key: NewKey,
-    mut dns_context: (NewTcpContext, NewTcpCodec),
-    new_out_context: (NewContext, NewOut, ToInRecv, ToOutSend),
+    _: NewOutboundContext,
+    new_outbound: NewOutbound,
+    to_inbound_in: ToInboundIn,
+    to_outbound_out: ToOutboundOut,
 ) -> Result<()>
 where
-    NewContext: FnOnce(&ServerConfig) -> Result<Context>,
-    NewKey: FnOnce(SocketAddr, &Address) -> Key + Copy,
+    NewOutboundContext: UdpOutboundContext<Key = Key, Context = OutboundContext> + UdpDnsContext<Context = DnsContext>,
     Key: Ord + Clone + Debug + Send + Sync + 'static,
-    NewTcpContext: FnMut(&ServerConfig) -> Result<TcpContext>,
-    NewTcpCodec: FnMut(&Address, TcpContext) -> Result<Codec>,
-    Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
-    NewOut: AsyncFn(&Address, &Context) -> Result<Out, anyhow::Error> + Copy,
-    Codec: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
-    ToOutSend: FnOnce(DatagramPacket, SocketAddr) -> OutSend + Copy,
-    ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
-    OutRecv: Send + Sync + 'static,
+    NewOutbound: AsyncFn(&Address, &OutboundContext) -> Result<Outbound, anyhow::Error> + Copy,
+    Outbound: Sink<OutboundOut, Error = anyhow::Error> + Stream<Item = Result<OutboundIn, anyhow::Error>> + Unpin + Send + 'static,
+    ToOutboundOut: FnOnce(DatagramPacket, SocketAddr) -> OutboundOut + Copy,
+    ToInboundIn: FnOnce(OutboundIn, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
+    OutboundIn: Send + Sync + 'static,
 {
     use std::net::ToSocketAddrs;
 
     let server_addr = format!("{}:{}", config.host, config.port).to_socket_addrs()?.next().ok_or(anyhow!("server address is not available"))?;
-    let context = new_out_context.0(&config)?;
+    let context = <NewOutboundContext as UdpOutboundContext>::new_context(&config)?;
     // client->local|inbound, local->client|inbound
     let (mut client_local, mut local_client) = UdpFramed::new(inbound, Socks5UdpCodec).split();
     let ttl = Duration::from_secs(600);
@@ -323,17 +350,16 @@ where
             }
             // local->client|inbound
             Some(Ok(((content, mut target), sender))) = local_client.next() => {
-                if let (Some(dns_config), Err(_)) = (&config.dns, IpAddr::from_str(&target.get_host())) {
-                    let ip = Outbound::new(&config).lookup(&config.host, config.port, &target, dns_context.0(&config)?, &mut dns_context.1, dns_config).await?;
+                if let Some(ip) = NewOutboundContext::lookup(&target, &config).await {
                     target = Address::Socket(SocketAddr::new(ip, target.get_port()));
                 }
-                let key = new_key(sender, &target);
+                let key = NewOutboundContext::new_key(sender, &target);
                 let _key = key.clone();
                 match client_server_cache.entry(key) {
                     Entry::Vacant(entry) => {
                         debug!("[udp] new binding; key={:?}", &_key);
-                        let out = new_out_context.1(&target, &context).await?;
-                        let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, new_out_context.2, new_out_context.3).await?;
+                        let out = new_outbound(&target, &context).await?;
+                        let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, to_inbound_in, to_outbound_out).await?;
                         entry.insert(Binding {sink, relay_task});
                     }
                     Entry::Occupied(entry) => {
@@ -341,12 +367,12 @@ where
                         let value = entry.into_mut();
                         if value.relay_task.is_finished() {
                             debug!("[udp] retry binding; key={:?}", &_key);
-                            let out = new_out_context.1(&target, &context).await?;
-                            let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, new_out_context.2, new_out_context.3).await?;
+                            let out = new_outbound(&target, &context).await?;
+                            let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, to_inbound_in, to_outbound_out).await?;
                             value.sink = sink;
                             value.relay_task = relay_task;
                         } else {
-                            value.sink.send(new_out_context.3((content, target), server_addr)).await?;
+                            value.sink.send(to_outbound_out((content, target), server_addr)).await?;
                         }
                     }
                 }

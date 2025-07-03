@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::mem::size_of;
+use std::net::SocketAddr;
 
 use aes_gcm::AeadCore;
 use aes_gcm::AeadInPlace;
@@ -11,13 +12,16 @@ use anyhow::anyhow;
 use anyhow::bail;
 use log::debug;
 use log::info;
+use octo_squirrel::codec::aead::CipherKind;
 use octo_squirrel::codec::vmess::aead::AEADBodyCodec;
+use octo_squirrel::protocol::address::Address;
 use octo_squirrel::protocol::vmess::VERSION;
 use octo_squirrel::protocol::vmess::address;
 use octo_squirrel::protocol::vmess::aead::*;
 use octo_squirrel::protocol::vmess::header::RequestCommand;
 use octo_squirrel::protocol::vmess::header::RequestHeader;
 use octo_squirrel::protocol::vmess::header::RequestOption;
+use octo_squirrel::protocol::vmess::header::SecurityType;
 use octo_squirrel::protocol::vmess::session::ClientSession;
 use octo_squirrel::util::dice;
 use octo_squirrel::util::fnv;
@@ -27,6 +31,10 @@ use tokio_util::bytes::BufMut;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
+
+use crate::client::config::ServerConfig;
+use crate::client::template::UdpDnsContext;
+use crate::client::template::UdpOutboundContext;
 
 pub struct ClientAEADCodec {
     header: RequestHeader,
@@ -129,6 +137,42 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
+pub struct Impl;
+
+impl UdpDnsContext for Impl {
+    type Codec = ClientAEADCodec;
+    type Context = (CipherKind, String, Option<u8>);
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
+        let opt_mask = config.ext.as_ref().and_then(|e| e.opt_mask);
+        Ok((config.cipher, config.password.clone(), opt_mask))
+    }
+
+    fn new_codec(target: &Address, (cipher, password, opt_mask): Self::Context) -> anyhow::Result<Self::Codec> {
+        let security = if cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
+        let header = if let Some(opt_mask) = opt_mask {
+            RequestHeader::client(RequestCommand::TCP, opt_mask, security, target.clone(), &password)?
+        } else {
+            RequestHeader::client_with_default_opt(RequestCommand::TCP, security, target.clone(), &password)?
+        };
+        Ok(ClientAEADCodec::new(header))
+    }
+}
+
+impl UdpOutboundContext for Impl {
+    type Key = (SocketAddr, Address);
+
+    type Context = ServerConfig;
+
+    fn new_key(sender: std::net::SocketAddr, target: &Address) -> Self::Key {
+        (sender, target.clone())
+    }
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
+        Ok(config.clone())
+    }
+}
+
 pub(super) mod tcp {
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::protocol::address::Address;
@@ -170,10 +214,6 @@ pub(super) mod udp {
     use super::ClientAEADCodec;
     use crate::client::config::ServerConfig;
     use crate::client::template;
-
-    pub fn new_key(sender: SocketAddr, target: &Address) -> (SocketAddr, Address) {
-        (sender, target.clone())
-    }
 
     pub fn new_codec(addr: &Address, config: &ServerConfig) -> Result<ClientAEADCodec> {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };

@@ -1,3 +1,41 @@
+use std::net::SocketAddr;
+
+use octo_squirrel::protocol::address::Address;
+
+use crate::client::config::ServerConfig;
+use crate::client::template::UdpDnsContext;
+use crate::client::template::UdpOutboundContext;
+
+pub struct Impl<const N: usize>;
+
+impl<const N: usize> UdpDnsContext for Impl<N> {
+    type Codec = tcp::PayloadCodec<N>;
+
+    type Context = tcp::ClientContext<N>;
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
+        config.try_into()
+    }
+
+    fn new_codec(target: &Address, context: Self::Context) -> anyhow::Result<Self::Codec> {
+        tcp::new_payload_codec(target, context)
+    }
+}
+
+impl<const N: usize> UdpOutboundContext for Impl<N> {
+    type Key = SocketAddr;
+
+    type Context = udp::Client<'static, N>;
+
+    fn new_key(sender: std::net::SocketAddr, _: &Address) -> Self::Key {
+        sender
+    }
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
+        udp::Client::new_static(config)
+    }
+}
+
 pub(super) mod tcp {
     use std::sync::Arc;
 
@@ -126,10 +164,6 @@ pub(super) mod udp {
             )),
         );
         Ok(outbound_framed)
-    }
-
-    pub fn new_key(from: SocketAddr, _: &Address) -> SocketAddr {
-        from
     }
 
     pub fn to_outbound_send(item: DatagramPacket, proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {

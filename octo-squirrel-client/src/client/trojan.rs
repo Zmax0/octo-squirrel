@@ -1,6 +1,43 @@
+use std::net::SocketAddr;
+
+use octo_squirrel::protocol::address::Address;
+
+use crate::client::config::ServerConfig;
+use crate::client::template::UdpDnsContext;
+use crate::client::template::UdpOutboundContext;
+
 enum CodecState {
     Header,
     Body,
+}
+
+pub struct Impl;
+
+impl UdpDnsContext for Impl {
+    type Codec = tcp::ClientCodec;
+    type Context = ServerConfig;
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<ServerConfig> {
+        Ok(config.clone())
+    }
+
+    fn new_codec(target: &Address, context: Self::Context) -> anyhow::Result<Self::Codec> {
+        tcp::new_codec(target, context.password.clone())
+    }
+}
+
+impl UdpOutboundContext for Impl {
+    type Key = SocketAddr;
+
+    type Context = ServerConfig;
+
+    fn new_key(sender: std::net::SocketAddr, _: &Address) -> Self::Key {
+        sender
+    }
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
+        Ok(config.clone())
+    }
 }
 
 pub(super) mod tcp {
@@ -100,10 +137,6 @@ pub(super) mod udp {
     use super::CodecState;
     use crate::client::config::ServerConfig;
     use crate::client::template;
-
-    pub fn new_key(sender: SocketAddr, _: &Address) -> SocketAddr {
-        sender
-    }
 
     pub async fn new_quic_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientCodec>> {
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
