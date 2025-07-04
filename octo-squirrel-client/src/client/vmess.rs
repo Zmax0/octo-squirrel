@@ -12,6 +12,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use log::debug;
 use log::info;
+use octo_squirrel::codec::DatagramPacket;
 use octo_squirrel::codec::aead::CipherKind;
 use octo_squirrel::codec::vmess::aead::AEADBodyCodec;
 use octo_squirrel::protocol::address::Address;
@@ -34,6 +35,7 @@ use tokio_util::codec::Encoder;
 
 use crate::client::config::ServerConfig;
 use crate::client::template::UdpDnsContext;
+use crate::client::template::UdpOutbound;
 use crate::client::template::UdpOutboundContext;
 
 pub struct ClientAEADCodec {
@@ -137,9 +139,9 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub struct Impl;
+pub struct Vmess;
 
-impl UdpDnsContext for Impl {
+impl UdpDnsContext for Vmess {
     type Codec = ClientAEADCodec;
     type Context = (CipherKind, String, Option<u8>);
 
@@ -159,7 +161,7 @@ impl UdpDnsContext for Impl {
     }
 }
 
-impl UdpOutboundContext for Impl {
+impl UdpOutboundContext for Vmess {
     type Key = (SocketAddr, Address);
 
     type Context = ServerConfig;
@@ -170,6 +172,20 @@ impl UdpOutboundContext for Impl {
 
     fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
         Ok(config.clone())
+    }
+}
+
+impl UdpOutbound for Vmess {
+    type OutboundIn = BytesMut;
+
+    type OutboundOut = BytesMut;
+
+    fn to_outbound_out(item: DatagramPacket, _: SocketAddr) -> Self::OutboundOut {
+        item.0
+    }
+
+    fn to_inbound_in(item: Self::OutboundIn, target: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+        ((item, target.clone()), sender)
     }
 }
 
@@ -194,11 +210,8 @@ pub(super) mod tcp {
 }
 
 pub(super) mod udp {
-    use std::net::SocketAddr;
-
     use anyhow::Result;
     use anyhow::bail;
-    use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketStream;
     use octo_squirrel::codec::aead::CipherKind;
@@ -208,7 +221,6 @@ pub(super) mod udp {
     use octo_squirrel::protocol::vmess::header::SecurityType;
     use tokio::net::TcpStream;
     use tokio_rustls::client::TlsStream;
-    use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Framed;
 
     use super::ClientAEADCodec;
@@ -260,13 +272,5 @@ pub(super) mod udp {
         } else {
             bail!("ws config and ssl config are required for wss outbound");
         }
-    }
-
-    pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> BytesMut {
-        item.0
-    }
-
-    pub fn to_inbound_recv(item: BytesMut, recipient: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        ((item, recipient.clone()), sender)
     }
 }

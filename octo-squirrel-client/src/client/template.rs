@@ -266,12 +266,120 @@ where
 }
 
 pub(crate) trait UdpOutboundContext {
-    type Key;
+    type Key: Ord + Clone + Debug + Send + Sync + 'static;
     type Context;
 
     fn new_key(sender: SocketAddr, target: &Address) -> Self::Key;
 
     fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context>;
+}
+
+pub(crate) trait UdpOutbound: UdpDnsContext + UdpOutboundContext {
+    type OutboundIn: Send;
+    type OutboundOut;
+
+    fn to_outbound_out(item: DatagramPacket, target: SocketAddr) -> Self::OutboundOut;
+
+    fn to_inbound_in(item: Self::OutboundIn, target: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr);
+
+    async fn new_binding<Out>(
+        server_addr: SocketAddr,
+        client_local: ClientLocalSender<Self::Key>,
+        msg: (DatagramPacket, SocketAddr),
+        key: Self::Key,
+        out: Out,
+    ) -> Result<(SplitSink<Out, Self::OutboundOut>, JoinHandle<()>)>
+    where
+        Out: Sink<Self::OutboundOut, Error = anyhow::Error> + Stream<Item = Result<Self::OutboundIn, anyhow::Error>> + Send + 'static,
+    {
+        let ((content, target), sender) = msg;
+        // client->server|outbound, server->client|outbound
+        let (mut client_server, mut server_client) = out.split();
+        let _target = target.clone();
+        let relay_task = tokio::spawn(async move {
+            // server->client|outbound
+            while let Some(next) = server_client.next().await {
+                match next {
+                    Ok(outbound_recv) => {
+                        // client->local|mpsc
+                        client_local
+                            .send((Self::to_inbound_in(outbound_recv, &_target, sender), key.clone()))
+                            .await
+                            .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
+                    }
+                    Err(e) => {
+                        error!("[udp] server*-client decode failed; error={}", e);
+                        break;
+                    }
+                }
+            }
+            debug!("[udp] server-client relay task done");
+        });
+        // client->server|outbound
+        client_server.send(Self::to_outbound_out((content, target), server_addr)).await?;
+        Ok((client_server, relay_task))
+    }
+
+    async fn transfer_udp<NewOutbound, Outbound>(inbound: UdpSocket, config: ServerConfig, new_outbound: NewOutbound) -> Result<()>
+    where
+        NewOutbound: AsyncFn(&Address, &<Self as UdpOutboundContext>::Context) -> Result<Outbound, anyhow::Error> + Copy,
+        Outbound: Sink<Self::OutboundOut, Error = anyhow::Error> + Stream<Item = Result<Self::OutboundIn, anyhow::Error>> + Unpin + Send + 'static,
+    {
+        use std::net::ToSocketAddrs;
+
+        let server_addr = format!("{}:{}", config.host, config.port).to_socket_addrs()?.next().ok_or(anyhow!("server address is not available"))?;
+        let context = <Self as UdpOutboundContext>::new_context(&config)?;
+        // client->local|inbound, local->client|inbound
+        let (mut client_local, mut local_client) = UdpFramed::new(inbound, Socks5UdpCodec).split();
+        let ttl = Duration::from_secs(600);
+        let mut client_server_cache = LruCache::with_expiry_duration_and_capacity(ttl, 64);
+        let (client_local_tx, mut client_local_rx) = mpsc::channel(1024);
+        let mut cleanup_timer = time::interval(ttl);
+        loop {
+            tokio::select! {
+                // clean up
+                _ = cleanup_timer.tick() => {
+                    client_server_cache.iter(); // removes expired items before creating the iterator
+                }
+                // client->local|mpsc
+                Some((item, key)) = client_local_rx.recv() => {
+                    client_server_cache.get(&key);
+                    client_local.send(item).await.unwrap_or_else(|e| error!("[udp] failed to send inbound msg; error={}", e));
+                }
+                // local->client|inbound
+                Some(Ok(((content, mut target), sender))) = local_client.next() => {
+                    if let Some(ip) = Self::lookup(&target, &config).await {
+                        target = Address::Socket(SocketAddr::new(ip, target.get_port()));
+                    }
+                    let key = Self::new_key(sender, &target);
+                    let _key = key.clone();
+                    match client_server_cache.entry(key) {
+                        Entry::Vacant(entry) => {
+                            debug!("[udp] new binding; key={:?}", &_key);
+                            let out = new_outbound(&target, &context).await?;
+                            let (sink, relay_task) = <Self as UdpOutbound>::new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out,).await?;
+                            entry.insert(Binding {sink, relay_task});
+                        }
+                        Entry::Occupied(entry) => {
+                            // client->server|outbound
+                            let value = entry.into_mut();
+                            if value.relay_task.is_finished() {
+                                debug!("[udp] retry binding; key={:?}", &_key);
+                                let out = new_outbound(&target, &context).await?;
+                                let (sink, relay_task) = <Self as UdpOutbound>::new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out).await?;
+                                value.sink = sink;
+                                value.relay_task = relay_task;
+                            } else {
+                                value.sink.send(<Self as UdpOutbound>::to_outbound_out((content, target), server_addr)).await?;
+                            }
+                        }
+                    }
+                }
+                else => break,
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) trait UdpDnsContext {
@@ -299,135 +407,7 @@ pub(crate) trait UdpDnsContext {
     }
 }
 
-pub async fn transfer_udp<
-    NewOutboundContext,
-    Key,
-    OutboundContext,
-    DnsContext,
-    NewOutbound,
-    Outbound,
-    ToOutboundOut,
-    ToInboundIn,
-    OutboundIn,
-    OutboundOut,
->(
-    inbound: UdpSocket,
-    config: ServerConfig,
-    _: NewOutboundContext,
-    new_outbound: NewOutbound,
-    to_inbound_in: ToInboundIn,
-    to_outbound_out: ToOutboundOut,
-) -> Result<()>
-where
-    NewOutboundContext: UdpOutboundContext<Key = Key, Context = OutboundContext> + UdpDnsContext<Context = DnsContext>,
-    Key: Ord + Clone + Debug + Send + Sync + 'static,
-    NewOutbound: AsyncFn(&Address, &OutboundContext) -> Result<Outbound, anyhow::Error> + Copy,
-    Outbound: Sink<OutboundOut, Error = anyhow::Error> + Stream<Item = Result<OutboundIn, anyhow::Error>> + Unpin + Send + 'static,
-    ToOutboundOut: FnOnce(DatagramPacket, SocketAddr) -> OutboundOut + Copy,
-    ToInboundIn: FnOnce(OutboundIn, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
-    OutboundIn: Send + Sync + 'static,
-{
-    use std::net::ToSocketAddrs;
-
-    let server_addr = format!("{}:{}", config.host, config.port).to_socket_addrs()?.next().ok_or(anyhow!("server address is not available"))?;
-    let context = <NewOutboundContext as UdpOutboundContext>::new_context(&config)?;
-    // client->local|inbound, local->client|inbound
-    let (mut client_local, mut local_client) = UdpFramed::new(inbound, Socks5UdpCodec).split();
-    let ttl = Duration::from_secs(600);
-    let mut client_server_cache = LruCache::with_expiry_duration_and_capacity(ttl, 64);
-    let (client_local_tx, mut client_local_rx) = mpsc::channel(1024);
-    let mut cleanup_timer = time::interval(ttl);
-    loop {
-        tokio::select! {
-            // clean up
-            _ = cleanup_timer.tick() => {
-                client_server_cache.iter(); // removes expired items before creating the iterator
-            }
-            // client->local|mpsc
-            Some((item, key)) = client_local_rx.recv() => {
-                client_server_cache.get(&key);
-                client_local.send(item).await.unwrap_or_else(|e| error!("[udp] failed to send inbound msg; error={}", e));
-            }
-            // local->client|inbound
-            Some(Ok(((content, mut target), sender))) = local_client.next() => {
-                if let Some(ip) = NewOutboundContext::lookup(&target, &config).await {
-                    target = Address::Socket(SocketAddr::new(ip, target.get_port()));
-                }
-                let key = NewOutboundContext::new_key(sender, &target);
-                let _key = key.clone();
-                match client_server_cache.entry(key) {
-                    Entry::Vacant(entry) => {
-                        debug!("[udp] new binding; key={:?}", &_key);
-                        let out = new_outbound(&target, &context).await?;
-                        let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, to_inbound_in, to_outbound_out).await?;
-                        entry.insert(Binding {sink, relay_task});
-                    }
-                    Entry::Occupied(entry) => {
-                        // client->server|outbound
-                        let value = entry.into_mut();
-                        if value.relay_task.is_finished() {
-                            debug!("[udp] retry binding; key={:?}", &_key);
-                            let out = new_outbound(&target, &context).await?;
-                            let (sink, relay_task) = new_binding(server_addr, client_local_tx.clone(), ((content, target), sender), _key, out, to_inbound_in, to_outbound_out).await?;
-                            value.sink = sink;
-                            value.relay_task = relay_task;
-                        } else {
-                            value.sink.send(to_outbound_out((content, target), server_addr)).await?;
-                        }
-                    }
-                }
-            }
-            else => break,
-        }
-    }
-    Ok(())
-}
-
 type ClientLocalSender<T> = Sender<((DatagramPacket, SocketAddr), T)>;
-
-async fn new_binding<Key, Out, OutSend, ToOutSend, OutRecv, ToInRecv>(
-    server_addr: SocketAddr,
-    client_local: ClientLocalSender<Key>,
-    msg: (DatagramPacket, SocketAddr),
-    key: Key,
-    out: Out,
-    to_inbound_recv: ToInRecv,
-    to_outbound_send: ToOutSend,
-) -> Result<(SplitSink<Out, OutSend>, JoinHandle<()>)>
-where
-    Key: Ord + Clone + Debug + Send + Sync + 'static,
-    Out: Sink<OutSend, Error = anyhow::Error> + Stream<Item = Result<OutRecv, anyhow::Error>> + Unpin + Send + 'static,
-    OutRecv: Send + Sync + 'static,
-    ToInRecv: FnOnce(OutRecv, &Address, SocketAddr) -> (DatagramPacket, SocketAddr) + Send + Copy + 'static,
-    ToOutSend: FnOnce(DatagramPacket, SocketAddr) -> OutSend + Copy,
-{
-    let ((content, target), sender) = msg;
-    // client->server|outbound, server->client|outbound
-    let (mut client_server, mut server_client) = out.split();
-    let _target = target.clone();
-    let relay_task = tokio::spawn(async move {
-        // server->client|outbound
-        while let Some(next) = server_client.next().await {
-            match next {
-                Ok(outbound_recv) => {
-                    // client->local|mpsc
-                    client_local
-                        .send((to_inbound_recv(outbound_recv, &_target, sender), key.clone()))
-                        .await
-                        .unwrap_or_else(|e| error!("[udp] client*-local send mpsc failed; error={}", e));
-                }
-                Err(e) => {
-                    error!("[udp] server*-client decode failed; error={}", e);
-                    break;
-                }
-            }
-        }
-        debug!("[udp] server-client relay task done");
-    });
-    // client->server|outbound
-    client_server.send(to_outbound_send((content, target), server_addr)).await?;
-    Ok((client_server, relay_task))
-}
 
 struct Binding<Out, OutSend> {
     sink: SplitSink<Out, OutSend>,

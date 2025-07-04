@@ -1,14 +1,16 @@
 use std::net::SocketAddr;
 
+use octo_squirrel::codec::DatagramPacket;
 use octo_squirrel::protocol::address::Address;
 
 use crate::client::config::ServerConfig;
 use crate::client::template::UdpDnsContext;
+use crate::client::template::UdpOutbound;
 use crate::client::template::UdpOutboundContext;
 
-pub struct Impl<const N: usize>;
+pub struct Shadowsocks<const N: usize>;
 
-impl<const N: usize> UdpDnsContext for Impl<N> {
+impl<const N: usize> UdpDnsContext for Shadowsocks<N> {
     type Codec = tcp::PayloadCodec<N>;
 
     type Context = tcp::ClientContext<N>;
@@ -22,17 +24,33 @@ impl<const N: usize> UdpDnsContext for Impl<N> {
     }
 }
 
-impl<const N: usize> UdpOutboundContext for Impl<N> {
+impl<const N: usize> UdpOutboundContext for Shadowsocks<N> {
     type Key = SocketAddr;
 
-    type Context = udp::Client<'static, N>;
+    type Context = udp::Client<N>;
 
     fn new_key(sender: std::net::SocketAddr, _: &Address) -> Self::Key {
         sender
     }
 
     fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
-        udp::Client::new_static(config)
+        udp::Client::new(config)
+    }
+}
+
+impl<const N: usize> UdpOutbound for Shadowsocks<N> {
+    type OutboundIn = (DatagramPacket, SocketAddr);
+
+    type OutboundOut = (DatagramPacket, SocketAddr);
+
+    fn to_outbound_out(item: DatagramPacket, proxy: SocketAddr) -> Self::OutboundOut {
+        let (content, target) = item;
+        ((content, target), proxy)
+    }
+
+    fn to_inbound_in(item: Self::OutboundIn, _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+        let (item, _) = item;
+        (item, sender)
     }
 }
 
@@ -112,8 +130,8 @@ pub(super) mod tcp {
 
 pub(super) mod udp {
     use std::net::Ipv4Addr;
-    use std::net::SocketAddr;
     use std::net::SocketAddrV4;
+    use std::sync::Arc;
 
     use anyhow::anyhow;
     use anyhow::bail;
@@ -135,60 +153,45 @@ pub(super) mod udp {
 
     use crate::client::config::ServerConfig;
 
-    #[derive(Clone, Copy)]
-    pub struct Client<'a, const N: usize> {
+    #[derive(Clone)]
+    pub struct Client<const N: usize> {
         kind: CipherKind,
-        key: &'a [u8],
-        identity_keys: &'a [[u8; N]],
+        key: Arc<[u8]>,
+        identity_keys: Arc<[[u8; N]]>,
     }
 
-    impl<const N: usize> Client<'_, N> {
-        pub fn new_static(config: &ServerConfig) -> anyhow::Result<Client<'static, N>> {
+    impl<const N: usize> Client<N> {
+        pub fn new(config: &ServerConfig) -> anyhow::Result<Client<N>> {
             let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
-            let key: &'static [u8; N] = Box::leak::<'static>(Box::new(key));
-            let identity_keys: &'static Vec<[u8; N]> = Box::leak::<'static>(Box::new(identity_keys));
-            Ok(Client::<'static> { kind: config.cipher, key, identity_keys })
+            Ok(Client { kind: config.cipher, key: Arc::new(key), identity_keys: Arc::from(identity_keys) })
         }
     }
 
-    pub async fn new_plain_outbound<'a, const N: usize>(
-        _: &Address,
-        client: &Client<'a, N>,
-    ) -> anyhow::Result<UdpFramed<DatagramPacketCodec<'a, N>>> {
+    pub async fn new_plain_outbound<const N: usize>(_: &Address, client: &Client<N>) -> anyhow::Result<UdpFramed<DatagramPacketCodec<N>>> {
         let outbound = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await?;
         let outbound_framed = UdpFramed::new(
             outbound,
             DatagramPacketCodec::new(SessionCodec::new(
-                Context::new(Mode::Client, None, client.key, client.identity_keys),
+                Context::new(Mode::Client, None, client.key.clone(), client.identity_keys.clone()),
                 AEADCipherCodec::new(client.kind),
             )),
         );
         Ok(outbound_framed)
     }
 
-    pub fn to_outbound_send(item: DatagramPacket, proxy: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        let (content, target) = item;
-        ((content, target), proxy)
-    }
-
-    pub fn to_inbound_recv(item: (DatagramPacket, SocketAddr), _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        let (item, _) = item;
-        (item, sender)
-    }
-
-    pub struct DatagramPacketCodec<'a, const N: usize> {
-        codec: SessionCodec<'a, N>,
+    pub struct DatagramPacketCodec<const N: usize> {
+        codec: SessionCodec<N>,
         session: Session<N>,
         filter: PacketWindowFilter,
     }
 
-    impl<const N: usize> DatagramPacketCodec<'_, N> {
-        pub fn new(codec: SessionCodec<N>) -> DatagramPacketCodec<'_, N> {
+    impl<const N: usize> DatagramPacketCodec<N> {
+        pub fn new(codec: SessionCodec<N>) -> DatagramPacketCodec<N> {
             DatagramPacketCodec { codec, session: Session::from(Mode::Client), filter: PacketWindowFilter::default() }
         }
     }
 
-    impl<const N: usize> Encoder<DatagramPacket> for DatagramPacketCodec<'_, N> {
+    impl<const N: usize> Encoder<DatagramPacket> for DatagramPacketCodec<N> {
         type Error = anyhow::Error;
 
         fn encode(&mut self, (content, addr): DatagramPacket, dst: &mut BytesMut) -> anyhow::Result<()> {
@@ -197,7 +200,7 @@ pub(super) mod udp {
         }
     }
 
-    impl<const N: usize> Decoder for DatagramPacketCodec<'_, N> {
+    impl<const N: usize> Decoder for DatagramPacketCodec<N> {
         type Item = DatagramPacket;
 
         type Error = anyhow::Error;

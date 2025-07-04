@@ -1,9 +1,11 @@
 use std::net::SocketAddr;
 
+use octo_squirrel::codec::DatagramPacket;
 use octo_squirrel::protocol::address::Address;
 
 use crate::client::config::ServerConfig;
 use crate::client::template::UdpDnsContext;
+use crate::client::template::UdpOutbound;
 use crate::client::template::UdpOutboundContext;
 
 enum CodecState {
@@ -11,9 +13,9 @@ enum CodecState {
     Body,
 }
 
-pub struct Impl;
+pub struct Trojan;
 
-impl UdpDnsContext for Impl {
+impl UdpDnsContext for Trojan {
     type Codec = tcp::ClientCodec;
     type Context = ServerConfig;
 
@@ -26,7 +28,7 @@ impl UdpDnsContext for Impl {
     }
 }
 
-impl UdpOutboundContext for Impl {
+impl UdpOutboundContext for Trojan {
     type Key = SocketAddr;
 
     type Context = ServerConfig;
@@ -37,6 +39,21 @@ impl UdpOutboundContext for Impl {
 
     fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
         Ok(config.clone())
+    }
+}
+
+impl UdpOutbound for Trojan {
+    type OutboundIn = DatagramPacket;
+
+    type OutboundOut = DatagramPacket;
+
+    fn to_outbound_out(item: octo_squirrel::codec::DatagramPacket, _: SocketAddr) -> Self::OutboundOut {
+        let (content, target) = item;
+        (content, target)
+    }
+
+    fn to_inbound_in(item: Self::OutboundIn, _: &Address, sender: SocketAddr) -> (octo_squirrel::codec::DatagramPacket, SocketAddr) {
+        (item, sender)
     }
 }
 
@@ -111,8 +128,6 @@ pub(super) mod tcp {
 }
 
 pub(super) mod udp {
-    use std::net::SocketAddr;
-
     use anyhow::Result;
     use anyhow::bail;
     use octo_squirrel::codec::DatagramPacket;
@@ -164,16 +179,6 @@ pub(super) mod udp {
             bail!("ws config and ssl config are required for wss outbound");
         }
     }
-
-    pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> DatagramPacket {
-        let (content, target) = item;
-        (content, target)
-    }
-
-    pub fn to_inbound_recv(item: DatagramPacket, _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        (item, sender)
-    }
-
     pub struct ClientCodec {
         key: [u8; 56],
         command: u8,
