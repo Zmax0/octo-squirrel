@@ -9,6 +9,7 @@ use octo_squirrel::protocol::Protocol::*;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
 
+use crate::client::template::TcpOutboundContext;
 use crate::client::template::UdpOutbound;
 
 mod config;
@@ -41,38 +42,19 @@ pub async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn transfer_tcp(listener: TcpListener, current: ServerConfig) {
-    match current.protocol {
-        Shadowsocks => match current.cipher {
-            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
-                template::transfer_tcp(
-                    listener,
-                    current,
-                    |c| shadowsocks::tcp::ClientContext::<16>::try_from(c),
-                    shadowsocks::tcp::new_payload_codec::<16>,
-                )
-                .await
-            }
+async fn transfer_tcp(listener: TcpListener, config: ServerConfig) {
+    match config.protocol {
+        Shadowsocks => match config.cipher {
+            CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => shadowsocks::Shadowsocks::<16>::transfer_tcp(listener, config).await,
             CipherKind::Aes256Gcm
             | CipherKind::Aead2022Blake3Aes256Gcm
             | CipherKind::ChaCha20Poly1305
             | CipherKind::Aead2022Blake3ChaCha8Poly1305
-            | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
-                template::transfer_tcp(
-                    listener,
-                    current,
-                    |c| shadowsocks::tcp::ClientContext::<32>::try_from(c),
-                    shadowsocks::tcp::new_payload_codec::<32>,
-                )
-                .await
-            }
+            | CipherKind::Aead2022Blake3ChaCha20Poly1305 => shadowsocks::Shadowsocks::<32>::transfer_tcp(listener, config).await,
             CipherKind::Unknown => error!("unknown cipher kind"),
         },
-        VMess => {
-            let opt_mask = current.ext.as_ref().and_then(|e| e.opt_mask);
-            template::transfer_tcp(listener, current, move |c| Ok((c.cipher, c.password.clone(), opt_mask)), vmess::tcp::new_codec).await
-        }
-        Trojan => template::transfer_tcp(listener, current, |c| Ok(c.password.clone()), trojan::tcp::new_codec).await,
+        VMess => vmess::Vmess::transfer_tcp(listener, config).await,
+        Trojan => trojan::Trojan::transfer_tcp(listener, config).await,
     }
 }
 

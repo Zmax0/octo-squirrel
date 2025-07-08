@@ -4,7 +4,7 @@ use octo_squirrel::codec::DatagramPacket;
 use octo_squirrel::protocol::address::Address;
 
 use crate::client::config::ServerConfig;
-use crate::client::template::UdpDnsContext;
+use crate::client::template::TcpOutboundContext;
 use crate::client::template::UdpOutbound;
 use crate::client::template::UdpOutboundContext;
 
@@ -15,7 +15,7 @@ enum CodecState {
 
 pub struct Trojan;
 
-impl UdpDnsContext for Trojan {
+impl TcpOutboundContext for Trojan {
     type Codec = tcp::ClientCodec;
     type Context = ServerConfig;
 

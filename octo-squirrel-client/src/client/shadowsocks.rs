@@ -4,13 +4,13 @@ use octo_squirrel::codec::DatagramPacket;
 use octo_squirrel::protocol::address::Address;
 
 use crate::client::config::ServerConfig;
-use crate::client::template::UdpDnsContext;
+use crate::client::template::TcpOutboundContext;
 use crate::client::template::UdpOutbound;
 use crate::client::template::UdpOutboundContext;
 
 pub struct Shadowsocks<const N: usize>;
 
-impl<const N: usize> UdpDnsContext for Shadowsocks<N> {
+impl<const N: usize> TcpOutboundContext for Shadowsocks<N> {
     type Codec = tcp::PayloadCodec<N>;
 
     type Context = tcp::ClientContext<N>;

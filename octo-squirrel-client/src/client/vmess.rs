@@ -34,7 +34,7 @@ use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
 use crate::client::config::ServerConfig;
-use crate::client::template::UdpDnsContext;
+use crate::client::template::TcpOutboundContext;
 use crate::client::template::UdpOutbound;
 use crate::client::template::UdpOutboundContext;
 
@@ -141,7 +141,7 @@ impl Decoder for ClientAEADCodec {
 
 pub struct Vmess;
 
-impl UdpDnsContext for Vmess {
+impl TcpOutboundContext for Vmess {
     type Codec = ClientAEADCodec;
     type Context = (CipherKind, String, Option<u8>);
 
@@ -186,26 +186,6 @@ impl UdpOutbound for Vmess {
 
     fn to_inbound_in(item: Self::OutboundIn, target: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
         ((item, target.clone()), sender)
-    }
-}
-
-pub(super) mod tcp {
-    use octo_squirrel::codec::aead::CipherKind;
-    use octo_squirrel::protocol::address::Address;
-    use octo_squirrel::protocol::vmess::header::RequestCommand;
-    use octo_squirrel::protocol::vmess::header::RequestHeader;
-    use octo_squirrel::protocol::vmess::header::SecurityType;
-
-    use super::ClientAEADCodec;
-
-    pub fn new_codec(addr: &Address, (kind, password, opt_mask): (CipherKind, String, Option<u8>)) -> anyhow::Result<ClientAEADCodec> {
-        let security = if kind == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = if let Some(opt_mask) = opt_mask {
-            RequestHeader::client(RequestCommand::TCP, opt_mask, security, addr.clone(), &password)?
-        } else {
-            RequestHeader::client_with_default_opt(RequestCommand::TCP, security, addr.clone(), &password)?
-        };
-        Ok(ClientAEADCodec::new(header))
     }
 }
 
