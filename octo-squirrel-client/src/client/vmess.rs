@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::mem::size_of;
+use std::net::SocketAddr;
 
 use aes_gcm::AeadCore;
 use aes_gcm::AeadInPlace;
@@ -11,13 +12,17 @@ use anyhow::anyhow;
 use anyhow::bail;
 use log::debug;
 use log::info;
+use octo_squirrel::codec::DatagramPacket;
+use octo_squirrel::codec::aead::CipherKind;
 use octo_squirrel::codec::vmess::aead::AEADBodyCodec;
+use octo_squirrel::protocol::address::Address;
 use octo_squirrel::protocol::vmess::VERSION;
 use octo_squirrel::protocol::vmess::address;
 use octo_squirrel::protocol::vmess::aead::*;
 use octo_squirrel::protocol::vmess::header::RequestCommand;
 use octo_squirrel::protocol::vmess::header::RequestHeader;
 use octo_squirrel::protocol::vmess::header::RequestOption;
+use octo_squirrel::protocol::vmess::header::SecurityType;
 use octo_squirrel::protocol::vmess::session::ClientSession;
 use octo_squirrel::util::dice;
 use octo_squirrel::util::fnv;
@@ -27,6 +32,11 @@ use tokio_util::bytes::BufMut;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
+
+use crate::client::config::ServerConfig;
+use crate::client::template::TcpOutboundContext;
+use crate::client::template::UdpOutbound;
+use crate::client::template::UdpOutboundContext;
 
 pub struct ClientAEADCodec {
     header: RequestHeader,
@@ -129,27 +139,59 @@ impl Decoder for ClientAEADCodec {
     }
 }
 
-pub(super) mod tcp {
-    use octo_squirrel::codec::aead::CipherKind;
-    use octo_squirrel::protocol::address::Address;
-    use octo_squirrel::protocol::vmess::header::RequestCommand;
-    use octo_squirrel::protocol::vmess::header::RequestHeader;
-    use octo_squirrel::protocol::vmess::header::SecurityType;
+pub struct Vmess;
 
-    use super::ClientAEADCodec;
+impl TcpOutboundContext for Vmess {
+    type Codec = ClientAEADCodec;
+    type Context = (CipherKind, String, Option<u8>);
 
-    pub fn new_codec(addr: &Address, (kind, password): (CipherKind, String)) -> anyhow::Result<ClientAEADCodec> {
-        let security = if kind == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::TCP, security, addr.clone(), &password)?;
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
+        let opt_mask = config.ext.as_ref().and_then(|e| e.opt_mask);
+        Ok((config.cipher, config.password.clone(), opt_mask))
+    }
+
+    fn new_codec(target: &Address, (cipher, password, opt_mask): Self::Context) -> anyhow::Result<Self::Codec> {
+        let security = if cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
+        let header = if let Some(opt_mask) = opt_mask {
+            RequestHeader::client(RequestCommand::TCP, opt_mask, security, target.clone(), &password)?
+        } else {
+            RequestHeader::client_with_default_opt(RequestCommand::TCP, security, target.clone(), &password)?
+        };
         Ok(ClientAEADCodec::new(header))
     }
 }
 
-pub(super) mod udp {
-    use std::net::SocketAddr;
+impl UdpOutboundContext for Vmess {
+    type Key = (SocketAddr, Address);
 
+    type Context = ServerConfig;
+
+    fn new_key(sender: std::net::SocketAddr, target: &Address) -> Self::Key {
+        (sender, target.clone())
+    }
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
+        Ok(config.clone())
+    }
+}
+
+impl UdpOutbound for Vmess {
+    type OutboundIn = BytesMut;
+
+    type OutboundOut = BytesMut;
+
+    fn to_outbound_out(item: DatagramPacket, _: SocketAddr) -> Self::OutboundOut {
+        item.0
+    }
+
+    fn to_inbound_in(item: Self::OutboundIn, target: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
+        ((item, target.clone()), sender)
+    }
+}
+
+pub(super) mod udp {
     use anyhow::Result;
-    use octo_squirrel::codec::DatagramPacket;
+    use anyhow::bail;
     use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketStream;
     use octo_squirrel::codec::aead::CipherKind;
@@ -159,53 +201,56 @@ pub(super) mod udp {
     use octo_squirrel::protocol::vmess::header::SecurityType;
     use tokio::net::TcpStream;
     use tokio_rustls::client::TlsStream;
-    use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Framed;
 
     use super::ClientAEADCodec;
     use crate::client::config::ServerConfig;
     use crate::client::template;
 
-    pub fn new_key(sender: SocketAddr, target: &Address) -> (SocketAddr, Address) {
-        (sender, target.clone())
-    }
-
     pub fn new_codec(addr: &Address, config: &ServerConfig) -> Result<ClientAEADCodec> {
         let security = if config.cipher == CipherKind::ChaCha20Poly1305 { SecurityType::Chacha20Poly1305 } else { SecurityType::Aes128Gcm };
-        let header = RequestHeader::default(RequestCommand::UDP, security, addr.clone(), &config.password)?;
+        let header = RequestHeader::client_with_default_opt(RequestCommand::UDP, security, addr.clone(), &config.password)?;
         Ok(ClientAEADCodec::new(header))
     }
 
     pub async fn new_quic_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_quic_outbound(&config.host, config.port, codec, config).await
+        if let Some(ssl_config) = &config.quic {
+            template::new_quic_outbound(&config.host, config.port, codec, ssl_config).await
+        } else {
+            bail!("ssl config is required for quic outbound");
+        }
     }
 
     pub async fn new_plain_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<TcpStream, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_plain_outbound(&config.host, config.port, codec, config).await
+        template::new_plain_outbound(&config.host, config.port, codec).await
     }
 
     pub async fn new_ws_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TcpStream>, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_ws_outbound(&config.host, config.port, codec, config).await
+        if let Some(ws_config) = &config.ws {
+            template::new_ws_outbound(&config.host, config.port, codec, ws_config).await
+        } else {
+            bail!("ws config is required for ws outbound");
+        }
     }
 
     pub async fn new_tls_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<TlsStream<TcpStream>, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_tls_outbound(&config.host, config.port, codec, config).await
+        if let Some(ssl_config) = &config.ssl {
+            template::new_tls_outbound(&config.host, config.port, codec, ssl_config).await
+        } else {
+            bail!("ssl config is required for tls outbound");
+        }
     }
 
     pub async fn new_wss_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
-        template::new_wss_outbound(&config.host, config.port, codec, config).await
-    }
-
-    pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> BytesMut {
-        item.0
-    }
-
-    pub fn to_inbound_recv(item: BytesMut, recipient: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        ((item, recipient.clone()), sender)
+        if let (Some(ssl_config), Some(ws_config)) = (&config.ssl, &config.ws) {
+            template::new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await
+        } else {
+            bail!("ws config and ssl config are required for wss outbound");
+        }
     }
 }

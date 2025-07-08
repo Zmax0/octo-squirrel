@@ -85,7 +85,7 @@ async fn startup_udp<const N: usize>(config: &ServerConfig, user_manager: &Arc<S
     }
     if config.mode.enable_udp() {
         let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
-        let context = Context::new(Mode::Server, Some(user_manager.clone()), &key, &identity_keys);
+        let context = Context::new(Mode::Server, Some(user_manager.clone()), Arc::new(key), Arc::from(identity_keys));
         let codec = udp::new_codec::<N>(config, context)?;
         let inbound = UdpSocket::bind(format!("{}:{}", config.host, config.port)).await?;
         let (tx, mut rx) = mpsc::channel::<(BytesMut, Address, SocketAddr, Session<N>)>(1024);
@@ -275,8 +275,8 @@ mod udp {
     use octo_squirrel::codec::shadowsocks::udp::SessionCodec;
 
     use super::*;
-    pub fn new_codec<'a, const N: usize>(config: &ServerConfig, context: Context<'a, N>) -> anyhow::Result<SessionCodec<'a, N>> {
-        Ok(SessionCodec::<'a, N>::new(context, AEADCipherCodec::new(config.cipher)))
+    pub fn new_codec<const N: usize>(config: &ServerConfig, context: Context<N>) -> anyhow::Result<SessionCodec<N>> {
+        Ok(SessionCodec::<N>::new(context, AEADCipherCodec::new(config.cipher)))
     }
 }
 

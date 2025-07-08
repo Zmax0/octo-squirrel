@@ -45,7 +45,15 @@ pub struct ServerConfig {
     pub ws: Option<WebSocketConfig>,
     #[serde(default)]
     pub quic: Option<SslConfig>,
+    #[serde(default)]
     pub dns: Option<DnsConfig>,
+    #[serde(default)]
+    pub ext: Option<ServerConfigExt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServerConfigExt {
+    pub opt_mask: Option<u8>,
 }
 
 impl AsRef<ServerConfig> for ServerConfig {
@@ -135,6 +143,9 @@ mod test {
                         "keyFile": "/path/to/private.key",
                         "serverName": server_host
                     }
+                  },
+                  "ext": {
+                      "opt_mask": 13,
                   }
               }
           ]
@@ -152,5 +163,6 @@ mod test {
         assert_eq!(current.dns.as_ref().unwrap().url, "https://8.8.8.8/dns-query");
         assert!(current.dns.as_ref().unwrap().ssl.is_some());
         assert_eq!(current.dns.as_ref().unwrap().ssl.as_ref().unwrap().server_name.as_ref().unwrap(), &server_host);
+        assert_eq!(current.ext.as_ref().unwrap().opt_mask.unwrap(), 13);
     }
 }

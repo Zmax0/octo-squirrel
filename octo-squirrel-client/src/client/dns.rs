@@ -18,8 +18,6 @@ use bytes::BytesMut;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
-use futures::stream::SplitSink;
-use futures::stream::SplitStream;
 use h2::client::SendRequest;
 use hickory_resolver::caching_client::CachingClient;
 use hickory_resolver::lookup::Lookup;
@@ -54,11 +52,9 @@ use super::config::DnsConfig;
 use super::config::SslConfig;
 
 struct FramedWrapper<T, C, E, D> {
-    sink: SplitSink<Framed<T, C>, E>,
-    stream: SplitStream<Framed<T, C>>,
-    buffer: BytesMut,
-    marker_t: PhantomData<T>,
-    marker_c: PhantomData<C>,
+    framed: Framed<T, C>,
+    read_buffer: BytesMut,
+    marker_e: PhantomData<E>,
     marker_d: PhantomData<D>,
 }
 
@@ -68,8 +64,7 @@ where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Send + 'static + Unpin,
 {
     pub fn new(framed: Framed<T, C>) -> Self {
-        let (sink, stream) = framed.split();
-        Self { sink, stream, buffer: BytesMut::new(), marker_t: PhantomData, marker_c: PhantomData, marker_d: PhantomData }
+        Self { framed, read_buffer: BytesMut::new(), marker_e: PhantomData, marker_d: PhantomData }
     }
 }
 
@@ -77,30 +72,31 @@ impl<T, C, E, D> AsyncRead for FramedWrapper<T, C, E, D>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Send + 'static + Unpin,
+    E: Unpin,
     D: AsRef<[u8]> + Unpin,
 {
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-        if self.buffer.is_empty() {
-            match ready!(self.stream.poll_next_unpin(cx)) {
+        if self.read_buffer.is_empty() {
+            match ready!(self.framed.poll_next_unpin(cx)) {
                 Some(Ok(msg)) => {
                     let msg = msg.as_ref();
                     if msg.len() >= buf.remaining() {
                         let (left, right) = msg.split_at(buf.remaining());
                         buf.put_slice(left);
-                        self.buffer.extend_from_slice(right);
+                        self.read_buffer.extend_from_slice(right);
                     } else {
                         buf.put_slice(msg);
                     }
                     Poll::Ready(Ok(()))
                 }
-                Some(Err(e)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+                Some(Err(e)) => Poll::Ready(Err(io::Error::other(e))),
                 None => Poll::Pending,
             }
         } else {
-            if self.buffer.len() > buf.remaining() {
-                buf.put(self.buffer.split_to(buf.remaining()));
+            if self.read_buffer.len() > buf.remaining() {
+                buf.put(self.read_buffer.split_to(buf.remaining()));
             } else {
-                buf.put_slice(&take(&mut self.buffer));
+                buf.put_slice(&take(&mut self.read_buffer));
             }
             Poll::Ready(Ok(()))
         }
@@ -114,34 +110,34 @@ where
     E: for<'a> From<&'a [u8]> + Unpin,
     D: Unpin,
 {
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, std::io::Error>> {
-        match ready!(self.sink.poll_ready_unpin(cx)) {
-            Ok(_) => match self.sink.start_send_unpin(buf.into()) {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
+        match ready!(self.framed.poll_ready_unpin(cx)) {
+            Ok(_) => match self.framed.start_send_unpin(buf.into()) {
                 Ok(_) => Poll::Ready(Ok(buf.len())),
-                Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+                Err(e) => Poll::Ready(Err(io::Error::other(e))),
             },
-            Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+            Err(e) => Poll::Ready(Err(io::Error::other(e))),
         }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        self.sink.poll_flush_unpin(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        self.framed.poll_flush_unpin(cx).map_err(io::Error::other)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        self.sink.poll_close_unpin(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        self.framed.poll_close_unpin(cx).map_err(io::Error::other)
     }
 }
 
-pub struct A<'a> {
+pub struct DnsRequestContext<'a> {
     ssl: Option<&'a SslConfig>,
     uri: Uri,
     pub host: String,
     pub port: u16,
 }
 
-impl<'a> A<'a> {
-    pub fn new(config: &'a DnsConfig) -> anyhow::Result<A<'a>> {
+impl<'a> DnsRequestContext<'a> {
+    pub fn new(config: &'a DnsConfig) -> anyhow::Result<DnsRequestContext<'a>> {
         let uri = Uri::from_str(&config.url)?;
         let ssl = config.ssl.as_ref();
         let host = uri.host().ok_or(anyhow!("[dns] url has no host"))?.to_owned();
@@ -304,33 +300,33 @@ impl DnsRequestSender for DnsHandle {
     }
 }
 
-pub async fn a_query<T, C>(framed: Framed<T, C>, a: A<'_>, query: Query) -> anyhow::Result<Lookup>
+pub async fn a_query<T, C>(framed: Framed<T, C>, context: DnsRequestContext<'_>, query: Query) -> anyhow::Result<Lookup>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     C: Encoder<BytesMut, Error = anyhow::Error> + Decoder<Item = BytesMut, Error = anyhow::Error> + Send + 'static + Unpin,
 {
     let mut client_config;
     let server_name;
-    if let Some(ssl) = a.ssl {
+    if let Some(ssl) = context.ssl {
         client_config = super::template::rustls_client_config(ssl)?;
         if let Some(name) = ssl.server_name.as_ref() {
             server_name = ServerName::try_from(name.to_owned())?;
         } else {
-            server_name = ServerName::try_from(a.host)?;
+            server_name = ServerName::try_from(context.host)?;
         }
     } else {
-        client_config = ClientConfig::with_platform_verifier();
+        client_config = ClientConfig::with_platform_verifier()?;
         #[cfg(debug_assertions)]
         {
             use quinn::rustls::KeyLogFile;
             client_config.key_log = Arc::new(KeyLogFile::new());
         }
-        server_name = ServerName::try_from(a.host)?;
+        server_name = ServerName::try_from(context.host)?;
     }
     client_config.alpn_protocols = vec![b"h2".to_vec()];
     let tls_connector = TlsConnector::from(Arc::new(client_config));
     let tls_stream = tls_connector.connect(server_name, FramedWrapper::new(framed)).await?;
-    let stream = DnsHandle::new(a.uri.clone(), tls_stream).await?;
+    let stream = DnsHandle::new(context.uri, tls_stream).await?;
     let (dns_exchange, background) = DnsExchange::from_stream::<_, TokioTime>(stream);
     tokio::spawn(async move {
         background.await.unwrap_or_else(|e| error!("[dns] exchange background failed: {}", e));
@@ -377,8 +373,8 @@ impl Cache {
         self.0.insert(query, CacheValue { ip, valid_until });
     }
 
-    pub fn get(&self, qurey: &Query, now: Instant) -> Option<IpAddr> {
-        if let Some(value) = self.0.get(qurey) {
+    pub fn get(&self, query: &Query, now: Instant) -> Option<IpAddr> {
+        if let Some(value) = self.0.get(query) {
             if !value.is_current(now) {
                 return None;
             }

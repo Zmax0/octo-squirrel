@@ -1,4 +1,3 @@
-use std::future;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
@@ -9,6 +8,7 @@ use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
+use log::debug;
 use log::error;
 use log::info;
 use message::InboundIn;
@@ -122,7 +122,8 @@ pub(super) mod tcp {
         C: Encoder<OutboundIn, Error = anyhow::Error> + Decoder<Item = InboundIn, Error = anyhow::Error> + Send + 'static,
     {
         let (mut inbound_sink, mut inbound_stream) = codec.framed(inbound).split();
-        relay_to(&mut inbound_sink, &mut inbound_stream).await
+        relay_to(&mut inbound_sink, &mut inbound_stream).await;
+        let _ = inbound_sink.close().await;
     }
 }
 
@@ -158,6 +159,10 @@ where
                 }
             } else {
                 error!("[*-tcp] DNS resolve failed: peer={addr}");
+                debug!("[*-tcp] close inbound sink");
+                if let Err(e) = inbound_sink.close().await {
+                    error!("[*-tcp] close inbound sink failed; error={}", e);
+                }
             }
         }
         Some(Ok(InboundIn::RelayUdp(msg, addr))) => match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await {
@@ -192,10 +197,10 @@ where
 }
 
 async fn relay_bidirectional<ISink, IStream, O, OSink, OStream>(
-    inbound_sink: ISink,
-    inbound_stream: IStream,
+    mut inbound_sink: ISink,
+    mut inbound_stream: IStream,
     mut outbound_sink: OSink,
-    outbound_stream: OStream,
+    mut outbound_stream: OStream,
     first: InboundIn,
 ) -> relay::Result
 where
@@ -212,25 +217,73 @@ where
         },
         Err(e) => return relay::Result::Err(Side::Client, Side::Server, e),
     };
-    let outbound_stream = outbound_stream.filter_map(|r| future::ready(r.ok())).map(O::into).map(Ok);
-    let inbound_stream = inbound_stream.filter_map(|r| future::ready(r.ok())).map(InboundIn::try_into);
 
     let p_s_c = async {
-        match outbound_stream.forward(inbound_sink).await {
-            Ok(_) => Err::<(), _>(relay::Result::Close(Side::Peer, Side::Server)),
-            Err(e) => Err(relay::Result::Err(Side::Peer, Side::Server, e)),
+        loop {
+            match outbound_stream.next().await {
+                Some(Ok(msg)) => match inbound_sink.send(msg.into()).await {
+                    Ok(_) => (),
+                    Err(e) => return Err::<(), _>(relay::Result::Err(Side::Server, Side::Client, e)),
+                },
+                Some(Err(e)) => return Err::<(), _>(relay::Result::Err(Side::Client, Side::Server, e)),
+                None => {
+                    debug!("[*-tcp] close inbound sink");
+                    if let Err(e) = inbound_sink.close().await {
+                        error!("[*-tcp] close inbound sink failed; error={}", e);
+                    }
+                    return Err::<(), _>(relay::Result::Close(Side::Peer, Side::Server));
+                }
+            }
         }
     };
 
     let c_s_p = async {
-        match inbound_stream.forward(outbound_sink).await {
-            Ok(_) => Err::<(), _>(relay::Result::Close(Side::Client, Side::Server)),
-            Err(e) => Err(relay::Result::Err(Side::Client, Side::Server, e)),
+        loop {
+            match inbound_stream.next().await {
+                Some(Ok(msg)) => match msg.try_into() {
+                    Ok(msg) => match outbound_sink.send(msg).await {
+                        Ok(_) => (),
+                        Err(e) => return Err::<(), _>(relay::Result::Err(Side::Server, Side::Peer, e)),
+                    },
+                    Err(e) => return Err::<(), _>(relay::Result::Err(Side::Server, Side::Peer, e)),
+                },
+                Some(Err(e)) => return Err::<(), _>(relay::Result::Err(Side::Peer, Side::Server, e)),
+                None => {
+                    debug!("[*-tcp] close outbound sink");
+                    if let Err(e) = outbound_sink.close().await {
+                        error!("[*-tcp] close outbound sink failed; error={}", e);
+                    }
+                    return Err::<(), _>(relay::Result::Close(Side::Client, Side::Server));
+                }
+            }
         }
     };
 
     match tokio::try_join!(p_s_c, c_s_p) {
         Ok(_) => unreachable!("should never reach here"),
-        Err(e) => e,
+        Err(e) => {
+            match &e {
+                relay::Result::Close(Side::Peer, _)
+                | relay::Result::Close(_, Side::Peer)
+                | relay::Result::Err(Side::Peer, _, _)
+                | relay::Result::Err(_, Side::Peer, _) => {
+                    debug!("[*-tcp] close outbound sink");
+                    if let Err(e) = outbound_sink.close().await {
+                        error!("[*-tcp] close outbound sink failed; error={}", e);
+                    }
+                }
+                relay::Result::Close(Side::Client, _)
+                | relay::Result::Close(_, Side::Client)
+                | relay::Result::Err(Side::Client, _, _)
+                | relay::Result::Err(_, Side::Client, _) => {
+                    debug!("[*-tcp] close inbound sink");
+                    if let Err(e) = inbound_sink.close().await {
+                        error!("[*-tcp] close inbound sink failed; error={}", e);
+                    }
+                }
+                _ => (),
+            }
+            e
+        }
     }
 }

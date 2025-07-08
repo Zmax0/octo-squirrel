@@ -1,6 +1,60 @@
+use std::net::SocketAddr;
+
+use octo_squirrel::codec::DatagramPacket;
+use octo_squirrel::protocol::address::Address;
+
+use crate::client::config::ServerConfig;
+use crate::client::template::TcpOutboundContext;
+use crate::client::template::UdpOutbound;
+use crate::client::template::UdpOutboundContext;
+
 enum CodecState {
     Header,
     Body,
+}
+
+pub struct Trojan;
+
+impl TcpOutboundContext for Trojan {
+    type Codec = tcp::ClientCodec;
+    type Context = ServerConfig;
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<ServerConfig> {
+        Ok(config.clone())
+    }
+
+    fn new_codec(target: &Address, context: Self::Context) -> anyhow::Result<Self::Codec> {
+        tcp::new_codec(target, context.password.clone())
+    }
+}
+
+impl UdpOutboundContext for Trojan {
+    type Key = SocketAddr;
+
+    type Context = ServerConfig;
+
+    fn new_key(sender: std::net::SocketAddr, _: &Address) -> Self::Key {
+        sender
+    }
+
+    fn new_context(config: &ServerConfig) -> anyhow::Result<Self::Context> {
+        Ok(config.clone())
+    }
+}
+
+impl UdpOutbound for Trojan {
+    type OutboundIn = DatagramPacket;
+
+    type OutboundOut = DatagramPacket;
+
+    fn to_outbound_out(item: octo_squirrel::codec::DatagramPacket, _: SocketAddr) -> Self::OutboundOut {
+        let (content, target) = item;
+        (content, target)
+    }
+
+    fn to_inbound_in(item: Self::OutboundIn, _: &Address, sender: SocketAddr) -> (octo_squirrel::codec::DatagramPacket, SocketAddr) {
+        (item, sender)
+    }
 }
 
 pub(super) mod tcp {
@@ -74,9 +128,8 @@ pub(super) mod tcp {
 }
 
 pub(super) mod udp {
-    use std::net::SocketAddr;
-
     use anyhow::Result;
+    use anyhow::bail;
     use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
     use octo_squirrel::codec::WebSocketStream;
@@ -100,34 +153,32 @@ pub(super) mod udp {
     use crate::client::config::ServerConfig;
     use crate::client::template;
 
-    pub fn new_key(sender: SocketAddr, _: &Address) -> SocketAddr {
-        sender
-    }
-
     pub async fn new_quic_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<QuicStream, ClientCodec>> {
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        template::new_quic_outbound(&config.host, config.port, codec, config).await
+        if let Some(ssl_config) = &config.quic {
+            template::new_quic_outbound(&config.host, config.port, codec, ssl_config).await
+        } else {
+            bail!("ssl config is required for quic outbound");
+        }
     }
 
     pub async fn new_tls_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<TlsStream<TcpStream>, ClientCodec>> {
         let codec: ClientCodec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        template::new_tls_outbound(&config.host, config.port, codec, config).await
+        if let Some(ssl_config) = &config.ssl {
+            template::new_tls_outbound(&config.host, config.port, codec, ssl_config).await
+        } else {
+            bail!("ssl config is required for tls outbound");
+        }
     }
 
     pub async fn new_wss_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, ClientCodec>> {
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
-        template::new_wss_outbound(&config.host, config.port, codec, config).await
+        if let (Some(ssl_config), Some(ws_config)) = (&config.ssl, &config.ws) {
+            template::new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await
+        } else {
+            bail!("ws config and ssl config are required for wss outbound");
+        }
     }
-
-    pub fn to_outbound_send(item: DatagramPacket, _: SocketAddr) -> DatagramPacket {
-        let (content, target) = item;
-        (content, target)
-    }
-
-    pub fn to_inbound_recv(item: DatagramPacket, _: &Address, sender: SocketAddr) -> (DatagramPacket, SocketAddr) {
-        (item, sender)
-    }
-
     pub struct ClientCodec {
         key: [u8; 56],
         command: u8,

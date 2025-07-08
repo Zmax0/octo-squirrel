@@ -28,11 +28,9 @@ mod vmess;
 pub async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let servers = config::init()?;
-    if let Some(level) = env::args().nth(2) {
-        octo_squirrel::log::init(&level)?;
-    } else {
-        octo_squirrel::log::init("info")?;
-    }
+    let level = env::args().nth(2).unwrap_or("info".to_owned());
+    let root_level = env::args().nth(3).unwrap_or("info".to_owned());
+    octo_squirrel::log::init(&root_level, &level)?;
     let tasks: Vec<JoinHandle<()>> = servers.into_iter().map(|server| tokio::spawn(startup(server))).collect();
     join_all(tasks).await;
     Ok(())

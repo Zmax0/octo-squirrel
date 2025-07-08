@@ -31,12 +31,12 @@ Only support IPv4 at this time.
 |   `tcp`    |     `ws`      |    ✔     |      ✔      |   ✔   |   ✔    |
 |   `tcp`    |     `wss`     |    ✔     |      ✔      |   ✔   |   ✔    |
 |   `tcp`    |    `quic`     |    ✔     |      ✔      |   ✔   |   ✔    |
-|   `udp`    |     `udp`     |          |      ✔      |       |        |
-|   `udp`    |     `tcp`     |          |             |   ✔   |        |
-|   `udp`    |     `tls`     |          |             |   ✔   |   ✔    |
-|   `udp`    |     `ws`      |          |             |   ✔   |        |
-|   `udp`    |     `wss`     |          |             |   ✔   |   ✔    |
-|   `ucp`    |    `quic`     |          |             |   ✔   |   ✔    |
+|   `udp`    |     `udp`     |    ✔     |      ✔      |       |        |
+|   `udp`    |     `tcp`     |    ✔     |             |   ✔   |        |
+|   `udp`    |     `tls`     |    ✔     |             |   ✔   |   ✔    |
+|   `udp`    |     `ws`      |    ✔     |             |   ✔   |        |
+|   `udp`    |     `wss`     |    ✔     |             |   ✔   |   ✔    |
+|   `ucp`    |    `quic`     |    ✔     |             |   ✔   |   ✔    |
 
 ### Ciphers
 

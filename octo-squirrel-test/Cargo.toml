@@ -12,8 +12,8 @@ octo-squirrel-server = { path = "../octo-squirrel-server" }
 anyhow.workspace = true
 bytes.workspace = true
 console-subscriber.workspace = true
-hickory-resolver.workspace = true
-hickory-client = { version = "0.25.2", features = ["https-aws-lc-rs"] }
+hickory-resolver = { workspace = true, features = ["https-aws-lc-rs"] }
+hickory-client = { workspace = true, features = ["https-aws-lc-rs"] }
 rand.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
@@ -21,7 +21,7 @@ rustls-platform-verifier.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
-criterion.workspace = true
+criterion = { workspace = true, features = ["html_reports"] }
 
 [[bench]]
 name = "encrypt"

@@ -33,7 +33,7 @@ pub enum RequestCommand {
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum RequestOption {
     ChunkStream = 1,
-    ConnectionReuse = 2,
+    // ConnectionReuse(=2) is deprecated
     ChunkMasking = 4,
     GlobalPadding = 8,
     AuthenticatedLength = 16,
@@ -41,7 +41,7 @@ pub enum RequestOption {
 
 impl RequestOption {
     pub fn values() -> Vec<Self> {
-        vec![Self::ChunkStream, Self::ConnectionReuse, Self::ChunkMasking, Self::GlobalPadding, Self::AuthenticatedLength]
+        vec![Self::ChunkStream, Self::ChunkMasking, Self::GlobalPadding, Self::AuthenticatedLength]
     }
 
     pub fn from_mask(mask: u8) -> Vec<Self> {
@@ -102,14 +102,18 @@ impl RequestHeader {
         Self { version, command, option, security, address, id }
     }
 
-    pub fn default(command: RequestCommand, security: SecurityType, address: Address, uuid: &str) -> Result<Self, uuid::Error> {
-        Ok(Self {
-            version: VERSION,
+    pub fn client_with_default_opt(command: RequestCommand, security: SecurityType, address: Address, uuid: &str) -> Result<Self, uuid::Error> {
+        Ok(Self::new(
+            VERSION,
             command,
-            option: vec![RequestOption::ChunkStream, RequestOption::ChunkMasking, RequestOption::GlobalPadding, RequestOption::AuthenticatedLength],
+            vec![RequestOption::ChunkStream, RequestOption::ChunkMasking, RequestOption::GlobalPadding, RequestOption::AuthenticatedLength],
             security,
             address,
-            id: id::from_password(uuid)?,
-        })
+            id::from_password(uuid)?,
+        ))
+    }
+
+    pub fn client(command: RequestCommand, opt_mask: u8, security: SecurityType, address: Address, uuid: &str) -> Result<Self, uuid::Error> {
+        Ok(Self::new(VERSION, command, RequestOption::from_mask(opt_mask), security, address, id::from_password(uuid)?))
     }
 }
