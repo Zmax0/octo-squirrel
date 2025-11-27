@@ -61,7 +61,7 @@ fn merge_result(res: (anyhow::Result<()>, anyhow::Result<()>)) -> anyhow::Result
 async fn startup_tcp<RefContext, Context, NewCodec, Codec>(context: RefContext, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
 where
     RefContext: AsRef<Context>,
-    NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
+    NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send,
     Codec: Encoder<template::message::OutboundIn, Error = anyhow::Error>
         + Decoder<Item = template::message::InboundIn, Error = anyhow::Error>
         + Unpin
@@ -74,7 +74,7 @@ where
         (None, ws_config) => {
             while let Ok((inbound, _)) = listener.accept().await {
                 if ws_config.is_some() {
-                    tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.as_ref())?));
+                    tokio::spawn(template::tcp::accept_websocket_and_relay(inbound, new_codec(context.as_ref())?));
                 } else {
                     tokio::spawn(template::tcp::relay(inbound, new_codec(context.as_ref())?));
                 }
@@ -90,7 +90,7 @@ where
                 match tls_acceptor.accept(inbound).await {
                     Ok(inbound) => {
                         if ws_config.is_some() {
-                            tokio::spawn(template::tcp::accept_websocket_then_replay(inbound, new_codec(context.as_ref())?));
+                            tokio::spawn(template::tcp::accept_websocket_and_relay(inbound, new_codec(context.as_ref())?));
                         } else {
                             tokio::spawn(template::tcp::relay(inbound, codec));
                         }
@@ -106,7 +106,7 @@ where
 async fn startup_quic<RefContext, Context, NewCodec, Codec>(context: RefContext, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
 where
     RefContext: AsRef<Context>,
-    NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send + Sync + 'static,
+    NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send,
     Codec: Encoder<template::message::OutboundIn, Error = anyhow::Error>
         + Decoder<Item = template::message::InboundIn, Error = anyhow::Error>
         + Unpin

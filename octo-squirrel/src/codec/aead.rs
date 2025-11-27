@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::mem::size_of;
@@ -29,6 +30,25 @@ pub enum CipherMethod {
     ChaCha20Poly1305(ChaCha20Poly1305),
     XChaCha8Poly1305(XChaCha8Poly1305),
     XChaCha20Poly1305(XChaCha20Poly1305),
+}
+
+impl Debug for CipherMethod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self, f)
+    }
+}
+
+impl Display for CipherMethod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CipherMethod::Aes128Gcm(_) => write!(f, "aes-128-gcm"),
+            CipherMethod::Aes256Gcm(_) => write!(f, "aes-128-gcm"),
+            CipherMethod::ChaCha8Poly1305(_) => write!(f, "chacha8-poly1305"),
+            CipherMethod::ChaCha20Poly1305(_) => write!(f, "chacha20-poly1305"),
+            CipherMethod::XChaCha8Poly1305(_) => write!(f, "xchacha8-poly1305"),
+            CipherMethod::XChaCha20Poly1305(_) => write!(f, "xchacha20-poly1305"),
+        }
+    }
 }
 
 macro_rules! method_match_aead_trait {
@@ -224,6 +244,7 @@ impl Display for CountingNonceGenerator {
     }
 }
 
+#[derive(Debug)]
 pub struct IncreasingNonceGenerator {
     nonce: [u8; 12],
 }

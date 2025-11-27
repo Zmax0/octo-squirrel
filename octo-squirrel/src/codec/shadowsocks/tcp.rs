@@ -69,6 +69,7 @@ impl<const N: usize> AEADCipherCodec<N> {
             Some(ref mut encoder) => encoder.encode_payload(item, dst).map_err(|e| anyhow!(e)),
             None => {
                 let mut encoder = Self::init_payload_encoder(context, session, dst)?;
+                trace!("[tcp] init encoder {:?}", &encoder.auth);
                 Self::handle_payload_header(&mut encoder, context, session, &mut item, dst)?;
                 self.encoder = Some(encoder);
                 self.encode(context, session, item, dst)
@@ -134,7 +135,9 @@ impl<const N: usize> AEADCipherCodec<N> {
         match self.decoder {
             Some(ref mut decoder) => {
                 let mut dst = BytesMut::new();
+                trace!("[tcp] decode chunk, src={} bytes", src.remaining());
                 decoder.decode_payload(src, &mut dst).map_err(|e| anyhow!(e))?;
+                trace!("[tcp] decode chunk, dst={} bytes", dst.remaining());
                 if dst.is_empty() { Ok(None) } else { Ok(Some(dst)) }
             }
             None => self.init_payload_decoder(context, session, src),
@@ -149,9 +152,20 @@ impl<const N: usize> AEADCipherCodec<N> {
             self.init_aead_2022_payload_decoder(context, session, src)
         } else {
             let salt = src.split_to(session.identity.salt.len());
-            trace!("[tcp] get request salt {}", Base64::encode_string(&salt));
-            self.decoder = Some(super::aead::new_decoder(context.kind, &context.key, &salt).map_err(anyhow::Error::msg)?);
-            Ok(None)
+            trace!("[tcp] get request salt {:?}", ByteStr::new(&salt));
+            let decoder = super::aead::new_decoder(context.kind, &context.key, &salt).map_err(anyhow::Error::msg)?;
+            trace!("[tcp] init decoder {:?}", &decoder);
+            self.decoder = Some(decoder);
+            if matches!(session.mode, Mode::Server) && session.address.is_none() {
+                if let Some(mut first) = self.decode(context, session, src)? {
+                    session.address = Some(address::decode(&mut first)?);
+                    Ok(Some(first))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                self.decode(context, session, src)
+            }
         }
     }
 

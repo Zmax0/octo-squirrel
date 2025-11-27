@@ -102,10 +102,10 @@ pub(super) mod tcp {
 
     use super::*;
 
-    pub async fn accept_websocket_then_replay<I, C>(inbound: I, codec: C)
+    pub async fn accept_websocket_and_relay<I, C>(inbound: I, codec: C)
     where
         I: AsyncRead + AsyncWrite + Unpin,
-        C: Encoder<OutboundIn, Error = anyhow::Error> + Decoder<Item = InboundIn, Error = anyhow::Error> + Unpin + Send + 'static,
+        C: Encoder<OutboundIn, Error = anyhow::Error> + Decoder<Item = InboundIn, Error = anyhow::Error>,
     {
         match ServerBuilder::new().accept(inbound).await {
             Ok((_, inbound)) => {
@@ -119,7 +119,7 @@ pub(super) mod tcp {
     pub async fn relay<I, C>(inbound: I, codec: C)
     where
         I: AsyncRead + AsyncWrite + Unpin,
-        C: Encoder<OutboundIn, Error = anyhow::Error> + Decoder<Item = InboundIn, Error = anyhow::Error> + Send + 'static,
+        C: Encoder<OutboundIn, Error = anyhow::Error> + Decoder<Item = InboundIn, Error = anyhow::Error>,
     {
         let (mut inbound_sink, mut inbound_stream) = codec.framed(inbound).split();
         relay_to(&mut inbound_sink, &mut inbound_stream).await;
@@ -131,6 +131,7 @@ pub(super) mod quic {
     use tokio_util::codec::Framed;
 
     use super::*;
+
     pub async fn relay<C>(inbound: QuicStream, codec: C) -> anyhow::Result<()>
     where
         C: Encoder<OutboundIn, Error = anyhow::Error> + Decoder<Item = InboundIn, Error = anyhow::Error> + Send + 'static,

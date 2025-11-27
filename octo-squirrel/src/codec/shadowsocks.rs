@@ -16,6 +16,7 @@ use tokio_util::bytes;
 use super::aead::CipherMethod;
 use super::aead::IncreasingNonceGenerator;
 
+#[derive(Debug)]
 pub struct Authenticator {
     method: CipherMethod,
     nonce_generator: IncreasingNonceGenerator,
@@ -49,6 +50,7 @@ impl Authenticator {
     }
 }
 
+#[derive(Debug)]
 pub struct ChunkEncoder {
     payload_limit: usize,
     auth: Authenticator,
@@ -60,7 +62,7 @@ impl ChunkEncoder {
     }
 
     fn encode_chunk(&mut self, src: &mut BytesMut, len: usize, dst: &mut BytesMut) -> Result<(), aes_gcm::aead::Error> {
-        trace!("Encode chunk; len={}", len);
+        trace!("[tcp] encode chunk, src={:?} bytes", src.remaining());
         let tag_size = self.auth.method.tag_size();
         dst.reserve(2 + tag_size);
         let temp = &mut dst.chunk_mut()[..2 + tag_size];
@@ -71,6 +73,7 @@ impl ChunkEncoder {
         let mut temp = src.split_to(len);
         self.auth.seal(&mut temp)?;
         dst.extend_from_slice(&temp);
+        trace!("[tcp] encode chunk, dst={} bytes", dst.remaining());
         Ok(())
     }
 
@@ -98,11 +101,13 @@ impl ChunkEncoder {
     }
 }
 
+#[derive(Debug)]
 enum DecodeState {
     Length,
     Payload(usize),
 }
 
+#[derive(Debug)]
 pub struct ChunkDecoder {
     auth: Authenticator,
     state: DecodeState,
