@@ -80,8 +80,7 @@ pub(super) mod tcp {
         type Error = anyhow::Error;
 
         fn try_from(value: &ServerConfig) -> Result<Self, Self::Error> {
-            let kind = value.cipher;
-            let (key, identity_keys) = if kind.is_aead_2022() {
+            let (key, identity_keys) = if value.cipher.is_aead_2022() {
                 aead_2022::password_to_keys(&value.password).map_err(|e| anyhow!(e))?
             } else {
                 let key = aead::openssl_bytes_to_key(value.password.as_bytes());
@@ -144,7 +143,8 @@ pub(super) mod udp {
     use octo_squirrel::manager::packet_window::PacketWindowFilter;
     use octo_squirrel::protocol::address::Address;
     use octo_squirrel::protocol::shadowsocks::Mode;
-    use octo_squirrel::protocol::shadowsocks::aead_2022::password_to_keys;
+    use octo_squirrel::protocol::shadowsocks::aead;
+    use octo_squirrel::protocol::shadowsocks::aead_2022;
     use tokio::net::UdpSocket;
     use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Decoder;
@@ -162,7 +162,12 @@ pub(super) mod udp {
 
     impl<const N: usize> Client<N> {
         pub fn new(config: &ServerConfig) -> anyhow::Result<Client<N>> {
-            let (key, identity_keys) = password_to_keys(&config.password).map_err(|e| anyhow!(e))?;
+            let (key, identity_keys) = if config.cipher.is_aead_2022() {
+                aead_2022::password_to_keys(&config.password).map_err(|e| anyhow!(e))?
+            } else {
+                let key = aead::openssl_bytes_to_key(config.password.as_bytes());
+                (key, Vec::with_capacity(0))
+            };
             Ok(Client { kind: config.cipher, key: Arc::new(key), identity_keys: Arc::from(identity_keys) })
         }
     }
