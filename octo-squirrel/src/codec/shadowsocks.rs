@@ -24,7 +24,8 @@ pub struct Authenticator {
 
 impl Authenticator {
     fn new(method: CipherMethod) -> Self {
-        Self { method, nonce_generator: IncreasingNonceGenerator::init() }
+        let nonce_size = method.nonce_size();
+        Self { method, nonce_generator: IncreasingNonceGenerator::init(nonce_size) }
     }
 
     fn size_bytes(&self) -> usize {

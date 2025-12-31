@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::mem::size_of;
+use std::usize;
 
 use aes::cipher::Unsigned;
 use aes_gcm::AeadCore;
@@ -92,6 +93,10 @@ impl CipherMethod {
                 let key = &key[..<ChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];
                 Self::ChaCha20Poly1305(ChaCha20Poly1305::new(Key::<ChaCha20Poly1305>::from_slice(key)))
             }
+            CipherKind::XChaCha20Poly1305 => {
+                let key = &key[..<XChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];
+                Self::XChaCha20Poly1305(XChaCha20Poly1305::new(Key::<XChaCha20Poly1305>::from_slice(key)))
+            }
             CipherKind::Aead2022Blake3ChaCha8Poly1305 => {
                 let key = &key[..<ChaCha8Poly1305 as KeySizeUser>::KeySize::USIZE];
                 Self::ChaCha8Poly1305(ChaCha8Poly1305::new(Key::<ChaCha8Poly1305>::from_slice(key)))
@@ -149,6 +154,8 @@ pub enum CipherKind {
     Aes256Gcm,
     #[serde(rename = "chacha20-poly1305", alias = "chacha20-ietf-poly1305")]
     ChaCha20Poly1305,
+    #[serde(rename = "xchacha20-poly1305")]
+    XChaCha20Poly1305,
     #[serde(rename = "2022-blake3-aes-128-gcm")]
     Aead2022Blake3Aes128Gcm,
     #[serde(rename = "2022-blake3-aes-256-gcm")]
@@ -167,6 +174,7 @@ macro_rules! kind_match_aead {
             Self::Aes128Gcm | Self::Aead2022Blake3Aes128Gcm => <Aes128Gcm as $trait>::$type::USIZE,
             Self::Aes256Gcm | Self::Aead2022Blake3Aes256Gcm => <Aes256Gcm as $trait>::$type::USIZE,
             Self::ChaCha20Poly1305 | Self::Aead2022Blake3ChaCha20Poly1305 => <ChaCha20Poly1305 as $trait>::$type::USIZE,
+            Self::XChaCha20Poly1305 => <XChaCha20Poly1305 as $trait>::$type::USIZE,
             Self::Aead2022Blake3ChaCha8Poly1305 => <ChaCha8Poly1305 as $trait>::$type::USIZE,
             Self::Unknown => panic!("unknown cipher kind"),
         }
@@ -203,6 +211,7 @@ impl Display for CipherKind {
             CipherKind::Aes128Gcm => write!(f, "aes-128-gcm"),
             CipherKind::Aes256Gcm => write!(f, "aes-256-gcm"),
             CipherKind::ChaCha20Poly1305 => write!(f, "chacha20-poly1305"),
+            CipherKind::XChaCha20Poly1305 => write!(f, "xchacha20-poly1305"),
             CipherKind::Aead2022Blake3Aes128Gcm => write!(f, "2022-blake3-aes-128-gcm"),
             CipherKind::Aead2022Blake3Aes256Gcm => write!(f, "2022-blake3-aes-256-gcm"),
             CipherKind::Aead2022Blake3ChaCha8Poly1305 => write!(f, "2022-blake3-chacha8-poly1305"),
@@ -246,22 +255,24 @@ impl Display for CountingNonceGenerator {
 
 #[derive(Debug)]
 pub struct IncreasingNonceGenerator {
-    nonce: [u8; 12],
+    offset: usize,
+    nonce: [u8; 24],
 }
 
 impl IncreasingNonceGenerator {
-    pub fn init() -> Self {
-        Self { nonce: [u8::MAX; 12] }
+    pub fn init(offset: usize) -> Self {
+        assert!(offset <= 24);
+        Self { nonce: [u8::MAX; 24], offset }
     }
 
     pub fn generate(&mut self) -> &[u8] {
-        for i in 0..self.nonce.len() {
+        for i in 0..self.offset {
             self.nonce[i] = self.nonce[i].overflowing_add(1).0;
             if self.nonce[i] != 0 {
                 break;
             }
         }
-        &self.nonce
+        &self.nonce[..self.offset]
     }
 }
 
@@ -285,14 +296,14 @@ mod test {
 
     #[test]
     fn test_generate_increasing_nonce() {
-        let nonce = [0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let mut generator = IncreasingNonceGenerator { nonce };
+        let nonce = [0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut generator = IncreasingNonceGenerator { nonce, offset: 12 };
         assert_eq!(generator.generate(), [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     }
 
     #[test]
     fn test_generate_initial_aead_nonce() {
-        assert_eq!(IncreasingNonceGenerator::init().generate(), [0; 12])
+        assert_eq!(IncreasingNonceGenerator::init(12).generate(), vec![0; 12])
     }
 
     #[test]

@@ -52,6 +52,7 @@ pub async fn startup(config: &ServerConfig) -> anyhow::Result<()> {
         CipherKind::Aes256Gcm
         | CipherKind::Aead2022Blake3Aes256Gcm
         | CipherKind::ChaCha20Poly1305
+        | CipherKind::XChaCha20Poly1305
         | CipherKind::Aead2022Blake3ChaCha8Poly1305
         | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
             let mut user_manager: ServerUserManager<32> = ServerUserManager::new();

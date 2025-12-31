@@ -49,6 +49,7 @@ async fn transfer_tcp(listener: TcpListener, config: ServerConfig) {
             CipherKind::Aes256Gcm
             | CipherKind::Aead2022Blake3Aes256Gcm
             | CipherKind::ChaCha20Poly1305
+            | CipherKind::XChaCha20Poly1305
             | CipherKind::Aead2022Blake3ChaCha8Poly1305
             | CipherKind::Aead2022Blake3ChaCha20Poly1305 => shadowsocks::Shadowsocks::<32>::transfer_tcp(listener, config).await,
             CipherKind::Unknown => error!("unknown cipher kind"),
@@ -67,6 +68,7 @@ async fn transfer_udp(socket: UdpSocket, current: ServerConfig) {
             CipherKind::Aes256Gcm
             | CipherKind::Aead2022Blake3Aes256Gcm
             | CipherKind::ChaCha20Poly1305
+            | CipherKind::XChaCha20Poly1305
             | CipherKind::Aead2022Blake3ChaCha8Poly1305
             | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 shadowsocks::Shadowsocks::<32>::transfer_udp(socket, current, shadowsocks::udp::new_plain_outbound::<32>).await
