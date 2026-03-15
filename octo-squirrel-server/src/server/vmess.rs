@@ -1,3 +1,5 @@
+use std::mem;
+
 use aes_gcm::AeadCore;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::KeyInit;
@@ -35,6 +37,7 @@ pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerAeadCodec> {
 
 enum DecodeState {
     Init,
+    Connect(RequestHeader, ServerSession, Box<AEADBodyCodec>),
     Ready(RequestHeader, ServerSession, Box<AEADBodyCodec>),
 }
 
@@ -153,7 +156,7 @@ impl Decoder for ServerAeadCodec {
     type Error = anyhow::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match self.decode_state {
+        match mem::replace(&mut self.decode_state, DecodeState::Init) {
             DecodeState::Init => {
                 let auth_id = &src[0..16];
                 if let Some(key) = auth_id::matching(auth_id, &self.keys)? {
@@ -182,13 +185,12 @@ impl Decoder for ServerAeadCodec {
                         if fnv::fnv1a32(&data) != actual {
                             bail!("invalid auth, but this is a AEAD request")
                         }
-                        let mut header = RequestHeader::new(version, command, RequestOption::from_mask(option), security, address, key);
+                        let header = RequestHeader::new(version, command, RequestOption::from_mask(option), security, address, key);
                         let mut session = ServerSession::new(request_body_iv, request_body_key, response_header);
                         debug!("New session; {}", session);
-                        let mut decoder = AEADBodyCodec::new_decoder(&header, &mut session)?;
-                        let res = Self::decode_header(src, &mut header, &mut session, &mut decoder);
-                        self.decode_state = DecodeState::Ready(header, session, Box::new(decoder));
-                        res
+                        let decoder = AEADBodyCodec::new_decoder(&header, &mut session)?;
+                        self.decode_state = DecodeState::Connect(header, session, Box::new(decoder));
+                        self.decode(src)
                     } else {
                         Ok(None)
                     }
@@ -196,11 +198,23 @@ impl Decoder for ServerAeadCodec {
                     bail!("no matched authID")
                 }
             }
-            DecodeState::Ready(ref mut header, ref mut session, ref mut decoder) => {
+            DecodeState::Connect(mut header, mut session, mut decoder) => {
+                if let Some(msg) = Self::decode_header(src, &mut header, &mut session, &mut decoder)? {
+                    self.decode_state = DecodeState::Ready(header, session, decoder);
+                    Ok(Some(msg))
+                } else {
+                    self.decode_state = DecodeState::Connect(header, session, decoder);
+                    Ok(None)
+                }
+            }
+            DecodeState::Ready(mut header, mut session, mut decoder) => {
                 if src.is_empty() {
+                    self.decode_state = DecodeState::Ready(header, session, decoder);
                     Ok(None)
                 } else {
-                    Self::decode_body(src, header, session, decoder)
+                    let res = Self::decode_body(src, &mut header, &mut session, &mut decoder);
+                    self.decode_state = DecodeState::Ready(header, session, decoder);
+                    res
                 }
             }
         }
