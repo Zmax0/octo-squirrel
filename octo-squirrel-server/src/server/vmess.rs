@@ -1,5 +1,3 @@
-use std::mem;
-
 use aes_gcm::AeadCore;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::KeyInit;
@@ -37,19 +35,24 @@ pub fn new_codec(config: &ServerConfig) -> anyhow::Result<ServerAeadCodec> {
 
 enum DecodeState {
     Init,
-    Connect(RequestHeader, ServerSession, Box<AEADBodyCodec>),
-    Ready(RequestHeader, ServerSession, Box<AEADBodyCodec>),
+    Ready(RequestHeader, ServerSession, Box<AEADBodyCodec> /*boxing the large variant*/),
 }
 
 enum EncodeState {
     Init,
-    Ready(Box<AEADBodyCodec>),
+    Ready(Box<AEADBodyCodec> /*boxing the large variant*/),
+}
+
+enum RelayState {
+    Init,
+    Ready,
 }
 
 pub struct ServerAeadCodec {
     keys: Vec<[u8; 16]>,
     decode_state: DecodeState,
     encode_state: EncodeState,
+    relay_state: RelayState,
 }
 
 impl ServerAeadCodec {
@@ -66,7 +69,7 @@ impl ServerAeadCodec {
         }
     }
 
-    fn decode_header(
+    fn decode0(
         src: &mut BytesMut,
         header: &mut RequestHeader,
         session: &mut ServerSession,
@@ -90,7 +93,7 @@ impl ServerAeadCodec {
         }
     }
 
-    fn decode_body(
+    fn decode(
         src: &mut BytesMut,
         header: &mut RequestHeader,
         session: &mut ServerSession,
@@ -156,7 +159,7 @@ impl Decoder for ServerAeadCodec {
     type Error = anyhow::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match mem::replace(&mut self.decode_state, DecodeState::Init) {
+        match self.decode_state {
             DecodeState::Init => {
                 let auth_id = &src[0..16];
                 if let Some(key) = auth_id::matching(auth_id, &self.keys)? {
@@ -189,7 +192,7 @@ impl Decoder for ServerAeadCodec {
                         let mut session = ServerSession::new(request_body_iv, request_body_key, response_header);
                         debug!("New session; {}", session);
                         let decoder = AEADBodyCodec::new_decoder(&header, &mut session)?;
-                        self.decode_state = DecodeState::Connect(header, session, Box::new(decoder));
+                        self.decode_state = DecodeState::Ready(header, session, Box::new(decoder));
                         self.decode(src)
                     } else {
                         Ok(None)
@@ -198,23 +201,18 @@ impl Decoder for ServerAeadCodec {
                     bail!("no matched authID")
                 }
             }
-            DecodeState::Connect(mut header, mut session, mut decoder) => {
-                if let Some(msg) = Self::decode_header(src, &mut header, &mut session, &mut decoder)? {
-                    self.decode_state = DecodeState::Ready(header, session, decoder);
-                    Ok(Some(msg))
-                } else {
-                    self.decode_state = DecodeState::Connect(header, session, decoder);
-                    Ok(None)
-                }
-            }
-            DecodeState::Ready(mut header, mut session, mut decoder) => {
+            DecodeState::Ready(ref mut header, ref mut session, ref mut decoder) => {
                 if src.is_empty() {
-                    self.decode_state = DecodeState::Ready(header, session, decoder);
                     Ok(None)
                 } else {
-                    let res = Self::decode_body(src, &mut header, &mut session, &mut decoder);
-                    self.decode_state = DecodeState::Ready(header, session, decoder);
-                    res
+                    match self.relay_state {
+                        RelayState::Init => Self::decode0(src, header, session, decoder).inspect(|res| {
+                            if res.is_some() {
+                                self.relay_state = RelayState::Ready
+                            }
+                        }),
+                        RelayState::Ready => Self::decode(src, header, session, decoder),
+                    }
                 }
             }
         }
@@ -227,6 +225,6 @@ impl TryFrom<&ServerConfig> for ServerAeadCodec {
     fn try_from(config: &ServerConfig) -> Result<Self, Self::Error> {
         let uuid = config.user.iter().map(|u| &u.password).collect();
         let keys = id::from_passwords(uuid)?;
-        Ok(Self { keys, decode_state: DecodeState::Init, encode_state: EncodeState::Init })
+        Ok(Self { keys, decode_state: DecodeState::Init, encode_state: EncodeState::Init, relay_state: RelayState::Init })
     }
 }
