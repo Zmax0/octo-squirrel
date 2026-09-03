@@ -8,7 +8,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use octo_squirrel::codec::aead::CipherKind;
 use octo_squirrel::codec::aead::CipherMethod;
-use rand::Rng;
+use rand::RngExt;
 
 fn by_chunk(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> anyhow::Result<()> {
     let kind = CipherKind::Aes128Gcm;
@@ -20,7 +20,7 @@ fn by_chunk(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> anyhow::Result<()> {
     let encrypted_size_bytes = &mut dst.chunk_mut()[..cipher_text_len];
     let encrypted_size_bytes = unsafe { slice::from_raw_parts_mut(encrypted_size_bytes.as_mut_ptr(), encrypted_size_bytes.len()) };
     dst.extend_from_slice(plaintext);
-    cipher.encrypt_in_place_detached(&nonce, &[], encrypted_size_bytes).map_err(|e| anyhow!(e))?;
+    cipher.encrypt_inout_detached(&nonce, &[], encrypted_size_bytes).map_err(|e| anyhow!(e))?;
     unsafe { dst.advance_mut(tag_size) };
     Ok(())
 }

@@ -3,7 +3,7 @@ use aes_gcm::Aes128Gcm;
 use aes_gcm::KeyInit;
 use aes_gcm::aead::Aead;
 use aes_gcm::aead::Payload;
-use aes_gcm::aes::cipher::Unsigned;
+use aes_gcm::aead::array::typenum::Unsigned;
 use anyhow::anyhow;
 use anyhow::bail;
 use log::debug;

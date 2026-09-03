@@ -1,5 +1,5 @@
 pub mod dice {
-    use rand::RngCore;
+    use rand::Rng;
     pub fn roll_bytes(len: usize) -> Vec<u8> {
         let mut dest = vec![0; len];
         fill_bytes(&mut dest);

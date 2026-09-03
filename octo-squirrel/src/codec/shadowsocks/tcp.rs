@@ -10,7 +10,7 @@ use base64ct::Encoding;
 use byte_string::ByteStr;
 use log::trace;
 use lru_time_cache::LruCache;
-use rand::Rng;
+use rand::RngExt;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
 use tokio_util::bytes::BytesMut;
@@ -184,7 +184,7 @@ impl<const N: usize> AEADCipherCodec<N> {
         let eih_len = if require_eih { 16 } else { 0 };
         let header_len = eih_len + 1 + 8 + request_salt_len + 2 + tag_size;
         if src.remaining() < header_len {
-            bail!("header too short, expecting {} bytes, but found {} bytes", header_len + N, src.remaining());
+            bail!("header too short, expecting {} bytes, but found {} bytes", header_len, src.remaining());
         }
         let mut salt = [0; N];
         let mut _src = Cursor::new(src);
@@ -281,7 +281,7 @@ mod test {
     use anyhow::anyhow;
     use base64ct::Base64;
     use base64ct::Encoding;
-    use rand::Rng;
+    use rand::RngExt;
     use rand::distr::Alphanumeric;
     use tokio_util::bytes::Buf;
     use tokio_util::bytes::BytesMut;

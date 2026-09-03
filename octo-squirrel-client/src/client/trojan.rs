@@ -132,7 +132,6 @@ pub(super) mod udp {
     use anyhow::bail;
     use octo_squirrel::codec::DatagramPacket;
     use octo_squirrel::codec::QuicStream;
-    use octo_squirrel::codec::WebSocketStream;
     use octo_squirrel::protocol::address::Address;
     use octo_squirrel::protocol::socks5::Socks5CommandType;
     use octo_squirrel::protocol::socks5::address;
@@ -140,6 +139,8 @@ pub(super) mod udp {
     use octo_squirrel::util::hex;
     use sha2::Digest;
     use sha2::Sha224;
+    use tokio::io::AsyncRead;
+    use tokio::io::AsyncWrite;
     use tokio::net::TcpStream;
     use tokio_rustls::client::TlsStream;
     use tokio_util::bytes::Buf;
@@ -171,7 +172,10 @@ pub(super) mod udp {
         }
     }
 
-    pub async fn new_wss_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, ClientCodec>> {
+    pub async fn new_wss_outbound(
+        target: &Address,
+        config: &ServerConfig,
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite + Unpin + use<>, ClientCodec>> {
         let codec = ClientCodec::new(config.password.as_bytes(), Socks5CommandType::UdpAssociate as u8, target.clone());
         if let (Some(ssl_config), Some(ws_config)) = (&config.ssl, &config.ws) {
             template::new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await

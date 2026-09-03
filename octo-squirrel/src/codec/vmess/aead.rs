@@ -7,10 +7,8 @@ use digest::ExtendableOutput;
 use digest::InvalidLength;
 use digest::Update;
 use digest::XofReader;
-use digest::core_api::XofReaderCoreWrapper;
 use log::trace;
-use sha3::Shake128;
-use sha3::Shake128ReaderCore;
+use shake::Shake128;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BytesMut;
 
@@ -248,7 +246,7 @@ impl Authenticator {
 }
 
 struct ShakeSizeParser {
-    reader: XofReaderCoreWrapper<Shake128ReaderCore>,
+    reader: shake::Shake128Reader,
     buffer: [u8; 2],
 }
 
@@ -291,7 +289,7 @@ impl ShakeSizeParser {
 mod test {
     use anyhow::Result;
     use anyhow::anyhow;
-    use rand::Rng;
+    use rand::RngExt;
     use rand::random;
     use tokio_util::bytes::BytesMut;
 

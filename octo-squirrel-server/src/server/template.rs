@@ -1,8 +1,8 @@
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
+use std::time::Duration;
 
-use anyhow::anyhow;
 use anyhow::bail;
 use futures::Sink;
 use futures::SinkExt;
@@ -94,10 +94,17 @@ pub(super) mod message {
     }
 }
 
+async fn close_sink<Item, S>(sink: &mut S) -> anyhow::Result<()>
+where
+    S: Sink<Item, Error = anyhow::Error> + Unpin,
+{
+    tokio::time::timeout(Duration::from_secs(5), sink.close()).await.map_err(|_| anyhow::anyhow!("close timed out"))?
+}
+
 pub(super) mod tcp {
     use message::InboundIn;
     use message::OutboundIn;
-    use octo_squirrel::codec::WebSocketStream;
+    use octo_squirrel::codec::websocket_stream;
     use tokio_util::codec::Framed;
 
     use super::*;
@@ -109,7 +116,7 @@ pub(super) mod tcp {
     {
         match ServerBuilder::new().accept(inbound).await {
             Ok((_, inbound)) => {
-                let (mut inbound_sink, mut inbound_stream) = Framed::new(WebSocketStream::new(inbound), codec).split();
+                let (mut inbound_sink, mut inbound_stream) = Framed::new(websocket_stream(inbound), codec).split();
                 relay_to(&mut inbound_sink, &mut inbound_stream).await;
             }
             Err(e) => error!("[tcp] websocket handshake failed; error={}", e),
@@ -123,13 +130,11 @@ pub(super) mod tcp {
     {
         let (mut inbound_sink, mut inbound_stream) = codec.framed(inbound).split();
         relay_to(&mut inbound_sink, &mut inbound_stream).await;
-        let _ = inbound_sink.close().await;
+        let _ = close_sink(&mut inbound_sink).await;
     }
 }
 
 pub(super) mod quic {
-    use tokio_util::codec::Framed;
-
     use super::*;
 
     pub async fn relay<C>(inbound: QuicStream, codec: C) -> anyhow::Result<()>
@@ -138,8 +143,7 @@ pub(super) mod quic {
     {
         let (mut inbound_sink, mut inbound_stream) = codec.framed(inbound).split();
         relay_to(&mut inbound_sink, &mut inbound_stream).await;
-        let inbound = inbound_sink.reunite(inbound_stream).map(Framed::into_inner).map_err(|e| anyhow!(e))?;
-        inbound.close().await
+        Ok(())
     }
 }
 
@@ -161,7 +165,7 @@ where
             } else {
                 error!("[*-tcp] DNS resolve failed: peer={addr}");
                 debug!("[*-tcp] close inbound sink");
-                if let Err(e) = inbound_sink.close().await {
+                if let Err(e) = close_sink(inbound_sink).await {
                     error!("[*-tcp] close inbound sink failed; error={}", e);
                 }
             }
@@ -229,7 +233,7 @@ where
                 Some(Err(e)) => return Err::<(), _>(relay::Result::Err(Side::Client, Side::Server, e)),
                 None => {
                     debug!("[*-tcp] close inbound sink");
-                    if let Err(e) = inbound_sink.close().await {
+                    if let Err(e) = close_sink(&mut inbound_sink).await {
                         error!("[*-tcp] close inbound sink failed; error={}", e);
                     }
                     return Err::<(), _>(relay::Result::Close(Side::Peer, Side::Server));
@@ -251,7 +255,7 @@ where
                 Some(Err(e)) => return Err::<(), _>(relay::Result::Err(Side::Peer, Side::Server, e)),
                 None => {
                     debug!("[*-tcp] close outbound sink");
-                    if let Err(e) = outbound_sink.close().await {
+                    if let Err(e) = close_sink(&mut outbound_sink).await {
                         error!("[*-tcp] close outbound sink failed; error={}", e);
                     }
                     return Err::<(), _>(relay::Result::Close(Side::Client, Side::Server));
@@ -269,7 +273,7 @@ where
                 | relay::Result::Err(Side::Peer, _, _)
                 | relay::Result::Err(_, Side::Peer, _) => {
                     debug!("[*-tcp] close outbound sink");
-                    if let Err(e) = outbound_sink.close().await {
+                    if let Err(e) = close_sink(&mut outbound_sink).await {
                         error!("[*-tcp] close outbound sink failed; error={}", e);
                     }
                 }
@@ -278,7 +282,7 @@ where
                 | relay::Result::Err(Side::Client, _, _)
                 | relay::Result::Err(_, Side::Client, _) => {
                     debug!("[*-tcp] close inbound sink");
-                    if let Err(e) = inbound_sink.close().await {
+                    if let Err(e) = close_sink(&mut inbound_sink).await {
                         error!("[*-tcp] close inbound sink failed; error={}", e);
                     }
                 }

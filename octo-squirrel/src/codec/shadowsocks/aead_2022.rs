@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use std::time::SystemTimeError;
 use std::time::UNIX_EPOCH;
 
-use rand::Rng;
+use rand::RngExt;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BytesMut;
 

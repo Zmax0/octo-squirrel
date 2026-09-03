@@ -17,9 +17,9 @@ use futures::SinkExt;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::SplitSink;
-use hickory_resolver::Name;
 use hickory_resolver::lookup_ip::LookupIp;
 use hickory_resolver::proto::op::Query;
+use hickory_resolver::proto::rr::Name;
 use hickory_resolver::proto::rr::RecordType;
 use http::HeaderName;
 use http::HeaderValue;
@@ -31,7 +31,8 @@ use lru_time_cache::LruCache;
 use octo_squirrel::codec::BytesCodec;
 use octo_squirrel::codec::DatagramPacket;
 use octo_squirrel::codec::QuicStream;
-use octo_squirrel::codec::WebSocketStream;
+use octo_squirrel::codec::quic_stream;
+use octo_squirrel::codec::websocket_stream;
 use octo_squirrel::config::WebSocketConfig;
 use octo_squirrel::protocol::address::Address;
 use octo_squirrel::protocol::socks5::codec::Socks5UdpCodec;
@@ -39,6 +40,8 @@ use octo_squirrel::relay;
 use octo_squirrel::relay::Side;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UdpSocket;
@@ -228,7 +231,7 @@ impl OutboundContext<'_> {
                     super::dns::a_query(outbound, dns_request_context, query.clone()).await?
                 }
             };
-            let ttl = lookup.records().iter().next().map(|r| r.ttl()).ok_or(anyhow!("[dns] no ttl found"))?;
+            let ttl = lookup.answers().first().map(|r| r.ttl).ok_or(anyhow!("[dns] no ttl found"))?;
             let ip = LookupIp::from(lookup).iter().next().ok_or(anyhow!("[dns] no ip found"))?;
             dns_config.cache.insert(query, ip, ttl, Instant::now());
             debug!("[dns] new query; {} => {:?}", &peer_addr.get_host(), ip);
@@ -291,7 +294,7 @@ where
     match tokio::try_join!(l_c_s, s_c_l) {
         Ok(_) => unreachable!("should never reach here"),
         Err(res) => {
-            match tokio::join!(c_s.close(), c_l.close()) {
+            match tokio::join!(close_sink(&mut c_s), close_sink(&mut c_l)) {
                 (Ok(_), Ok(_)) => (),
                 (Ok(_), Err(e)) => error!("[tcp] close client*-local failed; error={}", e),
                 (Err(e), Ok(_)) => error!("[tcp] close client*-server failed; error={}", e),
@@ -300,6 +303,13 @@ where
             res
         }
     }
+}
+
+async fn close_sink<S>(sink: &mut S) -> anyhow::Result<()>
+where
+    S: Sink<BytesMut, Error = anyhow::Error> + Unpin,
+{
+    time::timeout(Duration::from_secs(5), sink.close()).await.map_err(|_| anyhow::anyhow!("close timed out"))?
 }
 
 pub(crate) trait UdpOutbound: UdpOutboundContext + TcpOutboundContext {
@@ -445,7 +455,7 @@ where
     let server_name = if let Some(server_name) = &ssl_config.server_name { server_name } else { &host.to_owned() };
     let conn = endpoint.connect(format!("{host}:{port}").parse()?, server_name)?.await?;
     let (send, recv) = conn.open_bi().await?;
-    Ok(codec.framed(QuicStream::new(send, recv)))
+    Ok(codec.framed(quic_stream(send, recv)))
 }
 
 pub async fn new_tls_outbound<C, E, D>(host: &str, port: u16, codec: C, ssl_config: &SslConfig) -> Result<Framed<TlsStream<TcpStream>, C>>
@@ -456,13 +466,18 @@ where
     Ok(codec.framed(outbound))
 }
 
-pub async fn new_ws_outbound<C, E, D>(host: &str, port: u16, codec: C, ws_config: &WebSocketConfig) -> Result<Framed<WebSocketStream<TcpStream>, C>>
+pub async fn new_ws_outbound<C, E, D>(
+    host: &str,
+    port: u16,
+    codec: C,
+    ws_config: &WebSocketConfig,
+) -> Result<Framed<impl AsyncRead + AsyncWrite + Unpin + use<C, E, D>, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
     let outbound = TcpStream::connect((host, port)).await?;
     let (outbound, _) = new_ws_builder(host, port, ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
-    let outbound = WebSocketStream::new(outbound);
+    let outbound = websocket_stream(outbound);
     Ok(Framed::new(outbound, codec))
 }
 
@@ -472,13 +487,13 @@ pub async fn new_wss_outbound<C, D, E>(
     codec: C,
     ssl_config: &SslConfig,
     ws_config: &WebSocketConfig,
-) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, C>>
+) -> Result<Framed<impl AsyncRead + AsyncWrite + Unpin + use<C, D, E>, C>>
 where
     C: Encoder<E, Error = anyhow::Error> + Decoder<Item = D, Error = anyhow::Error> + Unpin,
 {
     let outbound = rustls_stream(host, port, ssl_config).await?;
     let (outbound, _) = new_ws_builder(host, port, ws_config)?.connect_on(outbound).await.map_err(|e| anyhow!(e))?;
-    let outbound = WebSocketStream::new(outbound);
+    let outbound = websocket_stream(outbound);
     Ok(Framed::new(outbound, codec))
 }
 

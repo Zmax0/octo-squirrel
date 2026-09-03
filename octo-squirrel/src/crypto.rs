@@ -1,7 +1,7 @@
 use aes::Aes128;
 use aes::Aes256;
-use aes::cipher::BlockDecryptMut;
-use aes::cipher::BlockEncryptMut;
+use aes::cipher::BlockModeDecrypt;
+use aes::cipher::BlockModeEncrypt;
 use aes::cipher::block_padding::NoPadding;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::KeySizeUser;
@@ -16,7 +16,7 @@ macro_rules! aes_ecb_no_padding_impl {
                 type EcbEnc = Encryptor<$aes>;
                 EcbEnc::new_from_slice(&key[..<$aes as KeySizeUser>::key_size()])
                     .expect("Invalid length")
-                    .encrypt_padded_mut::<NoPadding>(buf, len)
+                    .encrypt_padded::<NoPadding>(buf, len)
                     .expect("Encrypt error");
             }
 
@@ -24,7 +24,7 @@ macro_rules! aes_ecb_no_padding_impl {
                 type EcbDec = Decryptor<$aes>;
                 EcbDec::new_from_slice(&key[..<$aes as KeySizeUser>::key_size()])
                     .expect("Invalid length")
-                    .decrypt_padded_mut::<NoPadding>(buf)
+                    .decrypt_padded::<NoPadding>(buf)
                     .expect("Decrypt error");
             }
         }

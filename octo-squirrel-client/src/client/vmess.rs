@@ -3,10 +3,10 @@ use std::mem::size_of;
 use std::net::SocketAddr;
 
 use aes_gcm::AeadCore;
-use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::KeyInit;
-use aes_gcm::aes::cipher::Unsigned;
+use aes_gcm::aead::AeadInOut;
+use aes_gcm::aead::array::typenum::Unsigned;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
@@ -26,7 +26,7 @@ use octo_squirrel::protocol::vmess::header::SecurityType;
 use octo_squirrel::protocol::vmess::session::ClientSession;
 use octo_squirrel::util::dice;
 use octo_squirrel::util::fnv;
-use rand::Rng;
+use rand::RngExt;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
 use tokio_util::bytes::BytesMut;
@@ -193,12 +193,13 @@ pub(super) mod udp {
     use anyhow::Result;
     use anyhow::bail;
     use octo_squirrel::codec::QuicStream;
-    use octo_squirrel::codec::WebSocketStream;
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::protocol::address::Address;
     use octo_squirrel::protocol::vmess::header::RequestCommand;
     use octo_squirrel::protocol::vmess::header::RequestHeader;
     use octo_squirrel::protocol::vmess::header::SecurityType;
+    use tokio::io::AsyncRead;
+    use tokio::io::AsyncWrite;
     use tokio::net::TcpStream;
     use tokio_rustls::client::TlsStream;
     use tokio_util::codec::Framed;
@@ -227,7 +228,10 @@ pub(super) mod udp {
         template::new_plain_outbound(&config.host, config.port, codec).await
     }
 
-    pub async fn new_ws_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TcpStream>, ClientAEADCodec>> {
+    pub async fn new_ws_outbound(
+        target: &Address,
+        config: &ServerConfig,
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite + Unpin + use<>, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
         if let Some(ws_config) = &config.ws {
             template::new_ws_outbound(&config.host, config.port, codec, ws_config).await
@@ -245,7 +249,10 @@ pub(super) mod udp {
         }
     }
 
-    pub async fn new_wss_outbound(target: &Address, config: &ServerConfig) -> Result<Framed<WebSocketStream<TlsStream<TcpStream>>, ClientAEADCodec>> {
+    pub async fn new_wss_outbound(
+        target: &Address,
+        config: &ServerConfig,
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite + Unpin + use<>, ClientAEADCodec>> {
         let codec = new_codec(target, config)?;
         if let (Some(ssl_config), Some(ws_config)) = (&config.ssl, &config.ws) {
             template::new_wss_outbound(&config.host, config.port, codec, ssl_config, ws_config).await

@@ -6,7 +6,7 @@ use config::ServerConfig;
 use futures::future::join_all;
 use log::error;
 use log::info;
-use octo_squirrel::codec::QuicStream;
+use octo_squirrel::codec::quic_stream;
 use octo_squirrel::protocol::Protocol;
 use quinn::crypto::rustls::QuicServerConfig;
 use tokio::net::TcpListener;
@@ -127,7 +127,7 @@ where
             tokio::spawn(async {
                 let connection = incoming.await?;
                 let (send, recv) = connection.accept_bi().await?;
-                template::quic::relay(QuicStream::new(send, recv), codec).await?;
+                template::quic::relay(quic_stream(send, recv), codec).await?;
                 Ok::<(), anyhow::Error>(())
             });
         }

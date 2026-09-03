@@ -4,18 +4,18 @@ use std::fmt::Formatter;
 use std::mem::size_of;
 use std::usize;
 
-use aes::cipher::Unsigned;
 use aes_gcm::AeadCore;
-use aes_gcm::AeadInPlace;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::Aead;
+use aes_gcm::aead::AeadInOut;
 use aes_gcm::aead::Buffer;
-use aes_gcm::aead::Key;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::KeySizeUser;
+use aes_gcm::aead::Nonce;
 use aes_gcm::aead::Payload;
-use aes_gcm::aead::generic_array::GenericArray;
+use aes_gcm::aead::Tag;
+use aes_gcm::aead::array::typenum::Unsigned;
 use chacha20poly1305::ChaCha8Poly1305;
 use chacha20poly1305::ChaCha20Poly1305;
 use chacha20poly1305::XChaCha8Poly1305;
@@ -66,71 +66,87 @@ macro_rules! method_match_aead_trait {
 }
 
 macro_rules! method_match_aead_fn {
-    ($self:ident, $fn:ident, $param:tt) => {
+    ($self:ident, $fn:path, ($nonce:expr, $($param:expr),* $(,)?)) => {
         match $self {
-            Self::Aes128Gcm(cipher) => cipher.$fn$param,
-            Self::Aes256Gcm(cipher) => cipher.$fn$param,
-            Self::ChaCha8Poly1305(cipher) => cipher.$fn$param,
-            Self::ChaCha20Poly1305(cipher) => cipher.$fn$param,
-            Self::XChaCha8Poly1305(cipher) => cipher.$fn$param,
-            Self::XChaCha20Poly1305(cipher) => cipher.$fn$param,
+            Self::Aes128Gcm(cipher) => $fn(cipher, <&Nonce<Aes128Gcm>>::try_from($nonce).map_err(|_| aead::Error)?, $($param),*),
+            Self::Aes256Gcm(cipher) => $fn(cipher, <&Nonce<Aes256Gcm>>::try_from($nonce).map_err(|_| aead::Error)?, $($param),*),
+            Self::ChaCha8Poly1305(cipher) => $fn(cipher, <&Nonce<ChaCha8Poly1305>>::try_from($nonce).map_err(|_| aead::Error)?, $($param),*),
+            Self::ChaCha20Poly1305(cipher) => $fn(cipher, <&Nonce<ChaCha20Poly1305>>::try_from($nonce).map_err(|_| aead::Error)?, $($param),*),
+            Self::XChaCha8Poly1305(cipher) => $fn(cipher, <&Nonce<XChaCha8Poly1305>>::try_from($nonce).map_err(|_| aead::Error)?, $($param),*),
+            Self::XChaCha20Poly1305(cipher) => $fn(cipher, <&Nonce<XChaCha20Poly1305>>::try_from($nonce).map_err(|_| aead::Error)?, $($param),*),
         }
     };
+}
+
+fn encrypt_inout_detached<C: AeadInOut>(
+    cipher: &C,
+    nonce: &Nonce<C>,
+    associated_data: &[u8],
+    plaintext: &mut [u8],
+    tag: &mut [u8],
+) -> Result<(), aead::Error> {
+    let auth_tag = cipher.encrypt_inout_detached(nonce, associated_data, plaintext.into())?;
+    tag.copy_from_slice(&auth_tag);
+    Ok(())
+}
+
+fn decrypt_inout_detached<C: AeadInOut>(
+    cipher: &C,
+    nonce: &Nonce<C>,
+    associated_data: &[u8],
+    ciphertext: &mut [u8],
+    tag: &[u8],
+) -> Result<(), aead::Error> {
+    let tag = <&Tag<C>>::try_from(tag).map_err(|_| aead::Error)?;
+    cipher.decrypt_inout_detached(nonce, associated_data, ciphertext.into(), tag)
 }
 
 impl CipherMethod {
     pub fn new(kind: CipherKind, key: &[u8]) -> Self {
         match kind {
             CipherKind::Aes128Gcm | CipherKind::Aead2022Blake3Aes128Gcm => {
-                let key = &key[..<Aes128Gcm as KeySizeUser>::KeySize::USIZE];
-                Self::Aes128Gcm(Aes128Gcm::new(Key::<Aes128Gcm>::from_slice(key)))
+                Self::Aes128Gcm(Aes128Gcm::new_from_slice(&key[..Aes128Gcm::key_size()]).expect("invalid AES-128-GCM key length"))
             }
             CipherKind::Aes256Gcm | CipherKind::Aead2022Blake3Aes256Gcm => {
-                let key = &key[..<Aes256Gcm as KeySizeUser>::KeySize::USIZE];
-                Self::Aes256Gcm(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key)))
+                Self::Aes256Gcm(Aes256Gcm::new_from_slice(&key[..Aes256Gcm::key_size()]).expect("invalid AES-256-GCM key length"))
             }
-            CipherKind::ChaCha20Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
-                let key = &key[..<ChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];
-                Self::ChaCha20Poly1305(ChaCha20Poly1305::new(Key::<ChaCha20Poly1305>::from_slice(key)))
-            }
-            CipherKind::XChaCha20Poly1305 => {
-                let key = &key[..<XChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE];
-                Self::XChaCha20Poly1305(XChaCha20Poly1305::new(Key::<XChaCha20Poly1305>::from_slice(key)))
-            }
-            CipherKind::Aead2022Blake3ChaCha8Poly1305 => {
-                let key = &key[..<ChaCha8Poly1305 as KeySizeUser>::KeySize::USIZE];
-                Self::ChaCha8Poly1305(ChaCha8Poly1305::new(Key::<ChaCha8Poly1305>::from_slice(key)))
-            }
+            CipherKind::ChaCha20Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => Self::ChaCha20Poly1305(
+                ChaCha20Poly1305::new_from_slice(&key[..ChaCha20Poly1305::key_size()]).expect("invalid ChaCha20-Poly1305 key length"),
+            ),
+            CipherKind::XChaCha20Poly1305 => Self::XChaCha20Poly1305(
+                XChaCha20Poly1305::new_from_slice(&key[..XChaCha20Poly1305::key_size()]).expect("invalid XChaCha20-Poly1305 key length"),
+            ),
+            CipherKind::Aead2022Blake3ChaCha8Poly1305 => Self::ChaCha8Poly1305(
+                ChaCha8Poly1305::new_from_slice(&key[..ChaCha8Poly1305::key_size()]).expect("invalid ChaCha8-Poly1305 key length"),
+            ),
             CipherKind::Unknown => panic!("unknown cipher kind"),
         }
     }
 
     pub fn encrypt(&self, nonce: &[u8], plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
-        method_match_aead_fn!(self, encrypt, (nonce.into(), Payload { msg: plaintext, aad: associated_data }))
+        method_match_aead_fn!(self, Aead::encrypt, (nonce, Payload { msg: plaintext, aad: associated_data }))
     }
 
     pub fn encrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut dyn Buffer) -> Result<(), aead::Error> {
-        method_match_aead_fn!(self, encrypt_in_place, (nonce.into(), associated_data, plaintext))
+        method_match_aead_fn!(self, AeadInOut::encrypt_in_place, (nonce, associated_data, plaintext))
     }
 
-    pub fn encrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut [u8]) -> Result<(), aead::Error> {
+    pub fn encrypt_inout_detached(&self, nonce: &[u8], associated_data: &[u8], plaintext: &mut [u8]) -> Result<(), aead::Error> {
         let (buffer, tag) = plaintext.split_at_mut(plaintext.len() - self.tag_size());
-        let _tag = method_match_aead_fn!(self, encrypt_in_place_detached, (nonce.into(), associated_data, buffer))?;
-        tag.copy_from_slice(_tag.as_slice());
-        Ok(())
+        method_match_aead_fn!(self, encrypt_inout_detached, (nonce, associated_data, buffer, tag))
     }
 
     pub fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, aead::Error> {
-        method_match_aead_fn!(self, decrypt, (nonce.into(), Payload { msg: ciphertext, aad: associated_data }))
+        method_match_aead_fn!(self, Aead::decrypt, (nonce, Payload { msg: ciphertext, aad: associated_data }))
     }
 
     pub fn decrypt_in_place(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut dyn Buffer) -> Result<(), aead::Error> {
-        method_match_aead_fn!(self, decrypt_in_place, (nonce.into(), associated_data, ciphertext))
+        method_match_aead_fn!(self, AeadInOut::decrypt_in_place, (nonce, associated_data, ciphertext))
     }
 
-    pub fn decrypt_in_place_detached(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut [u8]) -> Result<(), aead::Error> {
+    pub fn decrypt_inout_detached(&self, nonce: &[u8], associated_data: &[u8], ciphertext: &mut [u8]) -> Result<(), aead::Error> {
         let (buffer, tag) = ciphertext.split_at_mut(ciphertext.len() - self.tag_size());
-        method_match_aead_fn!(self, decrypt_in_place_detached, (nonce.into(), associated_data, buffer, GenericArray::from_mut_slice(tag)))
+        method_match_aead_fn!(self, decrypt_inout_detached, (nonce, associated_data, buffer, tag))
     }
 
     pub const fn nonce_size(&self) -> usize {
@@ -139,10 +155,6 @@ impl CipherMethod {
 
     pub const fn tag_size(&self) -> usize {
         method_match_aead_trait!(self, AeadCore, TagSize)
-    }
-
-    pub const fn ciphertext_overhead(&self) -> usize {
-        method_match_aead_trait!(self, AeadCore, CiphertextOverhead)
     }
 }
 
@@ -198,10 +210,6 @@ impl CipherKind {
 
     pub const fn tag_size(&self) -> usize {
         kind_match_aead!(self, AeadCore, TagSize)
-    }
-
-    pub const fn ciphertext_overhead(&self) -> usize {
-        kind_match_aead!(self, AeadCore, CiphertextOverhead)
     }
 }
 

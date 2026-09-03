@@ -8,7 +8,7 @@ use std::time::UNIX_EPOCH;
 
 use crc::CRC_32_ISO_HDLC;
 use crc::Crc;
-use rand::Rng;
+use rand::RngExt;
 
 pub const VERSION: u8 = 1;
 
@@ -85,10 +85,9 @@ pub mod address {
 }
 
 pub mod id {
-    use aes::cipher::generic_array::GenericArray;
-    use hmac::digest::OutputSizeUser;
     use md5::Digest;
     use md5::Md5;
+    use md5::digest::Output;
     use uuid::Uuid;
 
     pub fn from_passwords(uuid: Vec<&String>) -> Result<Vec<[u8; 16]>, uuid::Error> {
@@ -109,7 +108,7 @@ pub mod id {
         let mut hasher = Md5::new();
         hasher.update(uuid);
         hasher.update(salt);
-        let mut id = GenericArray::<u8, <Md5 as OutputSizeUser>::OutputSize>::default();
+        let mut id = Output::<Md5>::default();
         hasher.finalize_into(&mut id);
         id.into()
     }

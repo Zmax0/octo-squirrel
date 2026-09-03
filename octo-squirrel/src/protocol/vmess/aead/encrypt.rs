@@ -1,11 +1,11 @@
 use std::io::Cursor;
 
-use aes::cipher::Unsigned;
 use aes_gcm::Aes128Gcm;
 use aes_gcm::aead::Aead;
 use aes_gcm::aead::AeadCore;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::Payload;
+use aes_gcm::aead::array::typenum::Unsigned;
 use anyhow::Result;
 use anyhow::anyhow;
 use rand::random;

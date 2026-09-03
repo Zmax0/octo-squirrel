@@ -58,7 +58,7 @@ pub fn init() -> Result<Vec<ServerConfig>, std::io::Error> {
 mod test {
     use octo_squirrel::codec::aead::CipherKind;
     use octo_squirrel::protocol::Protocol;
-    use rand::Rng;
+    use rand::RngExt;
     use rand::distr::Alphanumeric;
     use rand::random;
     use serde_json::json;

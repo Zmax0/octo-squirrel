@@ -103,13 +103,13 @@ impl<const N: usize> AEADCipherCodec<N> {
                     text = &mut text[eih_len..];
                 }
                 let cipher = unsafe { get_cipher(self.kind, &context.key, session.client_session_id) };
-                cipher.encrypt_in_place_detached(&nonce, &[], text).map_err(|e| anyhow!(e))?;
+                cipher.encrypt_inout_detached(&nonce, &[], text).map_err(|e| anyhow!(e))?;
                 Ok(())
             }
             CipherKind::Aead2022Blake3ChaCha8Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 let (nonce, plaintext) = dst.split_at_mut(nonce_size);
                 let cipher = unsafe { get_cipher(self.kind, &context.key, session.client_session_id) };
-                cipher.encrypt_in_place_detached(nonce, &[], plaintext).map_err(|e| anyhow!(e))?;
+                cipher.encrypt_inout_detached(nonce, &[], plaintext).map_err(|e| anyhow!(e))?;
                 Ok(())
             }
             _ => bail!("{} is not an AEAD 2022 cipher", self.kind),
@@ -162,13 +162,13 @@ impl<const N: usize> AEADCipherCodec<N> {
                 };
                 udp::aes_encrypt_in_place(self.kind, key, header)?;
                 let cipher = unsafe { get_cipher(self.kind, key, session.server_session_id) };
-                cipher.encrypt_in_place_detached(&nonce, &[], text).map_err(|e| anyhow!(e))?;
+                cipher.encrypt_inout_detached(&nonce, &[], text).map_err(|e| anyhow!(e))?;
                 Ok(())
             }
             CipherKind::Aead2022Blake3ChaCha8Poly1305 | CipherKind::Aead2022Blake3ChaCha20Poly1305 => {
                 let (nonce, plaintext) = dst.split_at_mut(nonce_length);
                 let cipher = unsafe { get_cipher(self.kind, &context.key, session.server_session_id) };
-                cipher.encrypt_in_place_detached(nonce, &[], plaintext).map_err(|e| anyhow!(e))?;
+                cipher.encrypt_inout_detached(nonce, &[], plaintext).map_err(|e| anyhow!(e))?;
                 Ok(())
             }
             _ => bail!("{} is not an AEAD 2022 cipher", self.kind),
@@ -214,7 +214,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                     let session_id_packet_id = cursor.into_inner();
                     let nonce = &session_id_packet_id[4..16];
                     let cipher = unsafe { get_cipher(kind, &context.key, server_session_id) };
-                    cipher.decrypt_in_place_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
+                    cipher.decrypt_inout_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
                     let text = &text[..text.len() - tag_size];
                     Ok((server_session_id, packet_id, text))
                 }
@@ -226,7 +226,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                         u64::from_be(slice[0])
                     };
                     let cipher = unsafe { get_cipher(kind, &context.key, session_id) };
-                    cipher.decrypt_in_place_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
+                    cipher.decrypt_inout_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
                     let mut cursor = Cursor::new(text);
                     let server_session_id = cursor.get_u64();
                     let packet_id = cursor.get_u64();
@@ -311,7 +311,7 @@ impl<const N: usize> AEADCipherCodec<N> {
                     u64::from_be(slice[0])
                 };
                 let cipher = unsafe { get_cipher(self.kind, &context.key, session_id) };
-                cipher.decrypt_in_place_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
+                cipher.decrypt_inout_detached(nonce, &[], text).map_err(|e| anyhow!(e))?;
                 let mut cursor = Cursor::new(text);
                 let server_session_id = cursor.get_u64();
                 let packet_id = cursor.get_u64();
@@ -464,7 +464,7 @@ mod test {
     use std::sync::Arc;
 
     use anyhow::anyhow;
-    use rand::Rng;
+    use rand::RngExt;
     use rand::distr::Alphanumeric;
     use rand::random;
     use tokio_util::bytes::Buf;

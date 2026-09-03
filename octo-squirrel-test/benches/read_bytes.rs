@@ -5,7 +5,7 @@ use bytes::Buf;
 use criterion::Criterion;
 use criterion::criterion_group;
 use criterion::criterion_main;
-use rand::Rng;
+use rand::RngExt;
 
 fn by_raw_ptr(bytes: &mut [u8]) -> anyhow::Result<(u64, u64)> {
     let mut rng = rand::rng();

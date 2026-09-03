@@ -33,7 +33,7 @@ impl Authenticator {
     }
 
     fn encode_size(&mut self, bytes: &mut [u8]) -> Result<(), aes_gcm::aead::Error> {
-        self.method.encrypt_in_place_detached(self.nonce_generator.generate(), &[], bytes)
+        self.method.encrypt_inout_detached(self.nonce_generator.generate(), &[], bytes)
     }
 
     fn decode_size(&mut self, data: &mut BytesMut) -> Result<usize, aes_gcm::aead::Error> {
