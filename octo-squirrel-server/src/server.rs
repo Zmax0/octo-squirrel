@@ -60,7 +60,7 @@ fn merge_result(res: (anyhow::Result<()>, anyhow::Result<()>)) -> anyhow::Result
 
 async fn startup_tcp<RefContext, Context, NewCodec, Codec>(context: RefContext, config: &ServerConfig, new_codec: NewCodec) -> anyhow::Result<()>
 where
-    RefContext: AsRef<Context>,
+    RefContext: AsRef<Context> + Sync,
     NewCodec: FnOnce(&Context) -> anyhow::Result<Codec> + Copy + Send,
     Codec: Encoder<template::message::OutboundIn, Error = anyhow::Error>
         + Decoder<Item = template::message::InboundIn, Error = anyhow::Error>
@@ -85,18 +85,22 @@ where
             let key = PrivateKeyDer::from_pem_file(ssl_config.key_file.as_str())?;
             let tls_config = rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(vec![cert], key)?;
             let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
+            let ws_enable = ws_config.is_some();
             while let Ok((inbound, _)) = listener.accept().await {
                 let codec = new_codec(context.as_ref())?;
-                match tls_acceptor.accept(inbound).await {
-                    Ok(inbound) => {
-                        if ws_config.is_some() {
-                            tokio::spawn(template::tcp::accept_websocket_and_relay(inbound, new_codec(context.as_ref())?));
-                        } else {
-                            tokio::spawn(template::tcp::relay(inbound, codec));
+                let tls_acceptor = tls_acceptor.clone();
+                tokio::spawn(async move {
+                    match tls_acceptor.accept(inbound).await {
+                        Ok(inbound) => {
+                            if ws_enable {
+                                template::tcp::accept_websocket_and_relay(inbound, codec).await;
+                            } else {
+                                template::tcp::relay(inbound, codec).await;
+                            }
                         }
+                        Err(e) => error!("[tcp] tls handshake failed: {}", e),
                     }
-                    Err(e) => error!("[tcp] tls handshake failed: {}", e),
-                }
+                });
             }
         }
     }

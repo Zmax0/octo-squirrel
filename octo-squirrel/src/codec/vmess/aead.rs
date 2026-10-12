@@ -61,7 +61,7 @@ impl AEADBodyCodec {
         };
         let nonce = nonce(session);
         let shake = ShakeSizeParser::new(nonce);
-        Ok(Self { auth: Authenticator::new(cipher), chunk, padding, shake, payload_limit: 2048, state: DecodeState::Padding })
+        Ok(Self { auth: Authenticator::new(cipher), chunk, padding, shake, payload_limit: 16301, state: DecodeState::Padding })
     }
 
     pub fn new_encoder(header: &RequestHeader, session: &mut dyn Session) -> Result<Self, InvalidLength> {
@@ -385,7 +385,7 @@ mod test {
             let mut client_decoder = AEADBodyCodec::new_decoder(&header, &mut client_session)?;
             let mut server_encoder = AEADBodyCodec::new_encoder(&header, &mut server_session)?;
             let mut server_decoder = AEADBodyCodec::new_decoder(&header, &mut server_session)?;
-            let mut msg = [0; 2048];
+            let mut msg = [0; 16301];
             rand::rng().fill(&mut msg);
             let mut src = BytesMut::new();
             src.extend_from_slice(&msg);

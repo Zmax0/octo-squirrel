@@ -161,9 +161,15 @@ impl Decoder for ServerAeadCodec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match self.decode_state {
             DecodeState::Init => {
+                if src.len() < 16 {
+                    return Ok(None);
+                }
                 let auth_id = &src[0..16];
                 if let Some(key) = auth_id::matching(auth_id, &self.keys)? {
                     if let Some(header) = encrypt::open_header(&key, src)? {
+                        if header.len() < 1 + 16 + 16 + 1 + 1 + 1 + 1 + 1 + 4 + 1 {
+                            bail!("request header too short: {} bytes", header.len())
+                        }
                         let data = header[..header.len() - 4].to_vec();
                         let mut header = Bytes::from(header);
                         let version = header.get_u8();

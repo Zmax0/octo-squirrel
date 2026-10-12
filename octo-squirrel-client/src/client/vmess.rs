@@ -125,6 +125,9 @@ impl Decoder for ClientAEADCodec {
                 let header_iv: [u8; NONCE_SIZE] = kdf::kdfn(&self.session.response_body_iv, vec![kdf::SALT_AEAD_RESP_HEADER_PAYLOAD_IV]);
                 let mut header_bytes = src.split_to(header_length + TAG_SIZE);
                 header_cipher.decrypt_in_place(&header_iv.into(), &[], &mut header_bytes).map_err(|e| anyhow!(e))?;
+                if header_bytes.is_empty() {
+                    bail!("empty response header")
+                }
                 if self.session.response_header != header_bytes[0] {
                     bail!("Unexpected response header: expecting {} but actually {}", self.session.response_header, header_bytes[0]);
                 }
